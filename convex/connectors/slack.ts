@@ -30,10 +30,12 @@ async function slackCall(method: string, token: string, params: Record<string, s
   const body = (await providerJson(url.toString(), { headers: { authorization: `Bearer ${token}` } })) as {
     ok?: boolean;
     error?: string;
+    needed?: string; // the missing scope(s), on missing_scope
   } & Record<string, unknown>;
   if (body.ok !== true) {
     const code = body.error ?? "error";
-    throw new ProviderError(ACCESS_ERRORS.has(code) ? "missing-access" : "needs-retry", `slack_${code}`);
+    const needed = code === "missing_scope" && typeof body.needed === "string" ? `:${body.needed}` : "";
+    throw new ProviderError(ACCESS_ERRORS.has(code) ? "missing-access" : "needs-retry", `slack_${code}${needed}`);
   }
   return body;
 }

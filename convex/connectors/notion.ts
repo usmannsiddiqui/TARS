@@ -241,6 +241,8 @@ export const handleEvent = httpAction(async (ctx, request) => {
   const pageId = event.entity?.id;
   const relevant =
     event.entity?.type === "page" && event.type?.startsWith("page.") === true && event.type !== "page.deleted";
+  // Paused or disconnected: acknowledged, never fetched with the stored token.
+  if (grant.state !== "active" || !grant.read) return status(200);
   if (!relevant || typeof pageId !== "string" || !readable(grant, pageId)) return status(200);
 
   try {

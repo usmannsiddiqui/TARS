@@ -63,11 +63,12 @@ export function outcomeLogEntry(outcome: {
 export type EffectOutcome = { state: "succeeded" | "failed" | "unknown"; externalId?: string; reason?: string };
 
 /**
- * A provider failure after the request left us. A timeout, dropped connection or 5xx may have been
- * delivered, so it is unknown (never resent); a 4xx was refused, so it failed.
+ * A provider failure after the request left us. A timeout, dropped connection, 5xx or an accepted
+ * (2xx) response we could not read may have been delivered, so it is unknown (never resent); a 4xx
+ * was refused, so it failed.
  */
 export const outcomeForFailure = (code: string): "unknown" | "failed" =>
-  code === "timeout" || code === "network" || /^http_5\d\d$/.test(code) ? "unknown" : "failed";
+  code === "timeout" || code === "network" || code === "unexpected_response" || /^http_5\d\d$/.test(code) ? "unknown" : "failed";
 
 /** Line endings and outer whitespace differ by provider; the approved words must all be there. */
 export const sameContent = (stored: string, approved: string) =>

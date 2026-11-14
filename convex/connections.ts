@@ -179,6 +179,8 @@ export async function requireOwnedSource(
   if (grant === null || grant.ownerId !== ownerId || grant.kind !== kind) {
     throw new ConvexError("Source is not available");
   }
+  // Disconnect is final: the stored credential is never used again (same wording as setGrantState).
+  if (grant.state === "revoked") throw new ConvexError("This source was disconnected; connect it again");
   return { ownerId, grant, connection };
 }
 

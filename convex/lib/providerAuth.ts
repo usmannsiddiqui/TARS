@@ -157,8 +157,27 @@ export async function providerJson(url: string, init: RequestInit = {}): Promise
     const timedOut = error instanceof DOMException && error.name === "TimeoutError";
     throw new ProviderError("needs-retry", timedOut ? "timeout" : "network");
   }
-  if (!response.ok) throw new ProviderError(availabilityForStatus(response.status), `http_${response.status}`);
+  if (!response.ok) throw new ProviderError(availabilityForStatus(response.status), failureCode(response));
   // 204, and Graph's 202 from message send, carry no body.
   const text = await response.text();
-  return text.length === 0 ? null : JSON.parse(text);
+  if (text.length === 0) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // A parse error message quotes the body; only the code leaves here. A 2xx did happen: see outcomeForFailure.
+    throw new ProviderError("needs-retry", "unexpected_response");
+  }
+}
+
+/**
+ * Short code for a non-2xx. Kept from the response: a Retry-After in seconds (shown, never acted on
+ * by a timer) and the scope an RFC 6750 insufficient_scope challenge names. Nothing else.
+ */
+function failureCode(response: Response): string {
+  const retryAfter = response.headers.get("retry-after") ?? "";
+  if (response.status === 429 && /^\d+$/.test(retryAfter)) return `http_429_retry_after_${retryAfter}s`;
+  const challenge = response.headers.get("www-authenticate") ?? "";
+  const scope = /error="insufficient_scope"/.test(challenge) ? /scope="([^"]+)"/.exec(challenge)?.[1] : undefined;
+  if (response.status === 403 && scope !== undefined) return `missing_scope:${scope}`;
+  return `http_${response.status}`;
 }

@@ -11,13 +11,29 @@ import {
 } from "../packages/domain/src/prepare";
 import { EvidenceSchema, SourceGrantSchema, type ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
-import { action, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, query, type QueryCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { loadSuppressions, loadVisibleFacts, requireOwnedProject } from "./memory";
 import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields } from "./schema";
 
 const StoredGrant = z.object(SourceGrantSchema.shape);
+
+/** Revoked/paused grants, old grant versions and unconfirmed projects are out of scope even if rows remain. */
+async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
+  const grantRow = await ctx.db
+    .query("grants")
+    .withIndex("by_source", (q) => q.eq("id", sourceId))
+    .unique();
+  const grant = grantRow === null ? null : StoredGrant.parse(grantRow);
+  return (
+    grant?.ownerId === ownerId &&
+    grant.state === "active" &&
+    grant.read &&
+    grant.version === grantVersion &&
+    grant.projectIds.includes(projectId as ProjectId)
+  );
+}
 
 const INSTRUCTIONS = [
   "You prepare private work for one project of an entrepreneur (the user) from their connected sources.",
@@ -52,21 +68,7 @@ export const loadPreparationContext = internalQuery({
     for (const { _id, _creationTime, isCurrent, ...record } of rows) {
       void [_id, _creationTime, isCurrent];
       if (!record.projectIds.includes(projectId)) continue;
-      const grantRow = await ctx.db
-        .query("grants")
-        .withIndex("by_source", (q) => q.eq("id", record.sourceId))
-        .unique();
-      const grant = grantRow === null ? null : StoredGrant.parse(grantRow);
-      // Revoked/paused grants or old grant versions are out of scope even if rows remain.
-      if (
-        grant?.ownerId !== ownerId ||
-        grant.state !== "active" ||
-        !grant.read ||
-        grant.version !== record.grantVersion ||
-        !grant.projectIds.includes(projectId as ProjectId)
-      ) {
-        continue;
-      }
+      if (!(await grantInScope(ctx, ownerId, projectId, record.sourceId, record.grantVersion))) continue;
       inScope.push(EvidenceSchema.parse(record));
     }
     const { selected, omitted } = selectEvidence(inScope, projectId as ProjectId);
@@ -141,15 +143,16 @@ export const prepareProject = action({
     const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
     if (!assembled.ok) return fail(`invalid_${assembled.reason}`);
 
-    const persisted: boolean = await ctx.runMutation(internal.prepare.persistPreparation, {
+    const persisted: Infer<typeof persistResult> = await ctx.runMutation(internal.prepare.persistPreparation, {
       ownerId,
       projectId,
       work: assembled.work,
       commitments: assembled.commitments,
       facts: assembled.facts,
       usedFactKeys: context.memory.map((fact) => fact.key),
+      sources: [...new Map(evidence.map((e) => [`${e.sourceId}@${e.grantVersion}`, { sourceId: e.sourceId, grantVersion: e.grantVersion }])).values()],
     });
-    return persisted ? { status: "ready" as const } : fail("memory_changed");
+    return persisted === "stored" ? { status: "ready" as const } : fail(persisted);
   },
 });
 
@@ -177,10 +180,12 @@ export const recordFailure = internalMutation({
   },
 });
 
+const persistResult = v.union(v.literal("stored"), v.literal("memory_changed"), v.literal("sources_changed"));
+
 /**
- * Store validated preparation. The suppression filter runs again here, in the same transaction
- * as the writes, so a forget that landed during the model call still wins. Returns false (and
- * writes nothing) when memory used for this preparation was forgotten meanwhile.
+ * Store validated preparation. The scope and suppression checks run again here, in the same
+ * transaction as the writes, so a revoke or forget that landed during the model call still wins.
+ * Writes nothing when a source it read is no longer granted, or memory it used was forgotten.
  */
 export const persistPreparation = internalMutation({
   args: {
@@ -190,14 +195,18 @@ export const persistPreparation = internalMutation({
     commitments: v.array(v.object(commitmentFields)),
     facts: v.array(v.object({ key: v.string(), value: v.string(), evidenceIds: v.array(v.string()) })),
     usedFactKeys: v.array(v.string()),
+    sources: v.array(v.object({ sourceId: v.string(), grantVersion: v.number() })), // every source the model was sent
   },
-  returns: v.boolean(),
-  handler: async (ctx, { ownerId, projectId, work, commitments, facts, usedFactKeys }) => {
+  returns: persistResult,
+  handler: async (ctx, { ownerId, projectId, work, commitments, facts, usedFactKeys, sources }) => {
     await requireOwnedProject(ctx, ownerId, projectId);
+    for (const { sourceId, grantVersion } of sources) {
+      if (!(await grantInScope(ctx, ownerId, projectId, sourceId, grantVersion))) return "sources_changed";
+    }
     const suppressions = await loadSuppressions(ctx, ownerId);
     const project = projectId as ProjectId;
     if (usedFactKeys.some((key) => suppressionVerdict({ projectId: project, key, evidenceIds: [] }, suppressions) === "blocked")) {
-      return false;
+      return "memory_changed";
     }
 
     const storedFacts = await ctx.db
@@ -255,7 +264,7 @@ export const persistPreparation = internalMutation({
     };
     if (row === null) await ctx.db.insert("preparedWork", { ownerId, projectId, ...next });
     else await ctx.db.patch(row._id, { ...next, lastError: undefined });
-    return true;
+    return "stored" as const;
   },
 });
 
