@@ -14,3 +14,6 @@ playwright-report/
 # Private planning material: never publish
 research-assets/
 HACKATHON_PRODUCT_HANDOFF.md
+
+# Swift build output
+native/observer/.build/
