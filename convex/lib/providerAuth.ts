@@ -1,6 +1,9 @@
 // Shared connector seam: sealed credentials, webhook HMAC checks, OAuth state, and
 // provider-failure classification. Plain helpers; registered functions live in connections.ts.
-import type { MutationCtx } from "../_generated/server";
+import type { FunctionReference } from "convex/server";
+import type { SourceGrant } from "../../packages/domain/src/types";
+import { internal } from "../_generated/api";
+import type { ActionCtx, MutationCtx } from "../_generated/server";
 import { decryptSecret, encryptSecret } from "./crypto";
 
 export type Availability = "connected" | "stale" | "missing-access" | "needs-retry";
@@ -34,10 +37,26 @@ export async function verifyHmacSha256Hex(secret: string, message: string, hex: 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 export async function issueOAuthState(ctx: MutationCtx, ownerId: string, provider: string): Promise<string> {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const state = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const state = randomToken();
   await ctx.db.insert("oauthStates", { state, ownerId, provider, expiresAt: Date.now() + STATE_TTL_MS });
   return state;
+}
+
+/**
+ * Burn the state and return what it was bound to, or null if unknown or expired. For a
+ * provider redirect, which arrives unauthenticated: the owner comes from this row only.
+ */
+export async function takeOAuthState(
+  ctx: MutationCtx,
+  state: string,
+): Promise<{ ownerId: string; provider: string } | null> {
+  const row = await ctx.db
+    .query("oauthStates")
+    .withIndex("by_state", (q) => q.eq("state", state))
+    .unique();
+  if (row === null) return null;
+  await ctx.db.delete(row._id);
+  return row.expiresAt > Date.now() ? { ownerId: row.ownerId, provider: row.provider } : null;
 }
 
 /** True once for a matching, unexpired state. Any presentation burns it, so a stolen value fails too. */
@@ -45,13 +64,72 @@ export async function consumeOAuthState(
   ctx: MutationCtx,
   { state, ownerId, provider }: { state: string; ownerId: string; provider: string },
 ): Promise<boolean> {
-  const row = await ctx.db
-    .query("oauthStates")
-    .withIndex("by_state", (q) => q.eq("state", state))
-    .unique();
-  if (row === null) return false;
-  await ctx.db.delete(row._id);
-  return row.ownerId === ownerId && row.provider === provider && row.expiresAt > Date.now();
+  const bound = await takeOAuthState(ctx, state);
+  return bound !== null && bound.ownerId === ownerId && bound.provider === provider;
+}
+
+/** Plain page shown in the browser after a provider redirect. */
+export function oauthResultPage(status: number, message: string): Response {
+  const html = `<!doctype html><meta charset="utf-8"><title>Connection</title><p>${message}</p>`;
+  return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+type TokenResponse = { access_token: string; refresh_token?: string };
+
+/** OAuth token endpoint call (code exchange or refresh). A rejected grant is missing access, not a retry. */
+export async function oauthToken(url: string, params: Record<string, string>): Promise<TokenResponse> {
+  let body: Partial<TokenResponse>;
+  try {
+    body = (await providerJson(url, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString(),
+    })) as Partial<TokenResponse>;
+  } catch (error) {
+    // 400 invalid_grant: revoked consent or a used/expired code; retrying cannot fix it.
+    if (error instanceof ProviderError && error.code === "http_400") throw new ProviderError("missing-access", "token_rejected");
+    throw error;
+  }
+  if (typeof body.access_token !== "string") throw new ProviderError("needs-retry", "token_response");
+  return body as TokenResponse;
+}
+
+/** Deployment env var read at request time, so a missing value fails only that request. */
+export function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set`);
+  return value;
+}
+
+export function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// ---- Subscription leases: the one scheduled job. It renews a lease, never reads content.
+export const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
+
+/** Record the lease expiry (status unchanged) and schedule exactly one renewal a day before it. */
+export async function keepLease(
+  ctx: ActionCtx,
+  renew: FunctionReference<"action", "internal", { sourceId: string; grantVersion: number }>,
+  grant: SourceGrant,
+  expiresAt: number,
+): Promise<void> {
+  const { connection } = await ctx.runQuery(internal.connections.context, { sourceId: grant.id });
+  if (connection === null) return;
+  await ctx.runMutation(internal.connections.setStatus, {
+    sourceId: grant.id,
+    availability: connection.availability,
+    ...(connection.lastError === undefined ? {} : { lastError: connection.lastError }),
+    subscriptionExpiresAt: expiresAt,
+  });
+  await ctx.scheduler.runAt(expiresAt - RENEW_BEFORE_MS, renew, { sourceId: grant.id, grantVersion: grant.version });
+}
+
+/** A renewal fired by an older chain (a reconnect moved the lease later) has nothing to do. */
+export function renewalSuperseded(subscriptionExpiresAt: number | undefined): boolean {
+  return subscriptionExpiresAt !== undefined && subscriptionExpiresAt - Date.now() > RENEW_BEFORE_MS + 60_000;
 }
 
 // ---- Provider calls: one bounded request, failures become a visible status (never a retry timer).
@@ -80,5 +158,5 @@ export async function providerJson(url: string, init: RequestInit = {}): Promise
     throw new ProviderError("needs-retry", timedOut ? "timeout" : "network");
   }
   if (!response.ok) throw new ProviderError(availabilityForStatus(response.status), `http_${response.status}`);
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
