@@ -3,6 +3,7 @@ import { handlePush as gmailPush, oauthCallback as googleCallback } from "./conn
 import { handleEvent as notionEvent } from "./connectors/notion";
 import { handleNotification as outlookNotification, oauthCallback as microsoftCallback } from "./connectors/outlook";
 import { handleEvent as slackEvent } from "./connectors/slack";
+import { upload as transcriptionUpload } from "./transcription";
 
 // One route per event-capable provider. Each handler verifies its provider's signature
 // over the raw body before parsing and answers 2xx for valid deliveries it ignores.
@@ -14,4 +15,5 @@ http.route({ path: "/outlook/notifications", method: "POST", handler: outlookNot
 // Provider OAuth redirects: the stored single-use state names the owner and source.
 http.route({ path: "/oauth/google/callback", method: "GET", handler: googleCallback });
 http.route({ path: "/oauth/microsoft/callback", method: "GET", handler: microsoftCallback });
+http.route({ path: "/transcription", method: "POST", handler: transcriptionUpload });
 export default http;

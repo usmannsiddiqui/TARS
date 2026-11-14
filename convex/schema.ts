@@ -336,4 +336,8 @@ export default defineSchema({
     provider: v.string(),
     credential: v.string(), // sealed {refreshToken}
   }).index("by_source", ["sourceId"]),
+
+  // Explicit, owner-bound recording sessions for dictation; the row's _id is the recoveryId.
+  // Holds no audio or transcript. Consumed on success, deleted by a one-shot job at expiry.
+  dictationSessions: defineTable({ ownerId: v.string(), expiresAt: v.number() }),
 });
