@@ -19,11 +19,22 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
       return calls.filter((c) => c.ownerId === ownerId).map((c) => c.input);
     },
   };
+  const tokenRequests: boolean[] = [];
   const auth = {
     currentOwner: () => owner,
     async signIn() {
       signIns++;
       owner = ownerAfterSignIn;
+    },
+    async idToken(forceRefresh: boolean) {
+      tokenRequests.push(forceRefresh);
+      return owner ? "short-lived-id-token" : null;
+    },
+  };
+  let cloudTriggers = 0;
+  const cloud = {
+    async trigger() {
+      cloudTriggers++;
     },
   };
   const sourceCalls: unknown[][] = [];
@@ -42,9 +53,10 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     pause: record("pause"),
     resume: record("resume"),
     revoke: record("revoke"),
+    setCloudProcessing: record("setCloudProcessing"),
   };
-  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources });
-  return { router, calls, sourceCalls, signIns: () => signIns };
+  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources, cloud });
+  return { router, calls, sourceCalls, tokenRequests, signIns: () => signIns, cloudTriggers: () => cloudTriggers };
 }
 
 describe("ipc router", () => {
@@ -143,5 +155,50 @@ describe("ipc router", () => {
       ["list", alice.ownerId],
       ["revoke", alice.ownerId, "s1"],
     ]);
+  });
+
+  it("hands the renderer only the short-lived ID token, through one narrow method", async () => {
+    const { alice } = makeOwners();
+    const { router, tokenRequests } = setup(alice.ownerId);
+    for (const payload of [undefined, {}, { forceRefresh: "yes" }, { forceRefresh: false, refreshToken: true }]) {
+      await expect(router.handle("auth:idToken", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(
+      router.handle("auth:idToken", { frameUrl: "https://evil.example/" }, { forceRefresh: false }),
+    ).rejects.toBeInstanceOf(IpcRejected);
+    expect(tokenRequests).toEqual([]);
+
+    expect(await router.handle("auth:idToken", trusted, { forceRefresh: true })).toBe("short-lived-id-token");
+    expect(tokenRequests).toEqual([true]);
+    expect(await setup(null).router.handle("auth:idToken", trusted, { forceRefresh: false })).toBeNull();
+  });
+
+  it("cloud consent is per source, takes no path or owner, and requires sign-in", async () => {
+    const { alice } = makeOwners();
+    const { router, sourceCalls } = setup(alice.ownerId);
+    for (const payload of [
+      { sourceId: "s1" },
+      { sourceId: "s1", enabled: "true" },
+      { sourceId: "s1", enabled: true, ownerId: "owner-bob" },
+      { sourceId: "s1", enabled: true, selectors: ["/Users"] },
+    ]) {
+      await expect(router.handle("sources:setCloudProcessing", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(
+      setup(null).router.handle("sources:setCloudProcessing", trusted, { sourceId: "s1", enabled: true }),
+    ).rejects.toThrow("Not signed in");
+    expect(sourceCalls).toEqual([]);
+
+    await router.handle("sources:setCloudProcessing", trusted, { sourceId: "s1", enabled: true });
+    expect(sourceCalls).toEqual([["setCloudProcessing", alice.ownerId, "s1", true]]);
+  });
+
+  it("back-online from the renderer only triggers a hand-off pass", async () => {
+    const { alice } = makeOwners();
+    const { router, cloudTriggers } = setup(alice.ownerId);
+    await expect(router.handle("cloud:online", trusted, { records: [] })).rejects.toBeInstanceOf(IpcRejected);
+    expect(cloudTriggers()).toBe(0);
+    expect(await router.handle("cloud:online", trusted, undefined)).toBeUndefined();
+    expect(cloudTriggers()).toBe(1);
   });
 });

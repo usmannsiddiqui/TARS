@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
+import { ProjectIdSchema, SourceIdSchema, type OwnerId, type SourceGrant } from "@companion/domain";
 import { aesGcmCipher, openLocalStore, type Cipher } from "../../apps/desktop/src/main/local-store";
 import { makeEvidence, makeOwners, makeProjects } from "../fixtures";
 
@@ -119,5 +120,54 @@ describe("local evidence outbox", () => {
     expect(await reopened.discardSource(alice.ownerId, evidence.sourceId)).toBe(2);
     expect(await reopened.loadOutbox(alice.ownerId)).toEqual([]);
     reopened.close();
+  });
+});
+
+describe("local source grants", () => {
+  const grantOf = (ownerId: OwnerId, overrides: Partial<SourceGrant> = {}): SourceGrant => ({
+    id: SourceIdSchema.parse("source-vault"),
+    ownerId,
+    kind: "obsidian",
+    selectors: ["/Users/illustrative/private-vault"],
+    projectIds: [ProjectIdSchema.parse("project-avt")],
+    read: true,
+    writeTargets: [],
+    cloudProcessing: false,
+    version: 1,
+    state: "active",
+    ...overrides,
+  });
+
+  it("grant_survives_restart_encrypted_and_owner_scoped", async () => {
+    const { alice, bob } = makeOwners();
+    const cipher = testCipher();
+    const first = openLocalStore(dbPath, cipher);
+    await first.saveGrant({ grant: grantOf(alice.ownerId), mirroredVersion: null });
+    await first.saveGrant({ grant: grantOf(alice.ownerId, { version: 2, state: "revoked" }), mirroredVersion: 1 });
+    first.close();
+
+    // The selected path is private: never on disk in plaintext.
+    for (const file of readdirSync(dir)) {
+      expect(readFileSync(join(dir, file)).includes("private-vault")).toBe(false);
+    }
+    const reopened = openLocalStore(dbPath, cipher);
+    expect(await reopened.loadGrants(alice.ownerId)).toEqual([
+      { grant: grantOf(alice.ownerId, { version: 2, state: "revoked" }), mirroredVersion: 1 },
+    ]);
+    expect(await reopened.loadGrants(bob.ownerId)).toEqual([]);
+    reopened.close();
+  });
+
+  it("synced evidence leaves the outbox and is not queued again", async () => {
+    const { alice } = makeOwners();
+    const store = openLocalStore(dbPath, testCipher());
+    const evidence = makeEvidence(alice.ownerId, [makeProjects(alice.ownerId).avt.id]);
+    expect(await store.enqueueEvidence(evidence, alice.ownerId)).toBe(true);
+    await store.markSynced(evidence, alice.ownerId);
+    expect(await store.loadOutbox(alice.ownerId)).toEqual([]);
+    // A rescan after restart re-emits unchanged notes; they were already handed off.
+    expect(await store.enqueueEvidence({ ...evidence, receivedAt: new Date().toISOString() }, alice.ownerId)).toBe(false);
+    expect(await store.loadOutbox(alice.ownerId)).toEqual([]);
+    store.close();
   });
 });

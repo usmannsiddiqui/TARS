@@ -1,6 +1,8 @@
 // Deliberately minimal, accessible capture screen. The real UI arrives in a later task.
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useConvex, useConvexConnectionState, useQuery } from "convex/react";
+import { Component, useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import type { CaptureInput } from "@companion/domain";
+import { api } from "../../../../convex/_generated/api";
 
 type Status =
   | { kind: "idle" }
@@ -11,6 +13,59 @@ type Status =
 // Electron prefixes rejected invoke() errors; show only the main process's own message.
 const reason = (err: unknown) =>
   err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (\w+: )?/, "") : String(err);
+
+/** A failing cloud query shows as an error here instead of blanking the capture screen. */
+class CloudBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  override state = { error: null as string | null };
+  static getDerivedStateFromError(err: unknown) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+  override render() {
+    return this.state.error ? <p role="alert">Could not load cloud projects: {this.state.error}</p> : this.props.children;
+  }
+}
+
+/** The signed-in owner's projects, live from Convex. Every state is said plainly; old data is never shown as current. */
+function CloudProjects() {
+  const convex = useConvex();
+  const connection = useConvexConnectionState();
+  const [cloudAuth, setCloudAuth] = useState<"checking" | "accepted" | "rejected">("checking");
+
+  useEffect(() => {
+    convex.setAuth(
+      ({ forceRefreshToken }) => window.companion.idToken(forceRefreshToken),
+      (accepted) => setCloudAuth(accepted ? "accepted" : "rejected"),
+    );
+    return () => convex.clearAuth();
+  }, [convex]);
+
+  const projects = useQuery(api.projects.listProjects, cloudAuth === "accepted" ? {} : "skip");
+
+  let body: ReactNode;
+  if (!connection.isWebSocketConnected) {
+    body = connection.hasEverConnected
+      ? "Cloud unreachable. Captures still save on this Mac; projects reappear when the connection returns."
+      : "Connecting to the cloud…";
+  } else if (cloudAuth === "checking") body = "Checking your sign-in with the cloud…";
+  else if (cloudAuth === "rejected") body = "The cloud did not accept this sign-in. Sign in again to see your projects.";
+  else if (projects === undefined) body = "Loading projects…";
+  else if (projects.length === 0) body = "No projects yet.";
+  else
+    body = (
+      <ul aria-label="Projects">
+        {projects.map((project) => (
+          <li key={project.id}>{project.name}</li>
+        ))}
+      </ul>
+    );
+
+  return (
+    <section aria-labelledby="cloud-projects">
+      <h2 id="cloud-projects">Projects</h2>
+      {typeof body === "string" ? <p aria-live="polite">{body}</p> : body}
+    </section>
+  );
+}
 
 export function App() {
   const inputId = useId();
@@ -86,6 +141,9 @@ export function App() {
               ))}
             </ul>
           )}
+          <CloudBoundary>
+            <CloudProjects />
+          </CloudBoundary>
         </>
       )}
       <p role="status" aria-live="polite">

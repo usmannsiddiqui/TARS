@@ -1,9 +1,9 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { z } from "zod";
 import { decideIntake } from "../packages/domain/src/evidence";
-import { EvidenceSchema, SourceGrantSchema } from "../packages/domain/src/types";
+import { EvidenceSchema, SourceGrantSchema, type SourceGrant } from "../packages/domain/src/types";
 import type { Doc } from "./_generated/dataModel";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 import { evidenceFields, grantInputFields } from "./schema";
 
@@ -40,41 +40,55 @@ export const setGrant = mutation({
   },
 });
 
+export const intakeResult = v.union(v.literal("accepted"), v.literal("duplicate"), v.literal("denied"));
+
+/**
+ * The one intake path: decide against the STORED grant, then store the revision. `grantAllows`
+ * narrows which stored grants a caller may write under (the local hand-off accepts only local kinds).
+ */
+export async function intakeRecord(
+  ctx: MutationCtx,
+  { ownerId, sourceId, record }: { ownerId: string; sourceId: string; record: Infer<typeof evidenceRecord> },
+  grantAllows: (grant: SourceGrant) => boolean = () => true,
+): Promise<Infer<typeof intakeResult>> {
+  const parsed = EvidenceSchema.safeParse(record);
+  if (!parsed.success || record.ownerId !== ownerId || record.sourceId !== sourceId) {
+    return "denied";
+  }
+  const grantRow = await ctx.db
+    .query("grants")
+    .withIndex("by_source", (q) => q.eq("id", sourceId))
+    .unique();
+  const grant = grantRow === null ? null : StoredGrantSchema.parse(grantRow);
+  const stored = await ctx.db
+    .query("evidence")
+    .withIndex("by_item", (q) =>
+      q.eq("ownerId", ownerId).eq("sourceId", sourceId).eq("externalId", record.externalId),
+    )
+    .collect();
+
+  const decision = decideIntake(grant !== null && grantAllows(grant) ? grant : null, parsed.data, stored);
+  if (decision.result !== "accepted") return decision.result;
+
+  if (decision.becomesCurrent) {
+    for (const row of stored.filter((revision) => revision.isCurrent)) {
+      await ctx.db.patch(row._id, { isCurrent: false });
+    }
+  }
+  await ctx.db.insert("evidence", { ...record, isCurrent: decision.becomesCurrent });
+  return "accepted";
+}
+
+const evidenceRecord = v.object(evidenceFields);
+
 /**
  * Store one source record. Internal only: provider webhooks call it after mapping the
  * delivery to an owner and source. The grant is always the stored one, never the caller's.
  */
 export const ingest = internalMutation({
-  args: { ownerId: v.string(), sourceId: v.string(), record: v.object(evidenceFields) },
-  returns: v.union(v.literal("accepted"), v.literal("duplicate"), v.literal("denied")),
-  handler: async (ctx, { ownerId, sourceId, record }) => {
-    const parsed = EvidenceSchema.safeParse(record);
-    if (!parsed.success || record.ownerId !== ownerId || record.sourceId !== sourceId) {
-      return "denied";
-    }
-    const grantRow = await ctx.db
-      .query("grants")
-      .withIndex("by_source", (q) => q.eq("id", sourceId))
-      .unique();
-    const grant = grantRow === null ? null : StoredGrantSchema.parse(grantRow);
-    const stored = await ctx.db
-      .query("evidence")
-      .withIndex("by_item", (q) =>
-        q.eq("ownerId", ownerId).eq("sourceId", sourceId).eq("externalId", record.externalId),
-      )
-      .collect();
-
-    const decision = decideIntake(grant, parsed.data, stored);
-    if (decision.result !== "accepted") return decision.result;
-
-    if (decision.becomesCurrent) {
-      for (const row of stored.filter((revision) => revision.isCurrent)) {
-        await ctx.db.patch(row._id, { isCurrent: false });
-      }
-    }
-    await ctx.db.insert("evidence", { ...record, isCurrent: decision.becomesCurrent });
-    return "accepted";
-  },
+  args: { ownerId: v.string(), sourceId: v.string(), record: evidenceRecord },
+  returns: intakeResult,
+  handler: (ctx, args) => intakeRecord(ctx, args),
 });
 
 /** The caller's current evidence revisions that name this project. */

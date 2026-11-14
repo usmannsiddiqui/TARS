@@ -15,6 +15,8 @@ import {
   type SourceId,
   type SourceKind,
 } from "@companion/domain";
+import type { CloudSync } from "./cloud-handoff";
+import type { LocalGrantRecord } from "./local-store";
 
 export type Extracted = { text: string; truncated: boolean } | { unsupported: string };
 
@@ -278,7 +280,7 @@ const SURFACES: Partial<Record<SourceKind, string>> = {
   codex: "Codex CLI sessions (selected folder)",
 };
 
-// ---- Selected-source registry: what the IPC layer drives. Grants live in memory for this step.
+// ---- Selected-source registry: what the IPC layer drives. Grants persist (encrypted) in the local store.
 
 export type LocalSourceKind = "obsidian" | "claude-code" | "codex";
 export type LocalSourceView = {
@@ -291,26 +293,39 @@ export type LocalSourceView = {
   freshness: "current" | "stale";
   reason?: string;
   coverage: string;
+  /** Off until the user consents for this source; while off nothing from it leaves the Mac. */
+  cloudProcessing: boolean;
+  cloudSync?: CloudSync;
 };
 export type LocalSourcesDeps = {
   /** OS dialog in the main process; the renderer never supplies a path. */
   pickPath(): Promise<string | null>;
   start(grant: SourceGrant, emit: (evidence: Evidence) => void, options: WatchOptions): Promise<WatchHandle>;
-  outbox: {
+  store: {
     enqueueEvidence(evidence: Evidence, ownerId: OwnerId): Promise<boolean>;
     discardSource(ownerId: OwnerId, sourceId: SourceId): Promise<number>;
+    saveGrant(record: LocalGrantRecord): Promise<void>;
+    loadGrants(ownerId: OwnerId): Promise<LocalGrantRecord[]>;
   };
+  /** Something the cloud hand-off should act on: new evidence, a consent change or a revoke. */
+  onChange(ownerId: OwnerId): void;
 };
 
-type Entry = { grant: SourceGrant; handle?: WatchHandle; error?: string };
+type Entry = LocalGrantRecord & { handle?: WatchHandle; error?: string; cloudSync?: CloudSync };
 
 export function createLocalSources(deps: LocalSourcesDeps) {
   const entries = new Map<SourceId, Entry>();
 
+  // Revoked grants stay in memory (and on disk) only so the cloud can be told; they are not usable.
   const find = (ownerId: OwnerId, sourceId: string): Entry => {
     const entry = entries.get(sourceId as SourceId);
-    if (!entry || entry.grant.ownerId !== ownerId) throw new Error("Unknown source");
+    if (!entry || entry.grant.ownerId !== ownerId || entry.grant.state === "revoked") throw new Error("Unknown source");
     return entry;
+  };
+  const persist = (entry: Entry) => deps.store.saveGrant({ grant: entry.grant, mirroredVersion: entry.mirroredVersion });
+  const stop = (entry: Entry) => {
+    entry.handle?.();
+    delete entry.handle;
   };
 
   const view = (entry: Entry): LocalSourceView => {
@@ -327,6 +342,8 @@ export function createLocalSources(deps: LocalSourcesDeps) {
       freshness: entry.error ? "stale" : status.freshness,
       ...(reason ? { reason } : {}),
       coverage: coverageLabel(grant.kind, status),
+      cloudProcessing: grant.cloudProcessing,
+      ...(entry.cloudSync ? { cloudSync: entry.cloudSync } : {}),
     };
   };
 
@@ -338,8 +355,11 @@ export function createLocalSources(deps: LocalSourcesDeps) {
         // Results from an old grant version (revoked/paused in the meantime) are dropped, never buffered.
         const current = entries.get(sourceId)?.grant;
         if (!current || current.state !== "active" || current.version !== evidence.grantVersion) return;
-        deps.outbox.enqueueEvidence(evidence, current.ownerId).then(
-          () => delete entry.error,
+        deps.store.enqueueEvidence(evidence, current.ownerId).then(
+          (added) => {
+            delete entry.error;
+            if (added) deps.onChange(current.ownerId);
+          },
           (err: unknown) => {
             entry.error = "could not save evidence locally";
             console.error("evidence outbox write failed", err);
@@ -367,30 +387,49 @@ export function createLocalSources(deps: LocalSourcesDeps) {
           version: 1,
           state: "active",
         },
+        mirroredVersion: null,
       };
       entries.set(entry.grant.id, entry);
       try {
         await start(entry);
+        await persist(entry);
       } catch (err) {
-        entries.delete(entry.grant.id); // an unsupported selection grants nothing
+        stop(entry);
+        entries.delete(entry.grant.id); // an unsupported or unsaved selection grants nothing
         throw err;
       }
       return view(entry);
     },
+    /** Loads the owner's saved grants (app start, sign-in) and restarts watchers of active ones. */
+    async restore(ownerId: OwnerId): Promise<void> {
+      for (const record of await deps.store.loadGrants(ownerId)) {
+        if (entries.has(record.grant.id)) continue;
+        const entry: Entry = { ...record };
+        entries.set(record.grant.id, entry);
+        if (record.grant.state !== "active") continue;
+        await start(entry).catch((err: unknown) => {
+          entry.error = "could not restart watching";
+          console.error("source restore failed", err);
+        });
+      }
+    },
     list(ownerId: OwnerId): LocalSourceView[] {
-      return [...entries.values()].filter((e) => e.grant.ownerId === ownerId).map(view);
+      return [...entries.values()]
+        .filter((e) => e.grant.ownerId === ownerId && e.grant.state !== "revoked")
+        .map(view);
     },
     async pause(ownerId: OwnerId, sourceId: string): Promise<LocalSourceView> {
       const entry = find(ownerId, sourceId);
-      entry.handle?.();
-      delete entry.handle;
+      stop(entry);
       entry.grant = { ...entry.grant, state: "paused" };
+      await persist(entry);
       return view(entry);
     },
     async resume(ownerId: OwnerId, sourceId: string): Promise<LocalSourceView> {
       const entry = find(ownerId, sourceId);
       if (entry.grant.state === "paused") {
         entry.grant = { ...entry.grant, state: "active" };
+        await persist(entry);
         await start(entry);
       }
       return view(entry);
@@ -398,12 +437,46 @@ export function createLocalSources(deps: LocalSourcesDeps) {
     /** Stops the watcher, bumps the grant version, discards unsynced evidence of the old version. */
     async revoke(ownerId: OwnerId, sourceId: string): Promise<{ id: SourceId; state: "revoked"; version: number }> {
       const entry = find(ownerId, sourceId);
-      entry.handle?.();
+      stop(entry);
       const version = entry.grant.version + 1;
       entry.grant = { ...entry.grant, state: "revoked", version };
-      entries.delete(entry.grant.id);
-      await deps.outbox.discardSource(ownerId, entry.grant.id);
+      await persist(entry);
+      await deps.store.discardSource(ownerId, entry.grant.id);
+      deps.onChange(ownerId);
       return { id: entry.grant.id, state: "revoked", version };
+    },
+    /**
+     * Consent for cloud processing of one source. Each change is a new grant version, so anything
+     * queued or in flight under the old consent is denied; active sources rescan under the new one.
+     */
+    async setCloudProcessing(ownerId: OwnerId, sourceId: string, enabled: boolean): Promise<LocalSourceView> {
+      const entry = find(ownerId, sourceId);
+      if (entry.grant.cloudProcessing === enabled) return view(entry);
+      stop(entry);
+      entry.grant = { ...entry.grant, cloudProcessing: enabled, version: entry.grant.version + 1 };
+      delete entry.cloudSync;
+      await persist(entry);
+      await deps.store.discardSource(ownerId, entry.grant.id);
+      if (entry.grant.state === "active") await start(entry);
+      deps.onChange(ownerId);
+      return view(entry);
+    },
+    /** Every grant of the owner, revoked ones included, for the cloud hand-off. */
+    cloudGrants(ownerId: OwnerId): LocalGrantRecord[] {
+      return [...entries.values()]
+        .filter((e) => e.grant.ownerId === ownerId)
+        .map((e) => ({ grant: e.grant, mirroredVersion: e.mirroredVersion }));
+    },
+    /** The cloud confirmed this grant version. */
+    async markMirrored(ownerId: OwnerId, sourceId: SourceId, version: number): Promise<void> {
+      const entry = entries.get(sourceId);
+      if (!entry || entry.grant.ownerId !== ownerId) return;
+      entry.mirroredVersion = Math.max(entry.mirroredVersion ?? 0, version);
+      await persist(entry);
+    },
+    setCloudSync(sourceId: SourceId, status: CloudSync): void {
+      const entry = entries.get(sourceId);
+      if (entry) entry.cloudSync = status;
     },
     /** After sleep/wake: one reconcile per active source, driven by the OS resume event. */
     reconcileAll(): void {

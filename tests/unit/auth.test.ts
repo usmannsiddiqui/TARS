@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AuthError,
   buildAuthorizeUrl,
+  createAuth,
   createPkcePair,
   parseCallback,
   pkceChallenge,
@@ -65,9 +66,17 @@ describe("auth (pure parts; live Auth0 sign-in unverified)", () => {
 
   it("accepts ID token claims with matching issuer, audience, nonce and expiry", () => {
     expect(validateIdTokenClaims(idToken(goodClaims), { ...config, nonce: "n-1", nowSec })).toEqual({
-      ownerId: "auth0|alice",
+      ownerId: `${issuer}|auth0|alice`,
       expiresAt: nowSec + 60,
     });
+  });
+
+  it("owner_id_matches_convex_token_identifier", () => {
+    // Convex derives UserIdentity.tokenIdentifier as `${iss}|${sub}`; the local owner must be that exact string
+    // or every cloud call would be denied as another owner.
+    const { ownerId } = validateIdTokenClaims(idToken(goodClaims), { ...config, nonce: "n-1", nowSec });
+    expect(ownerId).toBe(`${goodClaims.iss}|${goodClaims.sub}`);
+    expect(ownerId).toBe("https://tenant.example.auth0.com/|auth0|alice");
   });
 
   it("rejects an ID token whose nonce does not match", () => {
@@ -82,5 +91,67 @@ describe("auth (pure parts; live Auth0 sign-in unverified)", () => {
     expect(() => validateIdTokenClaims(idToken({ ...goodClaims, aud: "other" }), opts)).toThrow(AuthError);
     expect(() => validateIdTokenClaims(idToken({ ...goodClaims, exp: nowSec - 1 }), opts)).toThrow(AuthError);
     expect(() => validateIdTokenClaims("not-a-jwt", opts)).toThrow(AuthError);
+  });
+});
+
+describe("ID token for the cloud client", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const memoryVault = (initial: object | null) => {
+    let value = initial ? JSON.stringify(initial) : null;
+    return { read: async () => value, write: async (next: string) => void (value = next), current: () => value };
+  };
+  const session = (expiresAt: number) => ({
+    ownerId: `${issuer}|auth0|alice`,
+    idToken: "old-id-token",
+    accessToken: "old-access",
+    refreshToken: "refresh-secret",
+    expiresAt,
+  });
+  const futureSec = () => Math.floor(Date.now() / 1000) + 3600;
+
+  it("returns the current ID token without a network call while it is fresh", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const auth = createAuth({ config, openExternal: async () => {}, vault: memoryVault(session(futureSec())) });
+    await auth.restore();
+    expect(await auth.idToken(false)).toBe("old-id-token");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an expired ID token in the main process and never returns the refresh token", async () => {
+    const fresh = idToken({ iss: issuer, aud: config.clientId, sub: "auth0|alice", exp: futureSec() });
+    const fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(Object.fromEntries(new URLSearchParams(String(init.body)))).toEqual({
+        grant_type: "refresh_token",
+        client_id: config.clientId,
+        refresh_token: "refresh-secret",
+      });
+      return new Response(JSON.stringify({ id_token: fresh, access_token: "new-access" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const vault = memoryVault(session(1));
+    const auth = createAuth({ config, openExternal: async () => {}, vault });
+    await auth.restore();
+
+    expect(await auth.idToken(false)).toBe(fresh);
+    expect(fetchSpy).toHaveBeenCalledWith("https://tenant.example.auth0.com/oauth/token", expect.anything());
+    // The rotated session keeps the refresh token in the vault only.
+    expect(JSON.parse(vault.current() ?? "{}")).toMatchObject({ idToken: fresh, refreshToken: "refresh-secret" });
+    expect(auth.currentOwner()).toBe(`${issuer}|auth0|alice`);
+  });
+
+  it("refuses a refreshed token for a different owner", async () => {
+    const other = idToken({ iss: issuer, aud: config.clientId, sub: "auth0|mallory", exp: futureSec() });
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ id_token: other, access_token: "x" }), { status: 200 }));
+    const auth = createAuth({ config, openExternal: async () => {}, vault: memoryVault(session(1)) });
+    await auth.restore();
+    await expect(auth.idToken(true)).rejects.toThrow(/owner/i);
+  });
+
+  it("returns null when signed out", async () => {
+    const auth = createAuth({ config, openExternal: async () => {}, vault: memoryVault(null) });
+    await auth.restore();
+    expect(await auth.idToken(false)).toBeNull();
   });
 });

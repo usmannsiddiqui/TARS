@@ -19,6 +19,8 @@ export type IpcRouterDeps = {
     /** Owner from the verified signed-in session; null when signed out. */
     currentOwner(): OwnerId | null;
     signIn(): Promise<void>;
+    /** Short-lived ID token for the renderer's Convex client; refreshed in main. Null when signed out. */
+    idToken(forceRefresh: boolean): Promise<string | null>;
   };
   store: Store;
   /** Local file sources; paths come only from the OS dialog in the main process. */
@@ -28,7 +30,10 @@ export type IpcRouterDeps = {
     pause(ownerId: OwnerId, sourceId: string): Promise<unknown>;
     resume(ownerId: OwnerId, sourceId: string): Promise<unknown>;
     revoke(ownerId: OwnerId, sourceId: string): Promise<unknown>;
+    setCloudProcessing(ownerId: OwnerId, sourceId: string, enabled: boolean): Promise<unknown>;
   };
+  /** Event-driven hand-off of consented local evidence to the cloud. */
+  cloud: { trigger(): Promise<void> };
 };
 
 const SourceChoiceSchema = z.strictObject({
@@ -38,6 +43,8 @@ const SourceChoiceSchema = z.strictObject({
 type SourceChoice = z.infer<typeof SourceChoiceSchema>;
 const SourceRefSchema = z.strictObject({ sourceId: z.string().min(1).max(100) });
 type SourceRef = z.infer<typeof SourceRefSchema>;
+const CloudConsentSchema = SourceRefSchema.extend({ enabled: z.boolean() });
+type CloudConsent = z.infer<typeof CloudConsentSchema>;
 
 // Payload schemas per channel. None accepts an ownerId: the main process supplies it.
 const routes = {
@@ -68,6 +75,19 @@ const routes = {
   "sources:revoke": {
     payload: SourceRefSchema,
     run: (deps: IpcRouterDeps, { sourceId }: SourceRef) => deps.sources.revoke(requireOwner(deps), sourceId),
+  },
+  "sources:setCloudProcessing": {
+    payload: CloudConsentSchema,
+    run: (deps: IpcRouterDeps, { sourceId, enabled }: CloudConsent) =>
+      deps.sources.setCloudProcessing(requireOwner(deps), sourceId, enabled),
+  },
+  "cloud:online": {
+    payload: z.undefined(),
+    run: async (deps: IpcRouterDeps) => void deps.cloud.trigger(),
+  },
+  "auth:idToken": {
+    payload: z.strictObject({ forceRefresh: z.boolean() }),
+    run: (deps: IpcRouterDeps, { forceRefresh }: { forceRefresh: boolean }) => deps.auth.idToken(forceRefresh),
   },
   "auth:status": {
     payload: z.undefined(),

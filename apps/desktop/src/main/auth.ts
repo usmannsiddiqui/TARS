@@ -10,6 +10,8 @@ export const LOOPBACK_PORT = 51735;
 export const REDIRECT_URI = `http://127.0.0.1:${LOOPBACK_PORT}/callback`;
 const SCOPE = "openid profile email offline_access";
 const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+// Renew a minute early so a token never expires between handing it out and the cloud checking it.
+const REFRESH_MARGIN_SEC = 60;
 
 export class AuthError extends Error {
   override name = "AuthError";
@@ -79,13 +81,15 @@ const IdTokenClaimsSchema = z.object({
 });
 
 /**
- * Checks issuer, audience, nonce and expiry. The token comes straight from the token endpoint
+ * Checks issuer, audience, nonce (null for a refresh, which carries none) and expiry.
+ * The owner is `${iss}|${sub}`: exactly how Convex builds UserIdentity.tokenIdentifier, so
+ * local and cloud records name the same owner. The token comes straight from the token endpoint
  * over TLS (OIDC Core 3.1.3.7), so the JWT signature is not re-verified here; Convex verifies
  * tokens independently against the issuer's JWKS on every call.
  */
 export function validateIdTokenClaims(
   idToken: string,
-  expected: AuthConfig & { nonce: string; nowSec: number },
+  expected: AuthConfig & { nonce: string | null; nowSec: number },
 ): { ownerId: OwnerId; expiresAt: number } {
   const payload = idToken.split(".")[1];
   let claims: z.infer<typeof IdTokenClaimsSchema>;
@@ -98,9 +102,9 @@ export function validateIdTokenClaims(
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!audiences.includes(expected.clientId)) throw new AuthError("Sign-in rejected: wrong audience");
   if (audiences.length > 1 && claims.azp !== expected.clientId) throw new AuthError("Sign-in rejected: wrong azp");
-  if (claims.nonce !== expected.nonce) throw new AuthError("Sign-in rejected: nonce mismatch");
+  if (expected.nonce !== null && claims.nonce !== expected.nonce) throw new AuthError("Sign-in rejected: nonce mismatch");
   if (claims.exp <= expected.nowSec) throw new AuthError("Sign-in rejected: ID token expired");
-  return { ownerId: OwnerIdSchema.parse(claims.sub), expiresAt: claims.exp };
+  return { ownerId: OwnerIdSchema.parse(`${claims.iss}|${claims.sub}`), expiresAt: claims.exp };
 }
 
 const TokenResponseSchema = z.object({
@@ -153,8 +157,50 @@ function awaitLoopbackCallback(): Promise<string> {
   });
 }
 
+async function requestTokens(config: AuthConfig, params: Record<string, string>): Promise<z.infer<typeof TokenResponseSchema>> {
+  const response = await fetch(`https://${config.domain}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params),
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = z.object({ error: z.string(), error_description: z.string().optional() }).safeParse(body);
+    throw new AuthError(
+      err.success ? `Sign-in failed: ${err.data.error}` : `Sign-in failed: token endpoint returned ${response.status}`,
+    );
+  }
+  return TokenResponseSchema.parse(body);
+}
+
 export function createAuth(deps: AuthDeps) {
   let session: Session | null = null;
+
+  /** Validates and persists a token response; a refresh must name the same owner and may rotate the refresh token. */
+  async function save(
+    config: AuthConfig,
+    tokens: z.infer<typeof TokenResponseSchema>,
+    nonce: string | null,
+    previous: Session | undefined,
+  ): Promise<Session> {
+    const { ownerId, expiresAt } = validateIdTokenClaims(tokens.id_token, {
+      ...config,
+      nonce,
+      nowSec: Math.floor(Date.now() / 1000),
+    });
+    if (previous && previous.ownerId !== ownerId) throw new AuthError("Refresh rejected: token is for a different owner");
+    const refreshToken = tokens.refresh_token ?? previous?.refreshToken;
+    const next: Session = {
+      ownerId,
+      idToken: tokens.id_token,
+      accessToken: tokens.access_token,
+      ...(refreshToken ? { refreshToken } : {}),
+      expiresAt,
+    };
+    await deps.vault.write(JSON.stringify(next));
+    session = next;
+    return next;
+  }
 
   return {
     /** Loads a previously signed-in session from OS-protected storage. */
@@ -179,39 +225,31 @@ export function createAuth(deps: AuthDeps) {
       await deps.openExternal(buildAuthorizeUrl(config, { state, nonce, challenge: pkce.challenge }));
       const { code } = parseCallback(await callback, state);
 
-      const response = await fetch(`https://${config.domain}/oauth/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: config.clientId,
-          code,
-          code_verifier: pkce.verifier,
-          redirect_uri: REDIRECT_URI,
-        }),
+      const tokens = await requestTokens(config, {
+        grant_type: "authorization_code",
+        client_id: config.clientId,
+        code,
+        code_verifier: pkce.verifier,
+        redirect_uri: REDIRECT_URI,
       });
-      const body: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const err = z.object({ error: z.string(), error_description: z.string().optional() }).safeParse(body);
-        throw new AuthError(
-          err.success ? `Sign-in failed: ${err.data.error}` : `Sign-in failed: token endpoint returned ${response.status}`,
-        );
-      }
-      const tokens = TokenResponseSchema.parse(body);
-      const { ownerId, expiresAt } = validateIdTokenClaims(tokens.id_token, {
-        ...config,
-        nonce,
-        nowSec: Math.floor(Date.now() / 1000),
+      await save(config, tokens, nonce, undefined);
+    },
+
+    /**
+     * The short-lived ID token the Convex client authenticates with; refreshed here when it is
+     * expiring or the cloud rejected it. The refresh token itself never leaves the main process.
+     */
+    async idToken(forceRefresh: boolean): Promise<string | null> {
+      if (!session) return null;
+      if (!forceRefresh && session.expiresAt - REFRESH_MARGIN_SEC > Math.floor(Date.now() / 1000)) return session.idToken;
+      const config = deps.config;
+      if (!config || !session.refreshToken) return null; // expired with no way to renew: sign in again
+      const tokens = await requestTokens(config, {
+        grant_type: "refresh_token",
+        client_id: config.clientId,
+        refresh_token: session.refreshToken,
       });
-      const next: Session = {
-        ownerId,
-        idToken: tokens.id_token,
-        accessToken: tokens.access_token,
-        ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
-        expiresAt,
-      };
-      await deps.vault.write(JSON.stringify(next));
-      session = next;
+      return (await save(config, tokens, null, session)).idToken;
     },
   };
 }

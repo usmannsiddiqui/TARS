@@ -262,11 +262,14 @@ describe("local source manager", () => {
         return added;
       },
       discardSource: store.discardSource,
+      saveGrant: store.saveGrant,
+      loadGrants: store.loadGrants,
     };
     const sources = createLocalSources({
       pickPath: async () => vault,
       start: async (grant, emit, options) => watchSelected(grant, emit, options),
-      outbox,
+      store: outbox,
+      onChange: () => {},
     });
     const chosen = await sources.choose(alice.ownerId, { kind: "obsidian", projectIds: [ProjectIdSchema.parse("p1")] });
     if (!chosen) throw new Error("expected a selection");
@@ -284,7 +287,8 @@ describe("local source manager", () => {
     const sources = createLocalSources({
       pickPath: async () => dir,
       start: async (grant, emit, options) => watchSelected(grant, emit, options),
-      outbox: store,
+      store,
+      onChange: () => {},
     });
     const chosen = await sources.choose(alice.ownerId, { kind: "obsidian", projectIds: [ProjectIdSchema.parse("p1")] });
     if (!chosen) throw new Error("expected a selection");
@@ -304,9 +308,133 @@ describe("local source manager", () => {
     const sources = createLocalSources({
       pickPath: async () => null,
       start: async (grant, emit, options) => watchSelected(grant, emit, options),
-      outbox: store,
+      store,
+      onChange: () => {},
     });
     expect(await sources.choose(alice.ownerId, { kind: "obsidian", projectIds: [ProjectIdSchema.parse("p1")] })).toBeNull();
     expect(sources.list(alice.ownerId)).toEqual([]);
+  });
+
+  /** A registry over a store file that can be closed and reopened, as a quit and relaunch would. */
+  function restartable(vault: string) {
+    const cipher = aesGcmCipher(randomBytes(32));
+    const dbPath = join(dir, "restart.db");
+    const enqueued = collector();
+    const changes: OwnerId[] = [];
+    let current: { store: LocalStore; sources: ReturnType<typeof createLocalSources> } | undefined;
+    const launch = () => {
+      const s = openLocalStore(dbPath, cipher);
+      const sources = createLocalSources({
+        pickPath: async () => vault,
+        start: async (grant, emit, options) => {
+          const h = watchSelected(grant, emit, options);
+          handles.push(h);
+          return h;
+        },
+        store: {
+          enqueueEvidence: async (e, owner) => {
+            const added = await s.enqueueEvidence(e, owner);
+            enqueued.emit(e);
+            return added;
+          },
+          discardSource: s.discardSource,
+          saveGrant: s.saveGrant,
+          loadGrants: s.loadGrants,
+        },
+        onChange: (owner) => changes.push(owner),
+      });
+      current = { store: s, sources };
+      return current;
+    };
+    const quit = () => {
+      for (const h of handles.splice(0)) h();
+      current?.store.close();
+    };
+    return { launch, quit, enqueued, changes };
+  }
+
+  it("selected_source_survives_restart", async () => {
+    const { alice, bob } = makeOwners();
+    const vault = join(dir, "vault");
+    mkdirSync(vault);
+    const app = restartable(vault);
+    const first = app.launch();
+    const chosen = await first.sources.choose(alice.ownerId, { kind: "obsidian", projectIds: [ProjectIdSchema.parse("p1")] });
+    if (!chosen) throw new Error("expected a selection");
+    expect(chosen).toMatchObject({ state: "active", version: 1, cloudProcessing: false });
+    app.quit();
+
+    const second = app.launch();
+    expect(second.sources.list(alice.ownerId)).toEqual([]); // nothing is known before the owner's grants load
+    await second.sources.restore(bob.ownerId);
+    expect(second.sources.list(bob.ownerId)).toEqual([]);
+    await second.sources.restore(alice.ownerId);
+    expect(second.sources.list(alice.ownerId)).toMatchObject([{ id: chosen.id, state: "active", version: 1, name: "vault" }]);
+
+    // The restarted watcher sees a new note under the same grant.
+    writeFileSync(join(vault, "after-restart.md"), "written after relaunch");
+    const e = await app.enqueued.next((r) => r.externalId === "after-restart.md");
+    expect(e).toMatchObject({ sourceId: chosen.id, ownerId: alice.ownerId, grantVersion: 1 });
+    app.quit();
+  });
+
+  it("revoked and paused sources keep their state after restart", async () => {
+    const { alice } = makeOwners();
+    const vault = join(dir, "vault");
+    mkdirSync(vault);
+    const app = restartable(vault);
+    const first = app.launch();
+    const p1 = [ProjectIdSchema.parse("p1")];
+    const revoked = await first.sources.choose(alice.ownerId, { kind: "obsidian", projectIds: p1 });
+    const paused = await first.sources.choose(alice.ownerId, { kind: "obsidian", projectIds: p1 });
+    if (!revoked || !paused) throw new Error("expected selections");
+    await first.sources.revoke(alice.ownerId, revoked.id);
+    await first.sources.pause(alice.ownerId, paused.id);
+    app.quit();
+
+    const second = app.launch();
+    await second.sources.restore(alice.ownerId);
+    expect(second.sources.list(alice.ownerId)).toMatchObject([{ id: paused.id, state: "paused", reason: "paused" }]);
+    await expect(second.sources.resume(alice.ownerId, revoked.id)).rejects.toThrow("Unknown source");
+    // The revoked grant is still known to the cloud hand-off, at its bumped version, so the cloud can be told.
+    expect(second.sources.cloudGrants(alice.ownerId).map((r) => [r.grant.id, r.grant.state, r.grant.version])).toEqual([
+      [revoked.id, "revoked", 2],
+      [paused.id, "paused", 1],
+    ]);
+    app.quit();
+  });
+
+  it("cloud processing is off by default and each change is a new, persisted grant version", async () => {
+    const { alice, bob } = makeOwners();
+    const vault = join(dir, "vault");
+    mkdirSync(vault);
+    writeFileSync(join(vault, "a.md"), "note under consent changes");
+    const app = restartable(vault);
+    const first = app.launch();
+    const chosen = await first.sources.choose(alice.ownerId, { kind: "obsidian", projectIds: [ProjectIdSchema.parse("p1")] });
+    if (!chosen) throw new Error("expected a selection");
+    await app.enqueued.next((r) => r.grantVersion === 1);
+    expect(chosen.cloudProcessing).toBe(false);
+    await expect(first.sources.setCloudProcessing(bob.ownerId, chosen.id, true)).rejects.toThrow("Unknown source");
+
+    const on = await first.sources.setCloudProcessing(alice.ownerId, chosen.id, true);
+    expect(on).toMatchObject({ cloudProcessing: true, version: 2 });
+    expect(app.changes).toContain(alice.ownerId);
+    // Records queued under version 1 would be denied by the cloud; the rescan re-queues them under version 2.
+    await app.enqueued.next((r) => r.grantVersion === 2);
+    expect((await first.store.loadOutbox(alice.ownerId)).map((r) => r.grantVersion)).toEqual([2]);
+    // Unchanged value: no new version.
+    expect(await first.sources.setCloudProcessing(alice.ownerId, chosen.id, true)).toMatchObject({ version: 2 });
+
+    await first.sources.markMirrored(alice.ownerId, chosen.id, 2);
+    app.quit();
+    const second = app.launch();
+    await second.sources.restore(alice.ownerId);
+    expect(second.sources.cloudGrants(alice.ownerId)).toMatchObject([
+      { grant: { id: chosen.id, cloudProcessing: true, version: 2 }, mirroredVersion: 2 },
+    ]);
+    const off = await second.sources.setCloudProcessing(alice.ownerId, chosen.id, false);
+    expect(off).toMatchObject({ cloudProcessing: false, version: 3 });
+    app.quit();
   });
 });

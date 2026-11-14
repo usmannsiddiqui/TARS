@@ -11,12 +11,17 @@ const api = {
   loadPending: (): Promise<CaptureInput[]> => invoke("capture:loadPending"),
   authStatus: (): Promise<{ signedIn: boolean }> => invoke("auth:status"),
   signIn: (): Promise<{ signedIn: boolean }> => invoke("auth:signIn"),
+  // Only the short-lived ID token, for the Convex client; the refresh token stays in the main process.
+  idToken: (forceRefresh: boolean): Promise<string | null> => invoke("auth:idToken", { forceRefresh }),
+  cloudOnline: (): Promise<void> => invoke("cloud:online"),
   // Local sources: the main process opens the OS picker; no path ever crosses this bridge.
   chooseSource: (kind: LocalSourceKind, projectIds: string[]): Promise<LocalSourceView | null> =>
     invoke("sources:choose", { kind, projectIds }),
   listSources: (): Promise<LocalSourceView[]> => invoke("sources:list"),
   pauseSource: (sourceId: string): Promise<LocalSourceView> => invoke("sources:pause", { sourceId }),
   resumeSource: (sourceId: string): Promise<LocalSourceView> => invoke("sources:resume", { sourceId }),
+  setCloudProcessing: (sourceId: string, enabled: boolean): Promise<LocalSourceView> =>
+    invoke("sources:setCloudProcessing", { sourceId, enabled }),
   revokeSource: (sourceId: string): Promise<{ id: string; state: "revoked"; version: number }> =>
     invoke("sources:revoke", { sourceId }),
 };

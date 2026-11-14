@@ -3,9 +3,12 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { ConvexHttpClient } from "convex/browser";
 import { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, protocol, safeStorage, session, shell } from "electron";
+import { api } from "../../../../convex/_generated/api";
 import { watchAiContext } from "./ai-context";
 import { authConfigFromEnv, createAuth, type SecretVault } from "./auth";
+import { createHandoff } from "./cloud-handoff";
 import { createIpcRouter, IPC_CHANNELS } from "./ipc";
 import { aesGcmCipher, openLocalStore, type LocalStore } from "./local-store";
 import { createLocalSources, watchSelected } from "./source-watch";
@@ -119,12 +122,57 @@ async function start(): Promise<void> {
     },
     start: async (grant, emit, options) =>
       grant.kind === "obsidian" ? watchSelected(grant, emit, options) : watchAiContext(grant, emit, options),
+    store,
+    // New evidence, a consent change or a revoke: one hand-off pass.
+    onChange: () => void handoff.trigger(),
+  });
+
+  // Main-process cloud client, authenticated per call with the current (refreshed) ID token.
+  const convex = new ConvexHttpClient(import.meta.env.CONVEX_URL);
+  const authedConvex = async () => {
+    const token = await auth.idToken(false);
+    if (!token) throw new Error("Not signed in");
+    convex.setAuth(token);
+    return convex;
+  };
+  const handoff = createHandoff({
+    currentOwner: () => auth.currentOwner(),
+    cloud: {
+      setGrant: async (grant) => void (await (await authedConvex()).mutation(api.evidence.setGrant, grant)),
+      submit: async (record) => (await authedConvex()).mutation(api.localEvidence.submit, { record }),
+    },
+    sources,
     outbox: store,
   });
-  // Events missed while the Mac slept are picked up by one reconcile on wake (an OS event, not a timer).
-  powerMonitor.on("resume", () => sources.reconcileAll());
 
-  const router = createIpcRouter({ appOrigin, auth, store, sources });
+  /** App start and sign-in: bring back this owner's selected sources, then hand off what is pending. */
+  const resumeOwner = async () => {
+    const owner = auth.currentOwner();
+    if (owner) await sources.restore(owner);
+    void handoff.trigger();
+  };
+  await resumeOwner();
+
+  // Events missed while the Mac slept are picked up by one reconcile on wake (an OS event, not a timer).
+  powerMonitor.on("resume", () => {
+    sources.reconcileAll();
+    void handoff.trigger();
+  });
+
+  const router = createIpcRouter({
+    appOrigin,
+    auth: {
+      currentOwner: () => auth.currentOwner(),
+      idToken: (forceRefresh) => auth.idToken(forceRefresh),
+      async signIn() {
+        await auth.signIn();
+        await resumeOwner();
+      },
+    },
+    store,
+    sources,
+    cloud: handoff,
+  });
   for (const channel of IPC_CHANNELS) {
     ipcMain.handle(channel, (event, payload: unknown) =>
       router.handle(channel, { frameUrl: event.senderFrame?.url }, payload),
