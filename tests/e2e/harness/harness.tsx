@@ -14,6 +14,7 @@ import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
 import { Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
 import "../../../apps/desktop/src/renderer/styles.css";
+import "../../../apps/desktop/src/renderer/screens.css";
 
 // Every call a screen makes is recorded (bridge.ts) for the spec to assert.
 
@@ -92,10 +93,12 @@ const connectedRows = (fresh: boolean): SourceRow[] => [
     fresh
       ? r
       : r.provider === "notion"
-        ? { ...r, id: "notion-illustrative", state: "on", status: { kind: "last-checked", at: inDays(0, 8) } }
+        ? { ...r, id: "notion-illustrative", state: "on", status: { kind: "last-checked", at: inDays(0, 8) }, selection: { selectors: ["8f2c…a41 (AI Guides plan)"], projects: ["AI Guides"] } }
         : r.provider === "canvas"
-          ? { ...r, id: "canvas-illustrative", state: "on", status: { kind: "stale", at: inDays(-4, 12) } }
-          : r,
+          ? { ...r, id: "canvas-illustrative", state: "on", status: { kind: "stale", at: inDays(-4, 12) }, selection: { selectors: ["COURSE 1182"], projects: ["Coursework"] } }
+          : r.provider === "slack"
+            ? { ...r, id: "slack-illustrative", state: "paused", status: { kind: "last-checked", at: inDays(-1, 17) }, selection: { selectors: ["C0123", "C0456"], projects: ["AVT"] } }
+            : r,
   ),
   fresh
     ? observation
@@ -184,8 +187,8 @@ function useActing(variant: string): { receipt: Receipt | null; acting: ActingAc
         record("executeIntent", { kind: intent.kind, destination: intent.destination, revision: saved.revision, ...(intent.taskId ? { taskId: intent.taskId } : {}) });
         const next: Receipt =
           variant === "unknown"
-            ? { id: "act-1", state: "unknown", logState: "not-due", reason: "timeout" }
-            : { id: "act-1", state: "succeeded", verifiedAt: new Date().toISOString(), externalId: "illustrative-message-1", logState: "failed" };
+            ? { id: "act-1", kind: intent.kind, destination: intent.destination, revision: saved.revision, state: "unknown", logState: "not-due", reason: "timeout" }
+            : { id: "act-1", kind: intent.kind, destination: intent.destination, revision: saved.revision, state: "succeeded", verifiedAt: new Date().toISOString(), externalId: "illustrative-message-1", logState: "failed" };
         setReceipt(next);
         return { status: "receipt", receipt: next };
       },
@@ -202,6 +205,8 @@ function useActing(variant: string): { receipt: Receipt | null; acting: ActingAc
 const cloudActions: CloudActions = {
   onConnect: async (provider, form) => record("connect", provider, { projectId: form.projectId, selectors: form.selectors, writeTargets: form.writeTargets }),
   onRefresh: async (row) => record("refresh", row.id),
+  onPause: async (row) => record("pauseCloud", row.id),
+  onResume: async (row) => record("resumeCloud", row.id),
   onRevoke: async (row) => record("revokeCloud", row.id),
   notionWebhookUrl: (id) => `https://illustrative-deployment.convex.site/notion/events?source=${id}`,
   revealNotionToken: async (id) => (record("revealNotionToken", id), "secret_illustrative_verification_token"),
@@ -261,6 +266,8 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
         <ProjectView
           key={project.id}
           name={project.name}
+          index={projects.indexOf(project) + 1}
+          logDestination={variant === "unknown" ? null : { kind: "notion", label: "8f2c…a41" }}
           isFocus={project.id === focus}
           {...(route.mode ? { mode: route.mode } : {})}
           {...(project.prepared ? { prepared: project.prepared } : {})}
@@ -280,12 +287,14 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
         <MemoryView
           projects={projects}
           projectId="guides"
-          facts={facts}
-          withheld={[{ id: "w1", key: "co_presenter_phone", value: "A phone number from an email signature.", evidenceIds: ["e2"] }]}
+          {...(variant === "loading" ? { state: { kind: "loading", detail: "Reading what I remember…" } as const } : {})}
+          facts={variant === "empty" ? [] : facts}
+          withheld={variant === "empty" ? [] : [{ id: "w1", key: "co_presenter_phone", value: "A phone number from an email signature.", evidenceIds: ["e2"] }]}
           evidence={evidence}
           onSelectProject={(id) => record("selectProject", id)}
           onCorrect={async (fact, value) => record("remember", fact.key, value)}
           onForget={async (fact) => record("forget", fact.key)}
+          onAllowRelearning={async (fact) => record("allowRelearning", fact.key)}
           onAccept={async (item) => record("acceptWithheld", item.id)}
           onDismiss={async (item) => record("dismissWithheld", item.id)}
         />
@@ -319,10 +328,12 @@ document.documentElement.dataset["view"] = scene.startsWith("pet") ? "pet" : sce
 const routes: Record<string, Route> = {
   today: { view: "today" },
   project: { view: "project", projectId: "guides" },
+  // project-<id>: another illustrative project (avt: partial; personal: nothing prepared; course: needs retry).
   memory: { view: "memory" },
   connections: { view: "connections" },
 };
 const [routeName = "today", variant = ""] = scene.split("-");
+const projectVariant = routeName === "project" && projects.some((p) => p.id === variant) ? variant : undefined;
 const guides = projects[0]!.prepared!.work!;
 const element = scene.startsWith("pet-") ? (
   <Pet state={scene.slice(4) as PetState} onOpen={() => record("openPanel")} />
@@ -342,7 +353,7 @@ const element = scene.startsWith("pet-") ? (
 ) : scene === "panel-done" ? (
   <Panel petState="done" projectName="AI Guides" completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
 ) : (
-  <AppScene initial={routes[routeName] ?? { view: "today" }} variant={variant} />
+  <AppScene initial={projectVariant ? { view: "project", projectId: projectVariant } : (routes[routeName] ?? { view: "today" })} variant={variant} />
 );
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{element}</StrictMode>);

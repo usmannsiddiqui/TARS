@@ -7,7 +7,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
-import type { Brief, CloudProvider, Commitment, Evidence, Honest, PetState, Prepared, ProjectSummary, Reentry, SessionEvent, SessionState, SourceRow, Tradeoff } from "./model";
+import { cloudRow, permissionMissing, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
@@ -257,7 +257,7 @@ const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; und
   ...(r.undoRevision ? { undoRevision: r.undoRevision } : {}),
 });
 
-export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
+export function ProjectLive(props: { projectId: string; name: string; index: number; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
@@ -275,6 +275,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const reconcile = useAction(api.actions.reconcileAction);
   const appendLog = useAction(api.actions.appendOutcomeLog);
   const setLog = useMutation(api.actions.setLogDestination);
+  const logDestination = useQuery(api.actions.getLogDestination, { projectId });
   const reportDone = useMutation(api.actions.reportDone);
   const connections = useQuery(api.connections.listConnections, {});
   const gmailSendConsent = useMutation(api.connectors.gmail.startSendConsent);
@@ -342,6 +343,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   return (
     <ProjectView
       name={props.name}
+      index={props.index}
       isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}
@@ -352,6 +354,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
       editor={editor}
       receipt={receipts === undefined ? undefined : (receipts.at(-1) ?? null)}
       acting={acting}
+      logDestination={logDestination}
       onReportDone={async (taskId) => void (await reportDone({ taskId }))}
       onMakeFocus={props.onMakeFocus}
       onPrepare={async () => void (await prepare({ projectId }))}
@@ -371,6 +374,7 @@ export function MemoryLive({ projects, projectId, onSelectProject }: { projects:
   const forget = useMutation(api.memory.forget);
   const accept = useMutation(api.memory.acceptWithheld);
   const dismissWithheld = useMutation(api.memory.dismissWithheld);
+  const allowRelearning = useMutation(api.memory.allowRelearning);
   const scoped = (scope: "project" | "global") => (scope === "project" && projectId ? { projectId } : {});
 
   return (
@@ -386,6 +390,7 @@ export function MemoryLive({ projects, projectId, onSelectProject }: { projects:
         void (await remember({ ...scoped(fact.scope), key: fact.key, value, evidenceIds: fact.evidenceIds, scope: fact.scope, explicitUserInstruction: true }))
       }
       onForget={async (fact) => void (await forget({ ...scoped(fact.scope), key: fact.key }))}
+      onAllowRelearning={async (fact) => void (await allowRelearning({ ...scoped(fact.scope), key: fact.key }))}
       onAccept={async (item) => void (await accept({ id: item.id }))}
       onDismiss={async (item) => void (await dismissWithheld({ id: item.id }))}
     />
@@ -423,29 +428,24 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const refreshOutlook = useAction(api.connectors.outlook.refresh);
   const startGmail = useMutation(api.connectors.gmail.startConnect);
   const startOutlook = useMutation(api.connectors.outlook.startConnect);
-  // shortcut: listConnections does not carry grant state, so a disconnect made here is remembered only
-  // for this window; upgrade when the backend exposes the grant's state with each connection.
-  const [revoked, setRevoked] = useState<Set<string>>(new Set());
+  const setGrantState = useMutation(api.evidence.setGrantState);
   const [local, setLocal] = useState<LocalSourceView[] | null>(null);
-  const [permissionMissing, setPermissionMissing] = useState<Set<string>>(new Set());
+  const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
   const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
   useEffect(() => {
     window.companion.shortcut.status().then(setShortcut, (err: unknown) => setShortcut({ accelerator: "The shortcut", registered: false, error: reason(err) }));
   }, []);
   // Observation status is pushed by the main process (status words only, never observed text).
-  // The event carries the helper's `state` at runtime, although the preload types it as a source status.
   useEffect(
     () =>
-      window.companion.observation.onStatus((event) => {
-        const state = (event as unknown as { state?: string }).state;
-        if (state === undefined) return;
+      window.companion.observation.onStatus((event) =>
         setPermissionMissing((current) => {
           const next = new Set(current);
-          if (state === "permission-missing") next.add(event.sourceId);
+          if (permissionMissing(event)) next.add(event.sourceId);
           else next.delete(event.sourceId);
           return next;
-        });
-      }),
+        }),
+      ),
     [],
   );
   const [localError, setLocalError] = useState<string | null>(null);
@@ -480,33 +480,8 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
     }
     if (added.length === 0) rows.push({ id: def.kind, name: def.name, coverage: def.coverage, group: "mac", state: "off" });
   }
-  for (const def of CLOUD) {
-    const c = connections?.find((x) => x.provider === def.provider && !revoked.has(x.sourceId));
-    if (!c) {
-      const wasRevoked = connections?.some((x) => x.provider === def.provider && revoked.has(x.sourceId));
-      rows.push({
-        id: def.provider,
-        provider: def.provider,
-        name: def.name,
-        coverage: def.coverage,
-        group: "cloud",
-        state: "off",
-        ...(wasRevoked ? { unavailableReason: "Disconnected. New reads stopped." } : {}),
-      });
-      continue;
-    }
-    const status: Honest =
-      c.availability === "connected"
-        ? c.lastCheckedAt
-          ? { kind: "last-checked", at: c.lastCheckedAt }
-          : { kind: "partial", detail: "Connected; not checked yet" }
-        : c.availability === "stale"
-          ? { kind: "stale", ...(c.lastCheckedAt ? { at: c.lastCheckedAt } : {}) }
-          : c.availability === "missing-access"
-            ? { kind: "missing-access", ...(c.lastError ? { detail: c.lastError } : {}) }
-            : { kind: "needs-retry", ...(c.lastError ? { detail: c.lastError } : {}) };
-    rows.push({ id: c.sourceId, provider: def.provider, name: def.name, coverage: def.coverage, group: "cloud", state: "on", status });
-  }
+  const projectName = (id: string) => projects?.find((p) => p.id === id)?.name;
+  for (const def of CLOUD) rows.push(cloudRow(def, connections ?? [], projectName));
   const observed = (local ?? []).filter((s) => s.kind === "observation" && s.state !== "revoked");
   for (const s of observed) {
     rows.push({
@@ -516,7 +491,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       group: "optional",
       state: s.state === "paused" ? "paused" : "on",
       cloudProcessing: s.cloudProcessing,
-      ...(permissionMissing.has(s.id) ? { permissionMissing: true } : {}),
+      ...(missingPermission.has(s.id) ? { permissionMissing: true } : {}),
       ...(s.freshness === "stale" ? { status: { kind: "stale", detail: s.reason ?? "Not reading right now" } as Honest } : {}),
     });
   }
@@ -574,11 +549,10 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       else if (row.provider === "gmail") await refreshGmail({ sourceId: row.id });
       else if (row.provider === "outlook-mail" || row.provider === "outlook-calendar") await refreshOutlook({ sourceId: row.id, kind: row.provider });
     },
-    onRevoke: async (row) => {
-      // shortcut: grant versions are timestamps because the renderer cannot read the stored version.
-      await setGrant({ id: row.id, kind: row.provider ?? "", selectors: [], projectIds: [], read: false, writeTargets: [], cloudProcessing: false, version: Date.now(), state: "revoked" });
-      setRevoked((r) => new Set(r).add(row.id));
-    },
+    // The stored grant's next version: the change survives a reload and every window sees it.
+    onPause: async (row) => void (await setGrantState({ sourceId: row.id, state: "paused" })),
+    onResume: async (row) => void (await setGrantState({ sourceId: row.id, state: "active" })),
+    onRevoke: async (row) => void (await setGrantState({ sourceId: row.id, state: "revoked" })),
     notionWebhookUrl: (sourceId) => `${SITE_URL}/notion/events?source=${encodeURIComponent(sourceId)}`,
     revealNotionToken: (sourceId) => revealNotion({ sourceId }),
   };

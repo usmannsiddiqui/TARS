@@ -24,8 +24,6 @@ export type ActingActions = {
   sendConsent: { blocked: string } | { mailboxes: { name: string; start(): Promise<void> }[] };
 };
 
-export type LastIntent = { kind: ActKind; destination: string };
-
 export type ActProps = {
   saved: { artifactId: string; revision: string; text: string };
   /** Unsaved edits in the editor: only the saved revision can be sent. */
@@ -33,14 +31,20 @@ export type ActProps = {
   tasks: { id: string; text: string }[];
   /** The project's newest receipt; null when nothing was done yet. */
   receipt: Receipt | null;
-  lastIntent: LastIntent | null;
-  onIntent(intent: LastIntent): void;
+  /** An instruction was carried out from this screen just now (the receipt says what and where). */
+  onActed(): void;
   actions: ActingActions;
+  /** The project's chosen outcome log: undefined while loading, null when none is chosen. */
+  logDestination: LogDestinationView | null | undefined;
 };
 
-const verb = (kind: ActKind | undefined) => (kind === "send-mail" ? "sent" : kind === "update-note" ? "updated" : "sent or updated");
+export type LogDestinationView = { kind: "notion" | "obsidian"; label?: string };
 
-export function Act({ saved, dirty, tasks, receipt, lastIntent, onIntent, actions }: ActProps) {
+const KIND_WORD: Record<ActKind, string> = { "send-mail": "Email", "update-note": "Notion page update" };
+
+const verb = (kind: ActKind) => (kind === "send-mail" ? "sent" : "updated");
+
+export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestination }: ActProps) {
   const destId = useId();
   const taskField = useId();
   const [kind, setKind] = useState<ActKind>("send-mail");
@@ -80,7 +84,7 @@ export function Act({ saved, dirty, tasks, receipt, lastIntent, onIntent, action
       const result = await actions.execute({ kind, destination: dest, instructionId, ...(taskId ? { taskId } : {}) }, saved);
       if (result.status === "needs-clarification") setQuestion(result.reason);
       else if (result.status === "missing-send-permission") setNeedsConsent(true);
-      else onIntent({ kind, destination: dest });
+      else onActed();
     });
 
   return (
@@ -88,49 +92,53 @@ export function Act({ saved, dirty, tasks, receipt, lastIntent, onIntent, action
       <h3 id="act-h" className="group-title">
         Send or update
       </h3>
-      <fieldset className="choice">
-        <legend className="sr-only">What to do with it</legend>
-        <label>
-          <input type="radio" name="act-kind" checked={kind === "send-mail"} onChange={() => setKind("send-mail")} /> Send as an email
-        </label>
-        <label>
-          <input type="radio" name="act-kind" checked={kind === "update-note"} onChange={() => setKind("update-note")} /> Update a Notion page
-        </label>
-      </fieldset>
-      <div className="act-fields">
-        <div className="field">
-          <label htmlFor={destId}>{kind === "send-mail" ? "Recipient email address" : "Notion page ID"}</label>
-          <input
-            id={destId}
-            value={destination}
-            maxLength={320}
-            autoComplete="off"
-            type={kind === "send-mail" ? "email" : "text"}
-            onChange={(e) => setDestination(e.target.value)}
-          />
+      <div className="act-steps">
+        <fieldset className="choice">
+          <legend className="act-step">What to do with it</legend>
+          <label>
+            <input type="radio" name="act-kind" checked={kind === "send-mail"} onChange={() => setKind("send-mail")} /> Send as an email
+          </label>
+          <label>
+            <input type="radio" name="act-kind" checked={kind === "update-note"} onChange={() => setKind("update-note")} /> Update a Notion page
+          </label>
+        </fieldset>
+        <div className="act-fields">
+          <div className="field">
+            <label htmlFor={destId}>{kind === "send-mail" ? "Recipient email address" : "Notion page ID"}</label>
+            <input
+              id={destId}
+              value={destination}
+              maxLength={320}
+              autoComplete="off"
+              type={kind === "send-mail" ? "email" : "text"}
+              onChange={(e) => setDestination(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={taskField}>This completes</label>
+            <select id={taskField} value={taskId} onChange={(e) => setTaskId(e.target.value)}>
+              <option value="">No specific task</option>
+              {tasks.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.text}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="field">
-          <label htmlFor={taskField}>This completes</label>
-          <select id={taskField} value={taskId} onChange={(e) => setTaskId(e.target.value)}>
-            <option value="">No specific task</option>
-            {tasks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.text}
-              </option>
-            ))}
-          </select>
+        <div className="act-confirm">
+          <p className="quiet small">
+            {unresolved
+              ? "Check the last one first. Sending again could deliver it twice."
+              : dirty
+                ? "Save your edits first. Only the saved revision is ever sent, never unsaved text."
+                : `Revision ${saved.revision} goes exactly as saved. Your click is the approval.`}
+          </p>
+          <button type="button" className="secondary" disabled={dest === "" || dirty || inFlight || unresolved || busy !== null} onClick={execute}>
+            {busy === "execute" ? (kind === "send-mail" ? "Sending…" : "Updating…") : label}
+          </button>
         </div>
       </div>
-      <p className="quiet small">
-        {unresolved
-          ? "Check the last one first. Sending again could deliver it twice."
-          : dirty
-            ? "Save your edits first. Only the saved revision is ever sent, never unsaved text."
-            : `Revision ${saved.revision} goes exactly as saved. Your click is the approval.`}
-      </p>
-      <button type="button" className="secondary" disabled={dest === "" || dirty || inFlight || unresolved || busy !== null} onClick={execute}>
-        {busy === "execute" ? (kind === "send-mail" ? "Sending…" : "Updating…") : label}
-      </button>
 
       {question && (
         <p className="question" role="status">
@@ -160,8 +168,6 @@ export function Act({ saved, dirty, tasks, receipt, lastIntent, onIntent, action
       {receipt && (
         <ReceiptView
           receipt={receipt}
-          kind={lastIntent?.kind}
-          {...(lastIntent ? { destination: lastIntent.destination } : {})}
           busy={busy}
           onCheck={() => run("check", () => actions.reconcile(receipt.id))}
           onRetryLog={() => run("log", () => actions.retryLog(receipt.id))}
@@ -170,17 +176,33 @@ export function Act({ saved, dirty, tasks, receipt, lastIntent, onIntent, action
       )}
       {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
 
-      <LogDestination onSave={actions.setLogDestination} notes={actions.notes} />
+      <LogDestination onSave={actions.setLogDestination} notes={actions.notes} current={logDestination} />
     </section>
   );
 }
 
-function ReceiptView(props: { receipt: Receipt; kind: ActKind | undefined; destination?: string; busy: string | null; onCheck(): void; onRetryLog(): void; onTryAgain(): void }) {
-  const { receipt, kind } = props;
-  const where = props.destination ? `${kind === "send-mail" ? " to" : ""} ${props.destination}` : "";
-  const done = kind === "send-mail" ? "Sent" : kind === "update-note" ? "Updated" : "Done";
+function ReceiptView(props: { receipt: Receipt; busy: string | null; onCheck(): void; onRetryLog(): void; onTryAgain(): void }) {
+  const { receipt } = props;
+  const { kind, destination } = receipt;
+  const where = `${kind === "send-mail" ? " to" : ""} ${destination}`;
+  const done = kind === "send-mail" ? "Sent" : "Updated";
   return (
     <div className="receipt" role="status" aria-label="What happened">
+      <p className="receipt-title">What happened</p>
+      <dl className="receipt-facts">
+        <div>
+          <dt>What</dt>
+          <dd>{KIND_WORD[kind]}</dd>
+        </div>
+        <div>
+          <dt>Where</dt>
+          <dd>{destination}</dd>
+        </div>
+        <div>
+          <dt>Revision</dt>
+          <dd className="num">{receipt.revision}</dd>
+        </div>
+      </dl>
       {(receipt.state === "pending" || receipt.state === "running") && (
         <StateNote state={{ kind: "loading", detail: `${kind === "update-note" ? "Updating" : "Sending"}${where}. Waiting for the provider to confirm it.` }} />
       )}
@@ -190,7 +212,7 @@ function ReceiptView(props: { receipt: Receipt; kind: ActKind | undefined; desti
             state={{
               kind: "done",
               detail: `${done}${where}, verified ${receipt.verifiedAt ? formatWhen(receipt.verifiedAt) : ""}: ${
-                kind === "send-mail" ? "found in your sent mail with the same recipient and text" : kind === "update-note" ? "read back from the page" : "read back from the provider"
+                kind === "send-mail" ? "found in your sent mail with the same recipient and text" : "read back from the page"
               }.`,
             }}
           />
@@ -235,7 +257,7 @@ function LogState({ receipt, busy, onRetryLog }: { receipt: Receipt; busy: strin
 }
 
 /** The user names the log: a Notion page they made writable, or a note they pick in one of their notes folders. Never invented. */
-function LogDestination({ onSave, notes }: { onSave(kind: "notion" | "obsidian", target: string): Promise<void>; notes: ActingActions["notes"] }) {
+function LogDestination({ onSave, notes, current }: { onSave(kind: "notion" | "obsidian", target: string): Promise<void>; notes: ActingActions["notes"]; current: LogDestinationView | null | undefined }) {
   const kindId = useId();
   const targetId = useId();
   const folderId = useId();
@@ -259,7 +281,19 @@ function LogDestination({ onSave, notes }: { onSave(kind: "notion" | "obsidian",
 
   return (
     <details className="log-destination">
-      <summary>Where outcomes are logged</summary>
+      <summary>
+        Where outcomes are logged{" "}
+        <span className="quiet">
+          ·{" "}
+          {current === undefined
+            ? "reading…"
+            : current === null
+              ? "not chosen yet"
+              : current.kind === "notion"
+                ? `Notion page ${current.label ?? ""}`
+                : "a note in your notes folder"}
+        </span>
+      </summary>
       <p className="quiet small">You choose it. TARS never picks a log for you.</p>
       <div className="act-fields">
         <div className="field">

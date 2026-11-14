@@ -53,6 +53,11 @@ export function Home(props: HomeProps) {
   const backlog = (projects ?? []).map((p) => ({ p, open: p.commitments.filter((c) => c.state === "open" || c.state === "waiting") })).filter((g) => g.open.length > 0);
   const backlogCount = backlog.reduce((n, g) => n + g.open.length, 0);
   const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name;
+  // The hero's stencil carries the same number the rail shows beside the project: decoration only.
+  const sectionOf = (id: string | undefined) => {
+    const i = projects?.findIndex((p) => p.id === id) ?? -1;
+    return i < 0 ? undefined : String(i + 1).padStart(2, "0");
+  };
   const shownKey = !reentry && brief && !brief.delivered ? brief.key : undefined;
 
   const reported = useRef<string | null>(null);
@@ -87,7 +92,7 @@ export function Home(props: HomeProps) {
         <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
       </Hero>
     ) : (
-      <Hero title={reentry ? "One way back in" : "Recommended start"} {...(recommended ? { signage: initials(recommended.name) } : {})}>
+      <Hero title={reentry ? "One way back in" : "Recommended start"} section={sectionOf(recommended?.id ?? props.focusProjectId)}>
         {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
         {brief === undefined && !reentry ? (
           <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
@@ -296,30 +301,25 @@ export function Home(props: HomeProps) {
   );
 }
 
-/** The one framed, cinematic surface on Today: the start beside a window onto space with the monolith in it. */
-function Hero({ title, signage, children }: { title: string; signage?: string; children: ReactNode }) {
+/** The one framed, cinematic surface on Today: TARS's recommendation beside the megastructure scene. */
+function Hero({ title, section, children }: { title: string; section?: string | undefined; children: ReactNode }) {
   return (
-    <section className="start" aria-labelledby="start-h">
+    <section className="start tars-voice" aria-labelledby="start-h">
       <h2 id="start-h" className="block-title">
         {title}
       </h2>
       <div className="start-body">{children}</div>
-      <div className="start-figure" aria-hidden="true">
-        {signage && <span className="signage">{signage}</span>}
+      <div className="start-figure scene" aria-hidden="true">
+        {section && (
+          <span className="scene-stencil">
+            Section <b>{section}</b>
+          </span>
+        )}
         <PetFigure state="idle" variant="hero" className="hero-pet" />
       </div>
     </section>
   );
 }
-
-/** Signage letters for the hero: the project's initials, decoration only. */
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .map((w) => w[0] ?? "")
-    .join("")
-    .slice(0, 3)
-    .toUpperCase();
 
 const TRIAGE_WORD = { prioritize: "Do first", defer: "Can wait", renegotiate: "Consider renegotiating" } as const;
 

@@ -1,0 +1,446 @@
+/* Layout and hierarchy for the screens past Today: project, act, capture, memory, connections, panel.
+   Colour and material come only from the tokens and primitives in styles.css; this file never names a
+   colour of its own, so the palette can change underneath it. */
+
+/* ---------- Project ---------- */
+
+.section-mark {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.project .readout {
+  margin-top: 14px;
+}
+
+/* The next step: TARS speaking, one line wide, with the screen's one primary action at its end. */
+.next {
+  margin-top: 28px;
+}
+
+.next-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.next .step {
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: -0.014em;
+  max-width: 36ch;
+  text-wrap: balance;
+}
+
+.next .step:focus-visible {
+  outline-offset: 6px;
+}
+
+.project-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+}
+
+.completion-what {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+/* The run-through: total first, then the tape of segments, then each segment's title and minutes. */
+.run-total {
+  display: flex;
+  align-items: baseline;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.run-total-num {
+  margin-right: 4px;
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+/* The tape: each segment's share of the total, at a glance. */
+.run-tape {
+  display: flex;
+  gap: 3px;
+  height: 10px;
+}
+
+.run-tape > span {
+  min-width: 4px;
+  background: var(--ink-3);
+}
+
+.run-tape > span:nth-child(even) {
+  background: var(--line);
+}
+
+.run-tape > span:first-child {
+  border-radius: var(--r-tag) 0 0 var(--r-tag);
+}
+
+.run-tape > span:last-child {
+  border-radius: 0 var(--r-tag) var(--r-tag) 0;
+}
+
+.segments {
+  list-style: none;
+  padding: 0;
+}
+
+.segment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.segment:first-child {
+  border-top: 0;
+}
+
+.segment-title {
+  background: transparent;
+  border-color: transparent;
+  padding: 6px 8px;
+  margin-left: -8px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.segment-min {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.segment-min input {
+  width: 68px;
+  padding: 6px 8px;
+  text-align: right;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .segment-title:hover {
+    border-color: var(--hairline);
+  }
+}
+
+.segment-title:focus {
+  border-color: var(--line);
+}
+
+.run-text > summary,
+.log-destination > summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.run-text[open] > summary {
+  margin-bottom: 10px;
+}
+
+.run-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* A source changed: it waits for the user's choice, so it sits first in the run-through and says so. */
+.decision {
+  border-left-width: 3px;
+  border-left-color: var(--ink);
+}
+
+.decision-ask {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* ---------- Act ---------- */
+
+.act-steps {
+  display: grid;
+  gap: 16px;
+}
+
+.act-step {
+  margin-bottom: 8px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.choice {
+  flex-wrap: wrap;
+}
+
+.act-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  background: var(--rail);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+}
+
+.act-confirm > p {
+  flex: 1 1 220px;
+}
+
+.receipt > * + * {
+  margin-top: 10px;
+}
+
+.receipt-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.receipt-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 4px 24px;
+  margin: 0;
+}
+
+.receipt-facts dt {
+  font: 12px/1.5 var(--mono);
+  color: var(--ink-3);
+}
+
+.receipt-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-destination > * + * {
+  margin-top: 10px;
+}
+
+/* ---------- Capture: a tape deck under the text box ---------- */
+
+.tape-deck {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding: 10px;
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+}
+
+.tape-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.tape-counter {
+  min-width: 76px;
+  padding: 4px 8px;
+  background: var(--space);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-tag);
+  font: 500 22px/1.1 var(--mono);
+  letter-spacing: 0.04em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.tape-limit {
+  font: 12px/1.4 var(--mono);
+  color: var(--ink-2);
+}
+
+.tape-keys {
+  gap: 8px;
+}
+
+/* Chunky keys: a deeper bottom edge, a glyph that names the key's job beside its word. */
+.capture-foot .tape-key,
+.tape-key {
+  min-height: 44px;
+  padding: 0 16px;
+  border-bottom-width: 3px;
+  font-size: 14px;
+}
+
+.tape-key::before {
+  content: "" / "";
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+}
+
+.tape-key[data-key="record"]::before {
+  border-radius: 50%; /* a glyph, not a corner */
+}
+
+.tape-key[data-key="eject"]::before {
+  clip-path: polygon(50% 0, 100% 70%, 0 70%);
+  border-bottom: 2px solid currentColor;
+}
+
+.tape-deck[data-state="recording"] .tape-counter {
+  border-color: var(--ink-2);
+}
+
+/* The running counter: two registered integers stepped by CSS, minutes over the hour, seconds per minute. */
+@property --tape-m {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --tape-s {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+
+.tape-run::before {
+  counter-reset: tm var(--tape-m) ts var(--tape-s);
+  content: counter(tm, decimal-leading-zero) ":" counter(ts, decimal-leading-zero);
+  /* Digits changing are a reading, not motion, so they keep counting under reduced motion too. */
+  animation:
+    tape-minutes 3600s steps(60, end) forwards,
+    tape-seconds 60s steps(60, end) infinite !important;
+}
+
+@keyframes tape-minutes {
+  to {
+    --tape-m: 60;
+  }
+}
+
+@keyframes tape-seconds {
+  to {
+    --tape-s: 60;
+  }
+}
+
+.capture-foot {
+  align-items: flex-end;
+}
+
+.capture-foot .hint {
+  flex: 1;
+}
+
+/* ---------- Memory ---------- */
+
+.memory-picker {
+  margin-top: 18px;
+  max-width: 320px;
+}
+
+.memory-grid {
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+}
+
+.fact-group + .fact-group {
+  margin-top: 22px;
+}
+
+.fact-group > .group-title {
+  margin-bottom: 10px;
+  color: var(--ink-2);
+}
+
+.forgotten {
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.forgotten .text-button {
+  margin-left: 10px;
+}
+
+.withheld {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.withheld .proposal {
+  padding: 14px 16px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+}
+
+.withheld .proposal:first-child {
+  padding-top: 14px;
+}
+
+/* ---------- Connections ---------- */
+
+.connections-screen .readout {
+  margin-top: 14px;
+}
+
+/* State reads by shape and word: a filled square for on, two bars for paused, a hollow square for off. */
+.source-state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+}
+
+.source-state[data-state="on"]::before {
+  background: currentColor;
+}
+
+.source-state[data-state="paused"]::before {
+  width: 7px;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.source-selection {
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Panel ---------- */
+
+.panel-actions > .primary {
+  flex: 1 1 auto;
+}
+
+.panel-actions + * {
+  margin-top: 8px;
+}
+
+.panel .tape-counter {
+  font-size: 18px;
+  min-width: 64px;
+}
+
+/* ---------- Narrow windows ---------- */
+
+@media (max-width: 1100px) {
+  .project-grid,
+  .memory-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

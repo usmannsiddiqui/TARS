@@ -1,28 +1,42 @@
-/* TARS: a ship's console. A near-black canvas with a blue cast; depth from four surface steps and
-   1px hairlines, never shadows or thick outlines. SF Pro for everything people read, SF Mono only for
-   instrument chrome (figure labels, status tags, the readout, the pet's state word). One accent, amber,
-   as light: the single primary action per screen and the monolith's status light. One cinematic
-   surface: the Today hero's window onto space. Status always reads by glyph and word, never colour. */
+/* TARS, "lamplight": a ship's console at night in a lived-in megastructure. A deep teal-charcoal ground
+   (night shadow on wet concrete) in four surface steps with 1px lines; warm bone for everything people
+   read. SF Pro for reading, SF Mono for instrument chrome. Amber, a lamp rather than a neon, is the only
+   interactive accent. Oxide red is signage ink for stencilled section marks and nothing else. Muted and
+   flat throughout: no glow, no bloom, no light-emitting gradients. Cards carry a slim header strip, bone
+   for ordinary cards, amber when TARS is speaking. One cinematic surface: the megastructure scene behind
+   TARS on Today. Status always reads by glyph and word, never colour. */
 
 :root {
-  --space: #090a0e;
-  --rail: #0d0f13;
-  --card: #121419;
-  --raised: #1a1d23;
-  --hover: #20242b;
-  --hairline: #23262d;
-  --line: #30343c;
-  --ink: #eceef2;
-  --ink-2: #aab0ba;
-  --ink-3: #8d939e;
-  --amber: #f5a524;
-  --amber-hi: #ffb547;
-  --on-amber: #17120a;
-  --focus: #e9ecf1;
+  --space: #0e1514;
+  --rail: #121a19;
+  --card: #172120;
+  --raised: #1e2a28;
+  --hover: #253331;
+  --hairline: #2a3633;
+  --line: #3b4845;
+  --ink: #eae2d4;
+  --ink-2: #bcb2a2;
+  --ink-3: #9b9284;
+  --amber: #e09a33;
+  --amber-hi: #eca947;
+  --on-amber: #1a1208;
+  --focus: #efe8da;
+  /* Signage: a bone strip for card headers, patina for state plates, weathered oxide for section marks. */
+  --bone: #cbc1ae;
+  --on-bone: #161c1b;
+  --patina: #2b4541;
+  --oxide: #d0705a;
+  --oxide-deep: #8c3a2a;
+  --stencil: "DIN Condensed", "Avenir Next Condensed", "Helvetica Neue", var(--sans);
+  /* A fine static screen-line texture on card bodies, kept far below text contrast. */
+  --screen-lines: repeating-linear-gradient(0deg, rgb(234 226 212 / 0.022) 0 1px, transparent 1px 3px);
+  /* Weathering for stencils: an alpha mask with small worn-away flecks (shape only, no light). */
+  --weathered: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cpath fill-rule='evenodd' d='M0 0h64v64H0zM9 7h3v1H9zM40 4h1v4h-1zM22 18h2v2h-2zM54 15h4v1h-4zM5 31h1v3H5zM31 29h3v1h-3zM47 36h2v2h-2zM14 47h4v1h-4zM36 51h1v3h-1zM58 49h2v1h-2zM25 60h3v1h-3zM50 26h1v1h-1zM18 38h1v1h-1z'/%3E%3C/svg%3E");
 
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --r-card: 12px;
   --r-control: 8px;
   --r-tag: 4px;
@@ -57,7 +71,7 @@ body {
 }
 
 ::selection {
-  background: #3a404b;
+  background: #3d4f4b;
   color: var(--ink);
 }
 
@@ -105,9 +119,9 @@ ol {
   margin-left: 8px;
   padding: 1px 6px;
   border-radius: var(--r-tag);
-  background: var(--raised);
-  color: var(--ink-2);
-  font: 500 12px/1.5 var(--mono);
+  background: var(--patina);
+  color: var(--ink);
+  font: 600 12px/1.5 var(--mono);
   letter-spacing: 0;
   vertical-align: 1px;
 }
@@ -327,11 +341,12 @@ textarea {
   color: var(--ink);
 }
 
-/* Problems are boxed so they stand apart from Empty and Done even in greyscale. */
+/* Problems sit on a solid bone sign plate, so they stand apart from Empty and Done even in greyscale. */
 .state-note:is([data-kind="needs-retry"], [data-kind="missing-access"], [data-kind="unknown"], [data-kind="not-signed-in"]) .state-label {
-  border: 1px solid currentColor;
   border-radius: var(--r-tag);
   padding: 0 6px;
+  background: var(--bone);
+  color: var(--on-bone);
 }
 
 /* ---------- Instrument chrome: figure labels ---------- */
@@ -356,9 +371,44 @@ textarea {
   color: var(--ink-3);
 }
 
+/* Card header strip (after the dialogue boxes in Stray): the card's caps label on a solid plate across
+   the top edge. Bone for ordinary cards, amber when TARS is speaking. */
+:is(.block, .capture) > .block-title:first-child,
+.backlog > summary {
+  margin: -18px -22px 0;
+  padding: 7px 22px 6px;
+  border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0;
+  background: var(--bone);
+  color: var(--on-bone);
+  font-weight: 600;
+}
+
+:is(.block, .capture, .start) > .block-title:first-child::before {
+  color: rgb(22 28 27 / 0.62);
+}
+
+.tars-voice > :is(.block-title, h2, h3, summary):first-child,
+.start > .block-title:first-child {
+  background: var(--amber);
+  color: var(--on-amber);
+}
+
 .group-title {
   font-size: 14px;
   font-weight: 600;
+}
+
+/* A project's stencilled section mark ("SECTION 02"): weathered oxide signage, display weight, tracked
+   caps. Always aria-hidden; the project name carries the meaning. */
+.section-mark {
+  display: block;
+  font: 700 30px/0.95 var(--stencil);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--oxide);
+  -webkit-mask: var(--weathered);
+  mask: var(--weathered);
+  user-select: none;
 }
 
 /* ---------- Shell ---------- */
@@ -404,7 +454,7 @@ textarea {
 
 .rail-item {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: baseline;
   width: 100%;
   min-height: 34px;
@@ -423,11 +473,15 @@ textarea {
   content: "" / "";
 }
 
+/* Each project's number is its stencilled section mark. */
 .rail-list[aria-labelledby] .rail-item::before {
   content: counter(rail, decimal-leading-zero) / "";
   counter-increment: rail;
-  font: 12px var(--mono);
-  color: var(--ink-3);
+  font: 700 16px/1 var(--stencil);
+  letter-spacing: 0.04em;
+  color: var(--oxide);
+  -webkit-mask: var(--weathered);
+  mask: var(--weathered);
 }
 
 .rail-item:active {
@@ -538,18 +592,18 @@ textarea {
   background: var(--ink-2);
 }
 
-/* Status tags: mono, with a shape, never colour alone. */
+/* Status tags are small solid sign plates: mono caps, a shape, never colour alone. */
 .session-state,
 .source-state,
 .panel-state {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 2px 8px;
-  border: 1px solid var(--line);
+  padding: 3px 9px;
   border-radius: var(--r-tag);
+  background: var(--patina);
   color: var(--ink);
-  font: 500 12px/1.5 var(--mono);
+  font: 600 12px/1.5 var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -640,7 +694,7 @@ textarea {
 
 .block,
 .capture {
-  background: var(--card);
+  background: var(--screen-lines), var(--card);
   border: 1px solid var(--hairline);
   border-radius: var(--r-card);
   padding: 18px 22px 22px;
@@ -653,7 +707,7 @@ textarea {
 
 /* A decision waiting on the user sits one step forward. */
 .tradeoff {
-  background: var(--raised);
+  background: var(--screen-lines), var(--raised);
   border-color: var(--line);
 }
 
@@ -665,7 +719,8 @@ textarea {
   max-width: 64ch;
 }
 
-/* The hero: text on the calm side, a window onto space on the other, four corner brackets around it. */
+/* The hero: TARS's recommendation on the calm side, the megastructure scene on the other, four corner
+   brackets around it. */
 .start {
   position: relative;
   display: grid;
@@ -698,7 +753,10 @@ textarea {
 
 .start > .block-title:first-child {
   grid-column: 1;
-  padding: 24px 32px 0;
+  align-self: start;
+  padding: 7px 32px 6px;
+  border-radius: calc(var(--r-card) - 1px) 0 0 0;
+  font-weight: 600;
 }
 
 .start-body {
@@ -708,7 +766,7 @@ textarea {
   align-items: flex-start;
   gap: 12px;
   min-width: 0;
-  padding: 18px 32px 32px;
+  padding: 24px 32px 32px;
 }
 
 .start-project {
@@ -741,41 +799,50 @@ textarea {
 }
 
 .start-figure {
-  position: relative;
   grid-column: 2;
   grid-row: 1 / -1;
   min-height: 312px;
   border-left: 1px solid var(--hairline);
   border-radius: 0 calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0;
-  background: var(--space) url("/hero-space.svg") center / 100% 100% no-repeat;
+}
+
+/* The one cinematic surface: an original flat megastructure scene. TARS stands on the ledge in front of
+   the dark seam and air (80% across, 22.7% up), sized to the scene so it fits any column. */
+.scene {
+  position: relative;
   overflow: hidden;
+  background: #1a2523 url("/hero-section.svg") center / 100% 100% no-repeat;
 }
 
-.start .signage {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-tag);
-  background: var(--rail);
-  font: 12px/1.5 var(--mono);
-  letter-spacing: 0.08em;
-  color: var(--ink-2);
-}
-
-.start .signage::before {
-  content: "T-01\2002/\2002";
-}
-
-/* The monolith stands on the limb's apex (62.5% across, 23.3% up in the scene). */
 .hero-pet {
   position: absolute;
-  left: 62.5%;
-  bottom: calc(23.3% - 6px);
-  height: 172px;
-  width: auto;
+  left: 80%;
+  bottom: 22.7%;
+  width: 27%;
+  height: auto;
   translate: -50% 0;
+}
+
+/* The stencil painted on the bone slab: decoration only (its parent is aria-hidden). */
+.scene-stencil {
+  position: absolute;
+  top: 7%;
+  left: 5%;
+  display: flex;
+  flex-direction: column;
+  font: 700 22px/0.9 var(--stencil);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--oxide-deep);
+  -webkit-mask: var(--weathered);
+  mask: var(--weathered);
+  user-select: none;
+}
+
+.scene-stencil b {
+  font-size: 84px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 /* Below the hero: the working surfaces, then capture on the right. */
@@ -1147,12 +1214,10 @@ li[data-done] {
 }
 
 .stopped-slab {
-  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  width: min(760px, 100%);
-  min-height: 300px;
-  background: var(--space) url("/hero-space.svg") right / 280px 100% no-repeat;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  width: min(820px, 100%);
+  min-height: 320px;
   border: 1px solid var(--hairline);
   border-radius: var(--r-card);
   overflow: hidden;
@@ -1164,7 +1229,7 @@ li[data-done] {
   align-items: flex-start;
   gap: 14px;
   padding: 36px;
-  background: var(--card);
+  background: var(--screen-lines), var(--card);
   border-right: 1px solid var(--hairline);
 }
 
@@ -1178,11 +1243,6 @@ li[data-done] {
 .stopped p {
   font-size: 17px;
   max-width: 34ch;
-}
-
-/* The figure stands on the same limb apex, measured in the 280px column. */
-.stopped .hero-pet {
-  left: calc(100% - 280px * 0.375);
 }
 
 /* ---------- Panel ---------- */
@@ -1244,20 +1304,26 @@ html[data-view="panel"] body {
   padding: 14px 16px 16px;
 }
 
-/* ---------- Pet window: the monolith free-standing on transparency ---------- */
+/* The header strip bleeds to the card edge, so it follows the panel's smaller padding. */
+.panel .capture > .block-title:first-child {
+  margin: -14px -16px 0;
+  padding-inline: 16px;
+}
 
+/* ---------- Pet window: TARS alone on transparency ---------- */
+
+/* No card, border, plate or label: the state word lives on TARS's own dark screen. 184x136 window. */
 html[data-view="pet"],
 html[data-view="pet"] body {
   background: transparent;
 }
 
 .pet {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 104px;
-  height: 124px;
-  padding: 2px 0 0;
+  display: grid;
+  place-items: center;
+  width: 184px;
+  height: 136px;
+  padding: 0;
   border: 0;
   border-radius: var(--r-control);
   background: none;
@@ -1268,23 +1334,22 @@ html[data-view="pet"] body {
   transform: scale(0.97);
 }
 
+/* 1.8px per unit, so the 6.2-unit state word renders at 11.2px. */
 .pet .pet-figure {
   display: block;
-  width: 100px;
-  height: 94px;
+  width: 180px;
+  height: 131.4px;
 }
 
-/* A solid tag, so the state word reads over any wallpaper. */
-.pet-label {
-  margin-top: 4px;
-  padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-tag);
-  background: var(--rail);
-  color: var(--ink);
-  font: 500 12px/1.4 var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.pet-word {
+  font: 600 6.2px var(--mono);
+  letter-spacing: 0.02em;
+  fill: var(--ink);
+}
+
+.pet-letters {
+  font: 800 7.4px var(--sans);
+  letter-spacing: 0.06em;
 }
 
 .pet:focus-visible {
@@ -1294,7 +1359,7 @@ html[data-view="pet"] body {
 /* ---------- Pet motion: poses glide, the status light blinks ---------- */
 
 .pet-part {
-  transition: transform 240ms var(--ease-out);
+  transition: transform 240ms var(--ease-in-out);
 }
 
 .pet-figure[data-state="idle"] .pet-mark {

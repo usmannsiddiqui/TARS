@@ -116,7 +116,9 @@ export function Stopped({ projectName, note, onResume }: { projectName?: string;
             Come back
           </button>
         </div>
-        <PetFigure state="idle" variant="hero" className="hero-pet" />
+        <div className="stopped-figure scene" aria-hidden="true">
+          <PetFigure state="idle" variant="hero" className="hero-pet" />
+        </div>
       </section>
     </main>
   );

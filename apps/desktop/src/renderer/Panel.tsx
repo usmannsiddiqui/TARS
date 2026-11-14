@@ -82,6 +82,16 @@ export function Panel(props: PanelProps) {
             </p>
           )}
           {props.receipt && <ReceiptLine receipt={props.receipt} />}
+          {props.note && <StateNote state={{ kind: "needs-retry", detail: props.note }} />}
+          {/* Open app sits above the fold of the 420px panel; capture follows. */}
+          <div className="actions panel-actions">
+            <button type="button" className="primary" ref={first} onClick={props.onOpenApp}>
+              Open app
+            </button>
+            <button type="button" className="secondary" onClick={props.onStop}>
+              Stop for now
+            </button>
+          </div>
           {props.recap && (
             <section className="panel-recap" aria-labelledby="recap-h">
               <h2 id="recap-h" className="block-title">
@@ -98,16 +108,7 @@ export function Panel(props: PanelProps) {
               )}
             </section>
           )}
-          {props.note && <StateNote state={{ kind: "needs-retry", detail: props.note }} />}
           <Composer {...(props.projectId ? { projectId: props.projectId } : {})} />
-          <div className="actions stack">
-            <button type="button" className="primary" ref={first} onClick={props.onOpenApp}>
-              Open app
-            </button>
-            <button type="button" className="secondary" onClick={props.onStop}>
-              Stop for now
-            </button>
-          </div>
         </section>
       )}
     </main>
@@ -116,13 +117,15 @@ export function Panel(props: PanelProps) {
 
 /** The last instructed action, honestly: unknown is never shown as sent or as failed. */
 function ReceiptLine({ receipt }: { receipt: Receipt }) {
+  const sent = receipt.kind === "send-mail";
+  const where = `${sent ? "to " : ""}${receipt.destination}`;
   const state: Honest =
     receipt.state === "succeeded"
-      ? { kind: "done", detail: receipt.logState === "failed" ? "Verified; outcome log not written yet." : "Verified." }
+      ? { kind: "done", detail: `${sent ? "Sent" : "Updated"} ${where}, verified.${receipt.logState === "failed" ? " Outcome log not written yet." : ""}` }
       : receipt.state === "failed"
-        ? { kind: "needs-retry", detail: "Not sent. Your draft is kept." }
+        ? { kind: "needs-retry", detail: `Not ${sent ? "sent" : "updated"}. Your draft is kept.` }
         : receipt.state === "unknown"
-          ? { kind: "unknown", detail: "We could not confirm this was sent. Nothing has been resent. Check again in the app." }
-          : { kind: "loading", detail: "Sending. Waiting for the provider to confirm it." };
+          ? { kind: "unknown", detail: `We could not confirm this was ${sent ? "sent" : "updated"}. Nothing has been repeated. Check again in the app.` }
+          : { kind: "loading", detail: `${sent ? "Sending" : "Updating"} ${where}. Waiting for the provider to confirm it.` };
   return <StateNote state={state} />;
 }

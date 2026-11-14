@@ -43,13 +43,14 @@ export type CloudActions = {
   /** Records the grant for exactly this selection, then connects with the credential or opens the provider's sign-in in the browser. */
   onConnect(provider: CloudProvider, form: ConnectForm): Promise<void>;
   onRefresh(row: SourceRow): Promise<void>;
+  onPause(row: SourceRow): Promise<void>;
+  onResume(row: SourceRow): Promise<void>;
   onRevoke(row: SourceRow): Promise<void>;
   notionWebhookUrl(sourceId: string): string;
   revealNotionToken(sourceId: string): Promise<string>;
 };
 
 const REFRESHABLE: CloudProvider[] = ["canvas", "gmail", "outlook-mail", "outlook-calendar"];
-const PAUSE_BLOCKED = "Pausing a cloud account needs its current selection from the cloud, which this build cannot read yet. Disconnect stops new reads now.";
 
 /** The approved runtime-consent wording (validation/access-and-readiness.md). */
 export const consentText = (source: string) =>
@@ -63,13 +64,28 @@ const GROUPS: { group: SourceRow["group"]; title: string; note: string }[] = [
 
 export function Connections(props: ConnectionsProps) {
   const anyOn = props.rows.some((r) => r.state === "on" || r.state === "paused");
+  const count = (test: (r: SourceRow) => boolean) => String(props.rows.filter(test).length);
+  const attention = (r: SourceRow) => r.permissionMissing === true || (r.status !== undefined && ["needs-retry", "missing-access", "stale", "not-signed-in"].includes(r.status.kind));
+  const readout: [string, string][] = [
+    ["On", count((r) => r.state === "on")],
+    ["Paused", count((r) => r.state === "paused")],
+    ["Off", count((r) => r.state === "off" || r.state === "unavailable")],
+    ["Need a look", count(attention)],
+  ];
   return (
-    <div className="screen">
+    <div className="screen connections-screen">
       <header className="screen-head">
         <h1>Connections</h1>
         <p className="screen-sub">
           {anyOn ? "Add more only when they would help." : "All off. You can capture ideas and plan without any of them."}
         </p>
+        <ul className="readout" aria-label="Sources now">
+          {readout.map(([key, value]) => (
+            <li key={key}>
+              <span className="readout-key">{key}</span> {value}
+            </li>
+          ))}
+        </ul>
       </header>
       <div className="connections">
         {GROUPS.map(({ group, title, note }) => {
@@ -339,6 +355,12 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
       </div>
       <p className="quiet">{row.coverage}</p>
       {row.status ? <StateNote state={row.status} /> : row.state === "off" && <p className="quiet small">Availability: not connected. Last checked: never.</p>}
+      {row.selection && (
+        <p className="small source-selection">
+          <span className="why">Reads:</span> {row.selection.selectors.join(", ")} <span className="quiet">· for {row.selection.projects.join(", ")}</span>
+        </p>
+      )}
+      {row.state === "paused" && <p className="small">Paused: nothing new is read until you resume. What was read stays stored.</p>}
 
       {row.state === "off" && step === "idle" && (
         <>
@@ -372,25 +394,28 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
         />
       )}
 
-      {row.state === "on" && step === "idle" && (
+      {(row.state === "on" || row.state === "paused") && step === "idle" && (
         <>
-          {provider === "notion" && <NotionWebhook sourceId={row.id} url={cloud.notionWebhookUrl(row.id)} reveal={cloud.revealNotionToken} />}
+          {provider === "notion" && row.state === "on" && <NotionWebhook sourceId={row.id} url={cloud.notionWebhookUrl(row.id)} reveal={cloud.revealNotionToken} />}
           <div className="row-actions">
-            {REFRESHABLE.includes(provider) && (
+            {REFRESHABLE.includes(provider) && row.state === "on" && (
               <button type="button" className="text-button" disabled={busy !== null} onClick={() => act("refresh", () => cloud.onRefresh(row))} aria-label={`Refresh ${row.name}`}>
                 {busy === "refresh" ? "Refreshing…" : "Refresh"}
               </button>
             )}
-            <button type="button" className="text-button" disabled aria-describedby={`pause-${row.id}`}>
-              Pause
-            </button>
+            {row.state === "on" ? (
+              <button type="button" className="text-button" disabled={busy !== null} onClick={() => act("pause", () => cloud.onPause(row))}>
+                {busy === "pause" ? "Pausing…" : "Pause"}
+              </button>
+            ) : (
+              <button type="button" className="text-button" disabled={busy !== null} onClick={() => act("resume", () => cloud.onResume(row))}>
+                {busy === "resume" ? "Resuming…" : "Resume"}
+              </button>
+            )}
             <button type="button" className="text-button" onClick={() => setStep("revoke")}>
               Disconnect…
             </button>
           </div>
-          <p id={`pause-${row.id}`} className="quiet small">
-            {PAUSE_BLOCKED}
-          </p>
         </>
       )}
 

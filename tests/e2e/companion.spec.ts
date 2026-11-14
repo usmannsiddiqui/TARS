@@ -231,7 +231,7 @@ test("reduced motion: nothing travels and states still read by words and shape",
   expect(new Set(durations.flatMap((d) => d.split(", ")))).toEqual(new Set(["0s"]));
   await page.close();
   for (const state of ["idle", "working", "done"] as const) {
-    const pet = await scene(`pet-${state}`, { reducedMotion: "reduce", size: { width: 104, height: 124 } });
+    const pet = await scene(`pet-${state}`, { reducedMotion: "reduce", size: { width: 184, height: 136 } });
     await expect(pet.getByRole("button")).toHaveAccessibleName(`Open companion panel. ${{ idle: "Idle", working: "Working", done: "Done" }[state]}.`);
     const marks = await pet.locator(".pet-mark > *").count();
     expect(marks).toBe(state === "working" ? 3 : 1);
@@ -418,7 +418,8 @@ test("connected_sources_show_status_refresh_and_notion_webhook", async () => {
   const canvas = page.locator(".source").filter({ has: page.locator(".source-name", { hasText: /^Canvas$/ }) });
   await expect(canvas).toContainText(/Stale.*last good/);
   await canvas.getByRole("button", { name: "Refresh Canvas" }).click();
-  await expect(canvas.getByRole("button", { name: "Pause" })).toBeDisabled();
+  // Pause is real now: the stored grant state changes on the backend, so it survives a reload.
+  await canvas.getByRole("button", { name: "Pause" }).click();
   const notion = page.getByRole("group", { name: "Notion updates" });
   await expect(notion).toContainText("https://illustrative-deployment.convex.site/notion/events?source=notion-illustrative");
   await notion.getByRole("button", { name: "Show verification token" }).click();
@@ -431,6 +432,7 @@ test("connected_sources_show_status_refresh_and_notion_webhook", async () => {
   await expect(page.getByRole("region", { name: "Capture shortcut" })).toContainText("is not working: another app already uses it. Choose another.");
   expect(await calls(page)).toEqual([
     ["refresh", "canvas-illustrative"],
+    ["pauseCloud", "canvas-illustrative"],
     ["revealNotionToken", "notion-illustrative"],
     ["observation.openAccessibilitySettings"],
   ]);
@@ -481,15 +483,15 @@ test("ui_shots", async () => {
     await page.close();
   }
   {
-    const page = await scene("connections", { size: { width: 1200, height: 1700 } });
+    const page = await scene("connections-fresh", { size: { width: 1200, height: 1700 } });
     await page.locator(".source").filter({ has: page.locator(".source-name", { hasText: /^Slack$/ }) }).getByRole("button", { name: "Connect Slack" }).click();
     await page.screenshot({ path: join(SHOTS, "harness-connections-forms-1200x1700.png") });
     await page.close();
   }
   for (const state of ["idle", "working", "done"]) {
-    const page = await scene(`pet-${state}`, { size: { width: 104, height: 124 } });
+    const page = await scene(`pet-${state}`, { size: { width: 184, height: 136 } });
     await page.addStyleTag({ content: "html { background: #3a3f46 !important }" }); // stand-in desktop behind the transparent window
-    await page.screenshot({ path: join(SHOTS, `harness-pet-${state}-104x124.png`) });
+    await page.screenshot({ path: join(SHOTS, `harness-pet-${state}-184x136.png`) });
     await page.close();
   }
   // Live packaged app with a seeded (unconfirmed) session.

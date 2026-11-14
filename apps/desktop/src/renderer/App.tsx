@@ -64,6 +64,7 @@ export function App() {
         key={route.projectId}
         projectId={route.projectId}
         name={name}
+        index={(projects?.findIndex((p) => p.id === route.projectId) ?? 0) + 1}
         isFocus={route.projectId === focusId}
         {...(route.mode ? { mode: route.mode } : {})}
         onMakeFocus={() => pick(route.projectId)}

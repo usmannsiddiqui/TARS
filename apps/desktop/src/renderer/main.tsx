@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { CloudProvider, PanelLive, PetLive } from "./live";
 import "./styles.css";
+import "./screens.css";
 
 // One renderer, three windows; the main process picks the view with the URL hash.
 const view = location.hash === "#pet" ? "pet" : location.hash === "#panel" ? "panel" : "app";

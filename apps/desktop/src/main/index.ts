@@ -116,8 +116,8 @@ function isAppUrl(raw: string): boolean {
 
 // One renderer, three views: the full app, the pet and the compact panel (chosen by the URL hash).
 type View = "app" | "pet" | "panel";
-const SIZES = { app: { width: 1200, height: 800 }, pet: { width: 104, height: 124 }, panel: { width: 360, height: 420 } };
-const GROUND = "#080B1A";
+const SIZES = { app: { width: 1200, height: 800 }, pet: { width: 184, height: 136 }, panel: { width: 360, height: 420 } };
+const GROUND = "#0e1514";
 
 function newWindow(view: View, options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
   const win = new BrowserWindow({

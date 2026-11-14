@@ -1,8 +1,9 @@
-// One project: prepared work with its sources and gaps, the editable run-through with its one
-// instructed action, and commitments grouped by who holds them. Presentational: data and actions arrive as props.
+// One project: its next step in TARS's voice, the run-through as timed segments (the signature: titles
+// and minutes edit the text, the total is computed) with its one instructed action, then prepared work
+// and commitments grouped by who holds them. Presentational: data and actions arrive as props.
 import { useEffect, useId, useRef, useState } from "react";
-import { Act, type ActingActions, type LastIntent } from "./Act";
-import type { Commitment, Evidence, Honest, Prepared, Receipt } from "./model";
+import { Act, type ActingActions, type LogDestinationView } from "./Act";
+import { segmentsOf, setSegment, type Commitment, type Evidence, type Honest, type Prepared, type Receipt } from "./model";
 import { formatWhen, reason, StateNote } from "./ui";
 
 export type ArtifactView = {
@@ -25,6 +26,8 @@ export type EditorActions = {
 
 export type ProjectViewProps = {
   name: string;
+  /** The project's place in the rail (1-based), shown as its section mark. */
+  index: number;
   isFocus: boolean;
   mode?: "help" | "improve";
   /** undefined = nothing prepared yet; `preparedState` overrides with loading / retry states. */
@@ -38,6 +41,7 @@ export type ProjectViewProps = {
   /** The project's newest action receipt: undefined while loading, null when nothing was done yet. */
   receipt: Receipt | null | undefined;
   acting: ActingActions;
+  logDestination: LogDestinationView | null | undefined;
   /** "I did this myself": recorded as reported by you, never as verified. */
   onReportDone(taskId: string): Promise<void>;
   onMakeFocus(): void;
@@ -46,11 +50,11 @@ export type ProjectViewProps = {
 };
 
 export function ProjectView(props: ProjectViewProps) {
-  const { prepared, commitments } = props;
+  const { prepared, commitments, receipt } = props;
   const work = prepared?.work;
   const [helping, setHelping] = useState(props.mode === "help");
   const [preparing, setPreparing] = useState<{ busy: boolean; error?: string }>({ busy: false });
-  const [lastIntent, setLastIntent] = useState<LastIntent | null>(null);
+  const [acted, setActed] = useState(false);
   const [chosenNext, setChosenNext] = useState<string | null>(null);
   const evidenceById = new Map(props.evidence.map((e) => [e.id, e]));
   const mine = commitments?.filter((c) => c.ownership === "user") ?? [];
@@ -58,14 +62,15 @@ export function ProjectView(props: ProjectViewProps) {
   const complete = mine.length > 0 && doneMine.length === mine.length;
   const openMine = mine.filter((c) => c.state === "open");
   // Done for an action only right after the user acted here; an older receipt stays in its own block.
-  const verified = props.receipt?.state === "succeeded" && lastIntent !== null;
+  const verified = receipt?.state === "succeeded" && acted;
   const lastDone = doneMine.at(-1);
   // What is actually done: the verified action, or every task of yours (marked when you reported it).
-  const doneText = verified
-    ? `${lastIntent?.kind === "update-note" ? `Updated ${lastIntent.destination}` : lastIntent ? `Sent to ${lastIntent.destination}` : "Your instruction was carried out"}, verified.`
-    : complete && lastDone
-      ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ""}`
-      : null;
+  const doneText =
+    verified && receipt
+      ? `${receipt.kind === "update-note" ? `Updated ${receipt.destination}` : `Sent to ${receipt.destination}`}, verified.`
+      : complete && lastDone
+        ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ""}`
+        : null;
   // One optional next step: the next open task of yours, if there is one.
   const optionalNext = openMine[0]?.text;
   // A verified completion appears above the run-through: bring it into view and focus once, starting nothing.
@@ -100,9 +105,20 @@ export function ProjectView(props: ProjectViewProps) {
               ? { kind: "partial", detail: `Prepared ${formatWhen(prepared.updatedAt)}, with gaps` }
               : { kind: "last-checked", at: prepared.updatedAt });
 
+  // What this project holds right now, from data already on this screen. Nothing is estimated.
+  const minutes = props.artifact ? segmentsOf(props.artifact.text).reduce((n, s) => n + s.minutes, 0) : 0;
+  const readout: [key: string, value: string][] = [
+    ["Prepared", props.preparedState?.kind === "loading" ? "reading" : prepared?.status === "ready" ? formatWhen(prepared.updatedAt) : "not yet"],
+    ["Run-through", props.artifact === undefined ? "reading" : props.artifact === null ? "not started" : minutes > 0 ? `${minutes} min` : `revision ${props.artifact.revision}`],
+    ["Yours open", commitments === null ? "reading" : String(openMine.length)],
+  ];
+
   return (
-    <div className="screen">
+    <div className="screen project">
       <header className="screen-head">
+        <span className="section-mark" aria-hidden="true">
+          SECTION {String(props.index).padStart(2, "0")}
+        </span>
         <h1>{props.name}</h1>
         <p className="screen-sub">
           {props.isFocus ? (
@@ -116,6 +132,13 @@ export function ProjectView(props: ProjectViewProps) {
             </>
           )}
         </p>
+        <ul className="readout" aria-label="Where this project stands">
+          {readout.map(([key, value]) => (
+            <li key={key}>
+              <span className="readout-key">{key}</span> {value}
+            </li>
+          ))}
+        </ul>
       </header>
 
       {doneText && (
@@ -123,7 +146,7 @@ export function ProjectView(props: ProjectViewProps) {
           <h2 id="done-h" ref={doneRef} tabIndex={-1}>
             Done
           </h2>
-          <p>{doneText}</p>
+          <p className="completion-what">{doneText}</p>
           <p className="quiet small">Nothing else starts on its own.</p>
           <div className="actions equal">
             {optionalNext && (
@@ -145,9 +168,41 @@ export function ProjectView(props: ProjectViewProps) {
         </section>
       )}
 
+      <section className="block next tars-voice" aria-labelledby="next-h">
+        <h2 id="next-h" className="block-title">
+          Next step
+        </h2>
+        <div className="next-body">
+          {helping && (chosenNext ?? work) ? (
+            <p className="step" tabIndex={-1} ref={(el) => el?.focus()}>
+              {chosenNext ?? work?.nextAction}
+            </p>
+          ) : helping && !work ? (
+            <StateNote state={{ kind: "empty", detail: "Prepare from your sources first, then I can suggest a step." }} />
+          ) : (
+            <p className="quiet">One small step, when you want it.</p>
+          )}
+          {!helping && (
+            <button type="button" className="primary" onClick={() => (work ? setHelping(true) : void prepare())} disabled={preparing.busy}>
+              Help me start
+            </button>
+          )}
+        </div>
+      </section>
+
       <div className="project-grid">
         <div className="project-main">
-          <section className="block" aria-labelledby="prepared-h">
+          <RunThrough
+            artifact={props.artifact}
+            canCreate={work !== undefined}
+            editor={props.editor}
+            improve={props.mode === "improve"}
+            act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: receipt ?? null, onActed: () => setActed(true), actions: props.acting, logDestination: props.logDestination }}
+          />
+        </div>
+
+        <aside className="project-side">
+          <section className="block tars-voice" aria-labelledby="prepared-h">
             <h2 id="prepared-h" className="block-title">
               Prepared for you
             </h2>
@@ -201,35 +256,6 @@ export function ProjectView(props: ProjectViewProps) {
               </button>
             )}
             {preparing.error && <StateNote state={{ kind: "needs-retry", detail: preparing.error }} />}
-          </section>
-
-          <RunThrough
-            artifact={props.artifact}
-            canCreate={work !== undefined}
-            editor={props.editor}
-            improve={props.mode === "improve"}
-            act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: props.receipt ?? null, lastIntent, onIntent: setLastIntent, actions: props.acting }}
-          />
-        </div>
-
-        <aside className="project-side">
-          <section className="block next" aria-labelledby="next-h">
-            <h2 id="next-h" className="block-title">
-              Next step
-            </h2>
-            {helping && (chosenNext ?? work) ? (
-              <p className="step" tabIndex={-1} ref={(el) => el?.focus()}>
-                {chosenNext ?? work?.nextAction}
-              </p>
-            ) : (
-              <p className="quiet">One small step, when you want it.</p>
-            )}
-            {!helping && (
-              <button type="button" className="primary" onClick={() => (work ? setHelping(true) : void prepare())} disabled={preparing.busy}>
-                Help me start
-              </button>
-            )}
-            {helping && !work && !chosenNext && <StateNote state={{ kind: "empty", detail: "Prepare from your sources first, then I can suggest a step." }} />}
           </section>
           <Commitments commitments={commitments} onReportDone={props.onReportDone} />
         </aside>
@@ -358,25 +384,35 @@ function RunThrough({ artifact, canCreate, editor, improve, act }: RunThroughPro
     }
   }
 
+  const segments = segmentsOf(draft);
+  const total = segments.reduce((n, seg) => n + seg.minutes, 0);
+  const edit = (line: number, next: { title: string; minutes: number }) => setDraft((text) => setSegment(text, line, next));
+
   return (
-    <section className="block editor" aria-labelledby="run-h">
+    <section className="block editor run" aria-labelledby="run-h">
       <h2 id="run-h" className="block-title">
         Run-through
       </h2>
+      {segments.length > 0 && (
+        <p className="run-total">
+          <span className="run-total-num num">{total}</span> min in {segments.length} segments
+        </p>
+      )}
       {artifact === undefined ? (
-        <StateNote state={{ kind: "loading" }} />
+        <StateNote state={{ kind: "loading", detail: "Reading the run-through…" }} />
       ) : artifact === null ? (
-        <>
-          <p className="quiet">An editable copy of the prepared work, yours to change.</p>
+        <div className="run-empty">
+          <p>An editable copy of the prepared work, yours to change.</p>
           <button type="button" className="secondary" disabled={!canCreate || busy !== null} onClick={() => run("create", editor.create)}>
             {busy === "create" ? "Creating…" : "Start the run-through"}
           </button>
-          {!canCreate && <p className="quiet">Available once something is prepared.</p>}
-        </>
+          {!canCreate && <StateNote state={{ kind: "empty", detail: "Available once something is prepared." }} />}
+        </div>
       ) : (
         <>
           {artifact.suggestions.map((s) => (
-            <div key={s.id} className="suggestion" role="group" aria-label="Suggested adjustment">
+            <div key={s.id} className="suggestion decision tars-voice" role="group" aria-label="Suggested adjustment">
+              <p className="decision-ask">Needs your decision</p>
               <p>
                 <span className="why">{s.kind === "source" ? "A source changed:" : "Suggested:"}</span> {s.changeSummary}
               </p>
@@ -388,12 +424,56 @@ function RunThrough({ artifact, canCreate, editor, improve, act }: RunThroughPro
                   Dismiss
                 </button>
               </div>
+              <p className="quiet small">{dirty ? "Save your edits first; applying works on the saved revision." : "Nothing changes until you choose."}</p>
             </div>
           ))}
-          <label htmlFor={textId} className="sr-only">
-            Run-through text
-          </label>
-          <textarea id={textId} className="doc" value={draft} rows={12} onChange={(e) => setDraft(e.target.value)} />
+
+          {segments.length > 0 && (
+            <>
+              <div className="run-tape" aria-hidden="true">
+                {segments.map((seg) => (
+                  <span key={seg.line} style={{ flexGrow: Math.max(seg.minutes, 0.5) }} />
+                ))}
+              </div>
+              <ol className="segments" aria-label="Segments">
+                {segments.map((seg, i) => (
+                  <li key={seg.line} className="segment">
+                    <label htmlFor={`${textId}-t${seg.line}`} className="sr-only">
+                      Segment {i + 1} title
+                    </label>
+                    <input id={`${textId}-t${seg.line}`} className="segment-title" value={seg.title} maxLength={200} onChange={(e) => edit(seg.line, { title: e.target.value, minutes: seg.minutes })} />
+                    <label htmlFor={`${textId}-m${seg.line}`} className="sr-only">
+                      Minutes for segment {i + 1}
+                    </label>
+                    <span className="segment-min">
+                      <input
+                        id={`${textId}-m${seg.line}`}
+                        className="num"
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={999}
+                        value={seg.minutes}
+                        onChange={(e) => {
+                          const minutes = Number(e.target.value);
+                          if (e.target.value !== "" && Number.isInteger(minutes) && minutes >= 0 && minutes <= 999) edit(seg.line, { title: seg.title, minutes });
+                        }}
+                      />
+                      <span aria-hidden="true">min</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+
+          <details className="run-text" open={segments.length === 0 || undefined}>
+            <summary>{segments.length > 0 ? "Full text, with notes between segments" : "Full text"}</summary>
+            <label htmlFor={textId} className="sr-only">
+              Run-through text
+            </label>
+            <textarea id={textId} className="doc" value={draft} rows={10} onChange={(e) => setDraft(e.target.value)} />
+          </details>
           <div className="editor-bar">
             <span className="quiet">{dirty ? "Unsaved edits" : artifact.userEdited ? `Revision ${artifact.revision}, edited by you` : `Revision ${artifact.revision}`}</span>
             <button type="button" className="secondary" disabled={!dirty || busy !== null} onClick={() => run("save", () => editor.save(draft, loaded.revision ?? artifact.revision))}>

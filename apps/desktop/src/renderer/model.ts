@@ -1,5 +1,6 @@
-// View-model types: what the presentational screens take as props. Containers in live.tsx map
-// Convex subscription results onto these; the test-only harness passes illustrative values.
+// View-model: what the presentational screens take as props, and the pure derivations onto them.
+// Containers in live.tsx map Convex subscription results onto these; the test-only harness passes
+// illustrative values.
 
 /** An honest state that is never confused with Empty or Done. */
 export type Honest =
@@ -92,6 +93,11 @@ export type SessionEvent = "start" | "break" | "resume" | "stop";
 /** An instructed action's receipt (actions.listReceipts / executeIntent). */
 export type Receipt = {
   id: string;
+  kind: "send-mail" | "update-note";
+  /** The address or Notion page id the user named. */
+  destination: string;
+  /** The run-through revision the instruction was bound to. */
+  revision: string;
   state: "pending" | "running" | "succeeded" | "failed" | "unknown";
   externalId?: string;
   verifiedAt?: string;
@@ -123,6 +129,70 @@ export type SourceRow = {
   permissionMissing?: boolean;
   /** Why it cannot be turned on from here, when state is "unavailable". */
   unavailableReason?: string;
+  /** Cloud rows: exactly what the stored grant reads (provider ids) and for which projects. */
+  selection?: { selectors: string[]; projects: string[] };
 };
 
 export type PetState = "idle" | "working" | "done";
+
+// ---- Pure derivations the screens and containers share (tested in tests/unit/renderer-view.test.ts).
+
+/** One timed line of a run-through: "2. Live demo (10 min)". `line` is its index in the text. */
+export type Segment = { line: number; title: string; minutes: number };
+const TIMED = /^(\s*(?:\d+[.)]\s+|[-*•]\s+)?)(.*?)\s*\((\d{1,3})\s*(?:min|mins|minutes?)\)\s*$/i;
+
+export function segmentsOf(text: string): Segment[] {
+  return text.split("\n").flatMap((raw, line) => {
+    const m = TIMED.exec(raw);
+    return m ? [{ line, title: m[2]!.trim(), minutes: Number(m[3]) }] : [];
+  });
+}
+
+/** Rewrites one segment's line, keeping its list marker; any other line is left as it was. */
+export function setSegment(text: string, line: number, next: { title: string; minutes: number }): string {
+  const lines = text.split("\n");
+  const m = TIMED.exec(lines[line] ?? "");
+  if (!m) return text;
+  lines[line] = `${m[1]}${next.title} (${next.minutes} min)`;
+  return lines.join("\n");
+}
+
+/** The main process reports a missing macOS Accessibility permission as the status reason. */
+export const permissionMissing = (status: { freshness: string; reason?: string }) => status.reason === "permission-missing";
+
+/** One row of connections.listConnections: the connection's health plus its grant's stored state. */
+export type ConnectionRow = {
+  sourceId: string;
+  provider: string;
+  availability: string;
+  lastCheckedAt?: string;
+  lastError?: string;
+  state: string;
+  selectors: string[];
+  projectIds: string[];
+};
+
+/** A cloud provider's row: the live (active or paused) grant if any, else off; a revoked one says so. */
+export function cloudRow(def: { provider: CloudProvider; name: string; coverage: string }, connections: ConnectionRow[], nameOf: (projectId: string) => string | undefined): SourceRow {
+  const mine = connections.filter((c) => c.provider === def.provider);
+  const c = mine.find((x) => x.state === "active" || x.state === "paused");
+  const off: SourceRow = { id: def.provider, provider: def.provider, name: def.name, coverage: def.coverage, group: "cloud", state: "off" };
+  if (!c) return mine.length > 0 ? { ...off, unavailableReason: "Disconnected. New reads stopped." } : off;
+  const status: Honest =
+    c.availability === "connected"
+      ? c.lastCheckedAt
+        ? { kind: "last-checked", at: c.lastCheckedAt }
+        : { kind: "partial", detail: "Connected; not checked yet" }
+      : c.availability === "stale"
+        ? { kind: "stale", ...(c.lastCheckedAt ? { at: c.lastCheckedAt } : {}) }
+        : c.availability === "missing-access"
+          ? { kind: "missing-access", ...(c.lastError ? { detail: c.lastError } : {}) }
+          : { kind: "needs-retry", ...(c.lastError ? { detail: c.lastError } : {}) };
+  return {
+    ...off,
+    id: c.sourceId,
+    state: c.state === "paused" ? "paused" : "on",
+    status,
+    selection: { selectors: c.selectors, projects: c.projectIds.map((id) => nameOf(id) ?? "a project no longer listed") },
+  };
+}

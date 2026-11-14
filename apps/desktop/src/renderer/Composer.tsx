@@ -15,6 +15,7 @@ type Failed = { recoveryId: string; message: string };
 
 const { limits } = window.companion.dictation;
 const LIMIT_TEXT = `Dictation records up to ${limits.maxDurationMs / 60_000} min or ${limits.maxBytes / 1_000_000} MB, then stops by itself.`;
+const clock = (ms: number) => `${String(Math.floor(ms / 60_000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 
 const FAILURE: Record<string, string> = {
   transcription_failed: "Transcription failed. Your recording is kept on this Mac.",
@@ -172,30 +173,42 @@ export function Composer({ projectId, onSaved }: { projectId?: string; onSaved?(
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
         }}
       />
-      <div className="capture-foot">
-        <span className="row-actions">
+      <div className="tape-deck" data-state={voice.kind}>
+        <p className="tape-window">
+          {/* The running counter is CSS (screens.css .tape-run), so no timer ticks in JS. */}
+          <span className="tape-counter" aria-hidden="true">
+            {voice.kind === "recording" ? <span className="tape-run" /> : "00:00"}
+          </span>
+          <span className="tape-limit">
+            <span aria-hidden="true">/ {clock(limits.maxDurationMs)}</span> · {limits.maxBytes / 1_000_000} MB max
+          </span>
+          <span className="sr-only">{voice.kind === "recording" ? "Recording now." : "Not recording."}</span>
+        </p>
+        <span className="row-actions tape-keys">
           {voice.kind === "recording" ? (
             <>
-              <button type="button" className="primary" onClick={() => void stop(voice.session)}>
+              <button type="button" className="secondary tape-key" data-key="stop" onClick={() => void stop(voice.session)}>
                 Stop recording
               </button>
-              <button type="button" className="secondary" onClick={() => cancel(voice.session)}>
+              <button type="button" className="secondary tape-key" data-key="eject" onClick={() => cancel(voice.session)}>
                 Cancel recording
               </button>
             </>
           ) : (
-            <button type="button" className="secondary" disabled={busy} onClick={() => void record()}>
+            <button type="button" className="secondary tape-key" data-key="record" disabled={busy} onClick={() => void record()}>
               {voice.kind === "transcribing" ? "Transcribing…" : voice.kind === "starting" ? "Starting…" : "Record"}
             </button>
           )}
         </span>
+      </div>
+      <div className="capture-foot">
+        <p className="hint">
+          {voice.kind === "recording" ? "Recording now. Stop to transcribe, or Cancel to keep nothing." : LIMIT_TEXT} ⌘ Return saves.
+        </p>
         <button type="submit" className="secondary" disabled={saving || text.trim() === ""}>
           Save
         </button>
       </div>
-      <p className="hint">
-        {voice.kind === "recording" ? "Recording now. Stop to transcribe, or Cancel to keep nothing." : LIMIT_TEXT} ⌘ Return saves.
-      </p>
       {failed.map((f) => (
         <StateNote key={f.recoveryId} state={{ kind: "needs-retry", detail: f.message }}>
           <span className="row-actions">
