@@ -90,6 +90,30 @@ describe("evidence intake", () => {
     ]);
   });
 
+  test("equal_timestamp_later_arrival_becomes_current", async () => {
+    // Providers with coarse timestamps (Notion: one minute) send two edits with the same time.
+    const { alice, avt, asAlice, ingest, eventFor } = setup();
+    const first = makeEvidence(alice.ownerId, [avt.id], {
+      version: "a",
+      text: "Illustrative note: first edit.",
+      occurredAt: "2026-11-14T12:00:00.000Z",
+    });
+    const second: Evidence = {
+      ...first,
+      id: makeEvidence(alice.ownerId, [avt.id]).id,
+      version: "b",
+      text: "Illustrative note: second edit, same minute.",
+    };
+    await asAlice.mutation(api.evidence.setGrant, grantFor(first, [avt.id]));
+
+    expect(await ingest(eventFor(first))).toBe("accepted");
+    expect(await ingest(eventFor(second))).toBe("accepted");
+
+    expect(await asAlice.query(api.evidence.listCurrentEvidence, { projectId: avt.id })).toEqual([
+      second,
+    ]);
+  });
+
   test("newer_version_replaces_current", async () => {
     const { alice, avt, asAlice, ingest, eventFor } = setup();
     const first = makeEvidence(alice.ownerId, [avt.id], { occurredAt: "2026-11-14T11:00:00Z" });

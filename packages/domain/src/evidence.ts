@@ -12,7 +12,8 @@ export type IntakeDecision =
 /**
  * Pure intake decision. `grant` is the STORED grant for the record's source (null when
  * none). Scope is checked before dedupe so a revoked source reveals nothing. A new
- * revision becomes current only when it occurred strictly after the current one.
+ * revision becomes current unless it occurred before the current one; on a tie the
+ * later arrival wins, because some providers only report time to the minute.
  */
 export function decideIntake(
   grant: SourceGrant | null,
@@ -23,6 +24,6 @@ export function decideIntake(
   if (stored.some((revision) => revision.version === record.version)) return { result: "duplicate" };
   const current = stored.find((revision) => revision.isCurrent);
   const becomesCurrent =
-    current === undefined || Date.parse(record.occurredAt) > Date.parse(current.occurredAt);
+    current === undefined || Date.parse(record.occurredAt) >= Date.parse(current.occurredAt);
   return { result: "accepted", becomesCurrent };
 }
