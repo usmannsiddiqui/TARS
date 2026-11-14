@@ -62,6 +62,78 @@ export function Home(props: HomeProps) {
     onBriefShown(shownKey);
   }, [shownKey, onBriefShown]);
 
+  const hero =
+    projects === null ? (
+      <Hero title="Recommended start">
+        <StateNote state={props.cloud ?? { kind: "loading" }} />
+        <p>You can still capture ideas; they wait safely on this Mac.</p>
+      </Hero>
+    ) : projects.length === 0 ? (
+      <Hero title="Start with a project">
+        <p className="start-step">Name the first thing you are working on. You can add the others later.</p>
+        <NewProject onCreate={props.onCreateProject} />
+      </Hero>
+    ) : evening && brief ? (
+      <Hero title="Evening recap">
+        {brief.items.length === 0 ? (
+          <StateNote state={{ kind: "empty", detail: "Nothing finished or parked today. That is fine." }} />
+        ) : (
+          <ul className="plain recap">
+            {brief.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        )}
+        <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
+      </Hero>
+    ) : (
+      <Hero title={reentry ? "One way back in" : "Recommended start"} {...(recommended ? { signage: initials(recommended.name) } : {})}>
+        {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
+        {brief === undefined && !reentry ? (
+          <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
+        ) : action ? (
+          <>
+            {recommended && <p className="start-project">{recommended.name}</p>}
+            <p className="start-step">{action}</p>
+            {why && (
+              <p className="start-reason">
+                <span className="why">Why this one:</span> {why}
+              </p>
+            )}
+            {recommended && (
+              <div className="actions">
+                <button type="button" className="primary" onClick={() => props.onStart(recommended.id, "help")}>
+                  Help me start
+                </button>
+                <button type="button" className="secondary" onClick={() => props.onStart(recommended.id, "improve")}>
+                  Improve content first
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <StateNote
+            state={{
+              kind: "empty",
+              detail: brief === null && !reentry ? "Your first brief is prepared at 9:00. Pick any project below, or capture what is on your mind." : "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind.",
+            }}
+          />
+        )}
+      </Hero>
+    );
+
+  // What TARS holds right now, from data already on this screen. Nothing here is estimated or invented.
+  const readout: [key: string, value: string][] = [
+    ["Projects", projects === null ? "waiting for the cloud" : String(projects.length)],
+    [
+      evening ? "Recap" : "Brief",
+      brief === undefined ? (projects === null ? "not yet read" : "reading") : brief === null ? "first one at 9:00" : `prepared ${formatWhen(new Date(brief.preparedAt).toISOString())}`,
+    ],
+    ...(projects ? [["Open items", String(backlogCount)] as [string, string]] : []),
+    ["Ideas on this Mac", String(props.ideas.length)],
+    ...(brief ? [["Out of date", brief.stale.length === 0 ? "none" : brief.stale.map((s) => s.name).join(", ")] as [string, string]] : []),
+  ];
+
   return (
     <div className="screen">
       <header className="screen-head">
@@ -71,78 +143,27 @@ export function Home(props: HomeProps) {
           <span className="sub-sep" aria-hidden="true" />
           <span className={focusName ? "sub-focus" : undefined}>{focusName ? `Focus: ${focusName}` : "No project chosen yet"}</span>
         </p>
+        <ul className="readout" aria-label="What TARS has now">
+          {readout.map(([key, value]) => (
+            <li key={key}>
+              <span className="readout-key">{key}</span> {value}
+            </li>
+          ))}
+        </ul>
       </header>
+
+      {reentry && projects && projects.length > 0 && (
+        <p className="reentry-lead">
+          Welcome back. Since {formatWhen(reentry.since)}: what changed, what is genuinely urgent, and one manageable way back in. Nothing was moved,
+          deleted or sent while you were away.
+        </p>
+      )}
+      {hero}
 
       <div className="home-grid">
         <div className="home-main">
-          {projects === null ? (
-            <Hero title="Recommended start">
-              <StateNote state={props.cloud ?? { kind: "loading" }} />
-              <p>You can still capture ideas; they wait safely on this Mac.</p>
-            </Hero>
-          ) : projects.length === 0 ? (
-            <Hero title="Start with a project">
-              <p className="start-step">Name the first thing you are working on. You can add the others later.</p>
-              <NewProject onCreate={props.onCreateProject} />
-            </Hero>
-          ) : (
+          {projects !== null && projects.length > 0 && (
             <>
-              {reentry && (
-                <p className="reentry-lead">
-                  Welcome back. Since {formatWhen(reentry.since)}: what changed, what is genuinely urgent, and one manageable way back in. Nothing was moved,
-                  deleted or sent while you were away.
-                </p>
-              )}
-
-              {evening && brief ? (
-                <Hero title="Evening recap">
-                  {brief.items.length === 0 ? (
-                    <StateNote state={{ kind: "empty", detail: "Nothing finished or parked today. That is fine." }} />
-                  ) : (
-                    <ul className="plain recap">
-                      {brief.items.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  )}
-                  <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
-                </Hero>
-              ) : (
-                <Hero title={reentry ? "One way back in" : "Recommended start"} {...(recommended ? { signage: initials(recommended.name) } : {})}>
-                  {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
-                  {brief === undefined && !reentry ? (
-                    <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
-                  ) : action ? (
-                    <>
-                      {recommended && <p className="start-project">{recommended.name}</p>}
-                      <p className="start-step">{action}</p>
-                      {why && (
-                        <p className="start-reason">
-                          <span className="why">Why this one:</span> {why}
-                        </p>
-                      )}
-                      {recommended && (
-                        <div className="actions">
-                          <button type="button" className="primary" onClick={() => props.onStart(recommended.id, "help")}>
-                            Help me start
-                          </button>
-                          <button type="button" className="secondary" onClick={() => props.onStart(recommended.id, "improve")}>
-                            Improve content first
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <StateNote
-                      state={{
-                        kind: "empty",
-                        detail: brief === null && !reentry ? "Your first brief is prepared at 9:00. Pick any project below, or capture what is on your mind." : "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind.",
-                      }}
-                    />
-                  )}
-                </Hero>
-              )}
-
               {props.tradeoff && <TradeoffFlag tradeoff={props.tradeoff} onResolve={props.onResolveTradeoff} />}
 
               {reentry ? (
@@ -275,7 +296,7 @@ export function Home(props: HomeProps) {
   );
 }
 
-/** The one amber slab on Today: the start, with the monolith standing in it. */
+/** The one framed, cinematic surface on Today: the start beside a window onto space with the monolith in it. */
 function Hero({ title, signage, children }: { title: string; signage?: string; children: ReactNode }) {
   return (
     <section className="start" aria-labelledby="start-h">

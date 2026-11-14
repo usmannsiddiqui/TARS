@@ -133,64 +133,97 @@ export function StateNote({ state, children }: { state: Honest; children?: React
 
 export const PET_LABEL: Record<PetState, string> = { idle: "Idle", working: "Working", done: "Done" };
 
-// The companion T-01: an original slab monolith. One rectangle list per state, [x, y, w, h, fill], in a
-// 104x124 field. The long shadows are computed from the same list, so pose and shadow never disagree.
-type Slab = readonly [x: number, y: number, w: number, h: number, fill: string];
-const C = { bone: "#EDE7DB", concrete: "#BDB5A6", slate: "#6E7381", cobalt: "#2441A6", ink: "#15171D" };
-const FIXED: Slab[] = [
-  [36, 42, 28, 32, C.bone], // core
-  [33, 74, 34, 14, C.cobalt], // plinth
-  [37, 88, 26, 6, C.ink], // footing
-];
-const POSE: Record<PetState, Slab[]> = {
-  idle: [[40, 14, 20, 8, C.bone], [36, 22, 28, 20, C.concrete], [30, 44, 6, 28, C.slate], [64, 44, 6, 28, C.slate]],
-  // The top of the stack slides over and one fin swings out level.
-  working: [[46, 15, 20, 8, C.bone], [41, 23, 28, 19, C.concrete], [30, 44, 6, 28, C.slate], [64, 50, 24, 6, C.slate]],
-  // The crown lifts clear and both fins rise.
-  done: [[40, 5, 20, 8, C.bone], [36, 22, 28, 20, C.concrete], [30, 18, 6, 26, C.slate], [64, 18, 6, 26, C.slate]],
+// The companion T-01: an original articulated monolith of flat steel planes. Each slab is drawn once at
+// rest and posed by a transform, so a state change glides between poses (CSS transition on the group)
+// instead of redrawing. Coordinates are a 104x96 field; every pose stays inside it.
+type Slab = { x: number; y: number; w: number; h: number; tone: "body" | "fin" };
+const SLABS = {
+  footing: { x: 40, y: 88, w: 22, h: 5, tone: "body" },
+  plinth: { x: 37, y: 77, w: 28, h: 11, tone: "body" },
+  core: { x: 40, y: 40, w: 22, h: 37, tone: "body" },
+  head: { x: 39, y: 22, w: 24, h: 16, tone: "body" },
+  crown: { x: 43, y: 15, w: 16, h: 5, tone: "body" },
+  finL: { x: 33, y: 41, w: 4, h: 32, tone: "fin" },
+  finR: { x: 65, y: 41, w: 4, h: 32, tone: "fin" },
+} satisfies Record<string, Slab>;
+type Part = keyof typeof SLABS;
+
+// Pose = a transform per moving part. Idle stands upright; working slides the head over and swings
+// one fin out level (a tool arm); done lifts the crown clear and raises both fins.
+const POSE: Record<PetState, Partial<Record<Part, string>>> = {
+  idle: {},
+  working: { head: "translate(4px, 1px)", crown: "translate(4px, 1px)", finR: "rotate(-90deg)" },
+  done: { crown: "translate(0, -8px)", finL: "rotate(180deg)", finR: "rotate(180deg)" },
 };
-const longShadow = ([x, y, w, h]: Slab, l: number) => `${x + w},${y} ${x + w + l},${y + l} ${x + w + l},${y + h + l} ${x + l},${y + h + l} ${x},${y + h}`;
+// Plane tones: lit top, front, shaded side, and a thin rim where the light catches the left edge.
+// Fins are flat blades (no extrusion) so they stay correctly lit at any swing angle.
+const TONE = { top: "#8C939E", front: "#4E545E", side: "#2B2F36", fin: "#5A616C", finEdge: "#2B2F36" };
+const RIM = "#B9C0CA";
+const D = [3, -2.5] as const; // the depth of every body slab, drawn as an oblique extrusion up and right
+
+function SlabShape({ part }: { part: Part }) {
+  const { x, y, w, h, tone } = SLABS[part];
+  const [dx, dy] = D;
+  if (tone === "fin")
+    return (
+      <>
+        <rect x={x} y={y} width={w} height={h} rx="0.6" fill={TONE.fin} />
+        <rect x={x + w - 1.2} y={y} width="1.2" height={h} fill={TONE.finEdge} />
+        <rect x={x} y={y} width="0.8" height={h} fill={RIM} opacity=".7" />
+      </>
+    );
+  return (
+    <>
+      <polygon points={`${x},${y} ${x + dx},${y + dy} ${x + w + dx},${y + dy} ${x + w},${y}`} fill={TONE.top} />
+      <polygon points={`${x + w},${y} ${x + w + dx},${y + dy} ${x + w + dx},${y + h + dy} ${x + w},${y + h}`} fill={TONE.side} />
+      <rect x={x} y={y} width={w} height={h} fill={TONE.front} />
+      <rect x={x} y={y} width="0.8" height={h} fill={RIM} opacity=".7" />
+    </>
+  );
+}
 
 /**
- * The pet figure. `tile`: the whole amber field (pet window). `mark`: the field cropped to the figure
- * (rail, panel). `hero`: the figure alone, its shadows running far past the box so an amber slab
- * around it crops them. States differ by pose and by the face marks, never by colour or motion alone.
+ * The pet figure on transparency. `variant` only sets its size and place (pet window, rail/panel mark,
+ * the Today hero). States differ by pose and by the display marks, never by colour or motion alone.
  */
 export function PetFigure({ state, variant = "tile", className }: { state: PetState; variant?: "tile" | "mark" | "hero"; className?: string }) {
-  const slabs = [...POSE[state].slice(0, 2), ...FIXED, ...POSE[state].slice(2)];
-  const reach = variant === "hero" ? 640 : 90;
-  const shift = state === "working" ? 5 : 0;
+  const pose = POSE[state];
+  const part = (name: Part, children?: ReactNode) => {
+    const { x, y, w } = SLABS[name];
+    // Fins swing from the shoulder; everything else moves as a whole.
+    const origin = name.startsWith("fin") ? `${x + w / 2}px ${y}px` : undefined;
+    return (
+      <g className="pet-part" style={{ transform: pose[name] ?? "none", ...(origin ? { transformOrigin: origin } : {}) }}>
+        <SlabShape part={name} />
+        {children}
+      </g>
+    );
+  };
   return (
-    <svg
-      key={state} // a pose change remounts, so the hard-cut snap replays
-      className={["pet-figure", className].filter(Boolean).join(" ")}
-      data-state={state}
-      data-variant={variant}
-      viewBox={variant === "tile" ? "0 0 104 124" : "22 2 56 94"}
-      aria-hidden="true"
-    >
-      {variant !== "hero" && <rect x="0" y="0" width="104" height="124" fill="#F3A712" />}
-      <g fill="#8A520A">
-        {slabs.map((r, i) => (
-          <polygon key={i} points={longShadow(r, reach)} />
-        ))}
-      </g>
-      {slabs.map(([x, y, w, h, fill], i) => (
-        <rect key={i} x={x} y={y} width={w} height={h} fill={fill} stroke={C.ink} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
-      ))}
-      <path d="M41 58h23M41 66h23M36 81h31" stroke={C.ink} strokeOpacity=".35" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-      <rect x={39 + shift} y={state === "working" ? 29 : 28} width="22" height="8" fill={C.ink} />
-      <g className="pet-mark" fill="#AFC0EA" stroke="#AFC0EA">
-        {state === "idle" && <path d="M42 32h6M52 32h6" strokeWidth="2" />}
-        {state === "working" && (
-          <>
-            <rect x="46" y="31" width="4" height="4" stroke="none" />
-            <rect x="52" y="31" width="4" height="4" stroke="none" />
-            <rect className="pet-tick" x="58" y="31" width="4" height="4" stroke="none" />
-          </>
-        )}
-        {state === "done" && <path d="M44.5 32 48.2 34.8 55.5 29.6" fill="none" strokeWidth="2" />}
-      </g>
+    <svg className={["pet-figure", className].filter(Boolean).join(" ")} data-state={state} data-variant={variant} viewBox="2 2 100 94" aria-hidden="true">
+      {part("footing")}
+      {part("plinth")}
+      {part("core", <path d="M43 50h16M43 55h16" stroke="#3A3F47" strokeWidth="0.8" />)}
+      {part(
+        "head",
+        <>
+          <rect x="42" y="26.5" width="18" height="7" rx="1" fill="#07080B" />
+          <g className="pet-mark" fill="#FFB547" stroke="#FFB547">
+            {state === "idle" && <path d="M45 30h12" strokeWidth="1.4" />}
+            {state === "working" && (
+              <>
+                <rect x="45" y="28.75" width="2.5" height="2.5" stroke="none" />
+                <rect x="49.75" y="28.75" width="2.5" height="2.5" stroke="none" />
+                <rect className="pet-tick" x="54.5" y="28.75" width="2.5" height="2.5" stroke="none" />
+              </>
+            )}
+            {state === "done" && <path d="M47.5 30 50.2 32.2 55 27.9" fill="none" strokeWidth="1.4" />}
+          </g>
+        </>,
+      )}
+      {part("crown")}
+      {part("finL")}
+      {part("finR")}
     </svg>
   );
 }

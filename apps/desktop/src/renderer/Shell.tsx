@@ -1,5 +1,5 @@
 // The full app's frame: where am I (rail + title), the one next thing (each screen's single amber
-// action) and how do I stop ("Stop for now", always in the same corner).
+// action) and how do I stop ("Stop for now", always in the same corner, the same size as its neighbour).
 import type { ReactNode } from "react";
 import type { SessionEvent, SessionState } from "./model";
 import { PetFigure } from "./ui";
