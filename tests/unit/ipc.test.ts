@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureInput, CaptureReceipt, OwnerId } from "@companion/domain";
+import { DictationError } from "../../apps/desktop/src/main/dictation";
 import { createIpcRouter, IpcRejected } from "../../apps/desktop/src/main/ipc";
 import { makeOwners } from "../fixtures";
 
@@ -55,16 +56,80 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     revoke: record("revoke"),
     setCloudProcessing: record("setCloudProcessing"),
   };
+  const sourcesWithExtras = {
+    ...sources,
+    observe: record("observe"),
+    deleteRetained: record("deleteRetained"),
+    designateLog: record("designateLog"),
+  };
   const windowCalls: unknown[][] = [];
   const windows = {
     openPanel: (projectId?: string) => void windowCalls.push(["openPanel", projectId]),
     openApp: (projectId?: string) => void windowCalls.push(["openApp", projectId]),
     closePanel: () => void windowCalls.push(["closePanel"]),
     setPetVisible: (visible: boolean) => void windowCalls.push(["setPetVisible", visible]),
+    petVisible: () => false,
   };
-  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources, cloud, windows });
-  return { router, calls, sourceCalls, windowCalls, tokenRequests, signIns: () => signIns, cloudTriggers: () => cloudTriggers };
+  const dictationCalls: unknown[][] = [];
+  let finishError: unknown = null;
+  const dictation = {
+    begin: async (senderId: number) => {
+      dictationCalls.push(["begin", senderId]);
+      return { microphone: "granted" as const };
+    },
+    finish: async (audio: Uint8Array, mime: string) => {
+      dictationCalls.push(["finish", audio.byteLength, mime]);
+      if (finishError) throw finishError;
+      return { text: "hello", recoveryId: "rec_12345678" };
+    },
+    retry: async (id: string) => {
+      dictationCalls.push(["retry", id]);
+      return { text: "hello", recoveryId: id };
+    },
+    discard: async (id: string) => void dictationCalls.push(["discard", id]),
+    acknowledge: async (id: string) => void dictationCalls.push(["acknowledge", id]),
+    listRecoverable: async () => [],
+  };
+  const shortcutCalls: string[] = [];
+  const shortcut = {
+    status: () => ({ accelerator: "CommandOrControl+Shift+Space", registered: true }),
+    set: (accelerator: string) => {
+      shortcutCalls.push(accelerator);
+      return { accelerator, registered: true };
+    },
+  };
+  const systemCalls: unknown[][] = [];
+  const system = {
+    openExternal: async (url: string) => void systemCalls.push(["openExternal", url]),
+    openAccessibilitySettings: async () => void systemCalls.push(["openAccessibilitySettings"]),
+  };
+  const router = createIpcRouter({
+    appOrigin: APP_ORIGIN,
+    auth,
+    store,
+    sources: sourcesWithExtras,
+    cloud,
+    windows,
+    dictation,
+    shortcut,
+    system,
+  });
+  return {
+    router,
+    calls,
+    sourceCalls,
+    windowCalls,
+    dictationCalls,
+    shortcutCalls,
+    systemCalls,
+    failFinishWith: (err: unknown) => void (finishError = err),
+    tokenRequests,
+    signIns: () => signIns,
+    cloudTriggers: () => cloudTriggers,
+  };
 }
+
+const untrusted = [{ frameUrl: "https://evil.example/index.html" }, { frameUrl: undefined }, { frameUrl: "app://companion.evil/x" }];
 
 describe("ipc router", () => {
   it("ipc_rejects_arbitrary_path_and_origin", async () => {
@@ -237,5 +302,159 @@ describe("ipc router", () => {
       ["closePanel"],
       ["setPetVisible", false],
     ]);
+  });
+});
+
+describe("ipc router: wired routes", () => {
+  const withSender = { ...trusted, senderId: 7 };
+
+  it("dictation routes need the app origin, sign-in and strict payloads; begin is bound to the calling window", async () => {
+    const { alice } = makeOwners();
+    const { router, dictationCalls } = setup(alice.ownerId);
+    const audio = new Uint8Array([1, 2, 3]);
+    for (const sender of untrusted) {
+      await expect(router.handle("dictation:begin", { ...sender, senderId: 7 }, undefined)).rejects.toBeInstanceOf(IpcRejected);
+      await expect(router.handle("dictation:finish", sender, { bytes: audio, mime: "audio/webm" })).rejects.toBeInstanceOf(IpcRejected);
+    }
+    for (const [channel, payload] of [
+      ["dictation:begin", { ownerId: "owner-bob" }],
+      ["dictation:finish", { bytes: [1, 2, 3], mime: "audio/webm" }],
+      ["dictation:finish", { bytes: audio, mime: "audio/webm", path: "/tmp/a.webm" }],
+      ["dictation:finish", { bytes: audio }],
+      ["dictation:retry", { recoveryId: "../../etc/passwd" }],
+      ["dictation:discard", "/tmp/x.spool"],
+      ["dictation:acknowledge", { recoveryId: "rec_12345678", ownerId: "owner-bob" }],
+      ["dictation:listRecoverable", { dir: "/tmp" }],
+    ] as const) {
+      await expect(router.handle(channel, withSender, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    // No window identity: begin cannot be attributed to a window, so it is refused.
+    await expect(router.handle("dictation:begin", trusted, undefined)).rejects.toBeInstanceOf(IpcRejected);
+    await expect(setup(null).router.handle("dictation:begin", withSender, undefined)).rejects.toThrow("Not signed in");
+    expect(dictationCalls).toEqual([]);
+
+    expect(await router.handle("dictation:begin", withSender, undefined)).toEqual({ microphone: "granted" });
+    expect(await router.handle("dictation:finish", withSender, { bytes: audio, mime: "audio/webm;codecs=opus" })).toEqual({
+      ok: true,
+      text: "hello",
+      recoveryId: "rec_12345678",
+    });
+    await router.handle("dictation:acknowledge", withSender, { recoveryId: "rec_12345678" });
+    expect(dictationCalls).toEqual([
+      ["begin", 7],
+      ["finish", 3, "audio/webm;codecs=opus"],
+      ["acknowledge", "rec_12345678"],
+    ]);
+  });
+
+  it("a failed transcription comes back as a code plus recovery id the renderer can Retry or Discard", async () => {
+    const { alice } = makeOwners();
+    const { router, failFinishWith } = setup(alice.ownerId);
+    failFinishWith(new DictationError("transcription_failed", "rec_12345678", "network"));
+    expect(await router.handle("dictation:finish", trusted, { bytes: new Uint8Array([1]), mime: "audio/webm" })).toEqual({
+      ok: false,
+      code: "transcription_failed",
+      recoveryId: "rec_12345678",
+    });
+    failFinishWith(new Error("disk full"));
+    await expect(router.handle("dictation:finish", trusted, { bytes: new Uint8Array([1]), mime: "audio/webm" })).rejects.toThrow(
+      "disk full",
+    );
+  });
+
+  it("the shortcut takes one accelerator with a modifier, from the app origin only", async () => {
+    const { router, shortcutCalls } = setup(null);
+    for (const payload of [{ accelerator: "Space" }, { accelerator: "" }, { accelerator: "Cmd+Shift+Space; rm -rf" }, "Cmd+K", { accelerator: "Cmd+K", global: true }]) {
+      await expect(router.handle("shortcut:set", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    for (const sender of untrusted) {
+      await expect(router.handle("shortcut:set", sender, { accelerator: "Alt+Shift+K" })).rejects.toBeInstanceOf(IpcRejected);
+    }
+    expect(shortcutCalls).toEqual([]);
+    expect(await router.handle("shortcut:status", trusted, undefined)).toEqual({ accelerator: "CommandOrControl+Shift+Space", registered: true });
+    expect(await router.handle("shortcut:set", trusted, { accelerator: "Alt+Shift+K" })).toEqual({ accelerator: "Alt+Shift+K", registered: true });
+    expect(shortcutCalls).toEqual(["Alt+Shift+K"]);
+  });
+
+  it("observation takes only bundle ids or bundle|origin selectors chosen by the user; never a path or owner", async () => {
+    const { alice } = makeOwners();
+    const { router, sourceCalls, systemCalls } = setup(alice.ownerId);
+    const projectIds = ["project-avt"];
+    for (const payload of [
+      { selectors: ["/Applications/Notes.app"], projectIds },
+      { selectors: ["com.apple.Notes|file:///etc"], projectIds },
+      { selectors: ["com.google.Chrome|https://docs.example.com/path"], projectIds },
+      { selectors: ["com.apple.Notes|https://a.example|extra"], projectIds },
+      { selectors: [], projectIds },
+      { selectors: ["com.apple.Notes"], projectIds: [] },
+      { selectors: ["com.apple.Notes"], projectIds, ownerId: "owner-bob" },
+    ]) {
+      await expect(router.handle("observation:start", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("observation:deleteRetained", trusted, { sourceId: "s1", path: "/tmp" })).rejects.toBeInstanceOf(IpcRejected);
+    await expect(router.handle("observation:openAccessibilitySettings", trusted, { pane: "x-apple.systempreferences:other" })).rejects.toBeInstanceOf(IpcRejected);
+    for (const sender of untrusted) {
+      await expect(router.handle("observation:start", sender, { selectors: ["com.apple.Notes"], projectIds })).rejects.toBeInstanceOf(IpcRejected);
+      await expect(router.handle("observation:openAccessibilitySettings", sender, undefined)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(
+      setup(null).router.handle("observation:start", trusted, { selectors: ["com.apple.Notes"], projectIds }),
+    ).rejects.toThrow("Not signed in");
+    expect(sourceCalls).toEqual([]);
+    expect(systemCalls).toEqual([]);
+
+    const selectors = ["com.apple.Notes", "com.google.Chrome|https://docs.example.com"];
+    await router.handle("observation:start", trusted, { selectors, projectIds });
+    await router.handle("observation:deleteRetained", trusted, { sourceId: "s1" });
+    await router.handle("observation:openAccessibilitySettings", trusted, undefined);
+    expect(sourceCalls).toEqual([
+      ["observe", alice.ownerId, { selectors, projectIds }],
+      ["deleteRetained", alice.ownerId, "s1"],
+    ]);
+    expect(systemCalls).toEqual([["openAccessibilitySettings"]]);
+  });
+
+  it("designating the log note takes only a source id: main opens the dialog and supplies the owner", async () => {
+    const { alice } = makeOwners();
+    const { router, sourceCalls } = setup(alice.ownerId);
+    for (const payload of [{ sourceId: "s1", notePath: "/Users/a/vault/Log.md" }, { sourceId: "s1", ownerId: "owner-bob" }, "/tmp/Log.md", undefined]) {
+      await expect(router.handle("logs:designate", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("logs:designate", untrusted[0]!, { sourceId: "s1" })).rejects.toBeInstanceOf(IpcRejected);
+    expect(sourceCalls).toEqual([]);
+    await router.handle("logs:designate", trusted, { sourceId: "s1" });
+    expect(sourceCalls).toEqual([["designateLog", alice.ownerId, "s1"]]);
+  });
+
+  it("openExternalAuth opens only Google or Microsoft sign-in pages over https", async () => {
+    const { router, systemCalls } = setup(null);
+    for (const url of [
+      "http://accounts.google.com/o/oauth2",
+      "https://accounts.google.com.evil.example/",
+      "https://evil.example/?next=https://accounts.google.com/",
+      "https://user@accounts.google.com/",
+      "https://accounts.google.com:8443/",
+      "https://login.microsoftonline.co/",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "not a url",
+    ]) {
+      await expect(router.handle("auth:openExternal", trusted, { url })).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("auth:openExternal", untrusted[0]!, { url: "https://accounts.google.com/" })).rejects.toBeInstanceOf(IpcRejected);
+    expect(systemCalls).toEqual([]);
+    await router.handle("auth:openExternal", trusted, { url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=x" });
+    await router.handle("auth:openExternal", trusted, { url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" });
+    expect(systemCalls).toEqual([
+      ["openExternal", "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"],
+      ["openExternal", "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"],
+    ]);
+  });
+
+  it("the persisted hide-pet choice is readable without sign-in and takes no payload", async () => {
+    const { router } = setup(null);
+    await expect(router.handle("pet:visible", trusted, { visible: true })).rejects.toBeInstanceOf(IpcRejected);
+    await expect(router.handle("pet:visible", untrusted[0]!, undefined)).rejects.toBeInstanceOf(IpcRejected);
+    expect(await router.handle("pet:visible", trusted, undefined)).toBe(false);
   });
 });

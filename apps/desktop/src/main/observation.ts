@@ -2,9 +2,11 @@
 // scope alone: every stdout line is schema-validated and re-checked against the current grant before emit.
 // No polling and no restart loop: helper exit or permission loss is surfaced as a status, and the user acts.
 // Observation never touches focus; this module only emits ObservationEvents for the caller to retain.
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { z } from "zod";
-import type { ObservationEvent, SourceGrant, SourceId } from "@companion/domain";
+import { EvidenceIdSchema, type Evidence, type ObservationEvent, type SourceGrant, type SourceId } from "@companion/domain";
+import type { SourceStatus, WatchHandle } from "./source-watch";
 
 /** The subset of ChildProcessWithoutNullStreams we use, so tests can inject a fake helper. */
 export type HelperChild = {
@@ -191,4 +193,50 @@ export async function deleteRetainedObservations(
   deleteStored: (sourceId: SourceId) => Promise<void>,
 ): Promise<void> {
   await deleteStored(sourceId);
+}
+
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * The observation grant as a local source for the registry: accepted events become evidence in the
+ * encrypted outbox (sent only under that source's cloud consent), helper status becomes freshness.
+ */
+export async function watchObservation(
+  grant: SourceGrant,
+  emit: (evidence: Evidence) => void,
+  deps: Omit<ObservationDeps, "onStatus"> & { onStatus?(status: SourceStatus): void },
+): Promise<WatchHandle> {
+  const known = new Map<string, string>(); // externalId -> version, so an unchanged window is one record
+  let status: SourceStatus = { freshness: "stale", reason: "starting", files: 0, issues: [] };
+  const set = (reason: string | null) => {
+    status = reason ? { freshness: "stale", reason, files: known.size, issues: [] } : { freshness: "current", files: known.size, issues: [] };
+    deps.onStatus?.(status);
+  };
+  const dispose = await startObservation(
+    [grant],
+    (event) => {
+      const externalId = `${event.bundleId}${event.siteOrigin ? `|${event.siteOrigin}` : ""}#${event.windowId}`;
+      const version = sha256(event.text);
+      if (known.get(externalId) === version) return;
+      known.set(externalId, version);
+      status = { ...status, files: known.size };
+      emit({
+        id: EvidenceIdSchema.parse(sha256(`${grant.id}\0${externalId}\0${version}`).slice(0, 32)),
+        ownerId: grant.ownerId,
+        sourceId: grant.id,
+        externalId,
+        version,
+        text: event.text,
+        occurredAt: event.capturedAt,
+        receivedAt: new Date().toISOString(),
+        projectIds: [...grant.projectIds],
+        grantVersion: event.grantVersion,
+        freshness: "current",
+        origin: "live",
+      });
+    },
+    { ...deps, onStatus: (s) => set(s.state === "ready" ? null : s.state) },
+  );
+  // The helper follows native app events itself; there is nothing to rescan on wake.
+  return Object.assign(dispose, { status: () => status, ready: Promise.resolve(), reconcile: async () => {} });
 }

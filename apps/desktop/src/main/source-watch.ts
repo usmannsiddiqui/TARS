@@ -17,6 +17,7 @@ import {
 } from "@companion/domain";
 import type { CloudSync } from "./cloud-handoff";
 import type { LocalGrantRecord } from "./local-store";
+import { logTargetId } from "./outcome-log";
 
 export type Extracted = { text: string; truncated: boolean } | { unsupported: string };
 
@@ -262,7 +263,7 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
 /** Honest, human-readable coverage for a source's current status. */
 export function coverageLabel(kind: SourceKind, status: SourceStatus): string {
   const surface = SURFACES[kind] ?? kind;
-  const noun = kind === "obsidian" ? "note" : "session";
+  const noun = kind === "obsidian" ? "note" : kind === "observation" ? "excerpt" : "session";
   const count = (issue: SourceIssue["issue"]) => status.issues.filter((i) => i.issue === issue).length;
   const parts = [`${status.files} ${noun}${status.files === 1 ? "" : "s"} read`];
   const labels: [SourceIssue["issue"], string][] = [
@@ -282,6 +283,7 @@ const SURFACES: Partial<Record<SourceKind, string>> = {
   obsidian: "Obsidian notes (Markdown)",
   "claude-code": "Claude Code CLI sessions (selected project folder, top-level sessions only)",
   codex: "Codex CLI sessions (selected folder)",
+  observation: "Text of the selected apps and sites",
 };
 
 // ---- Selected-source registry: what the IPC layer drives. Grants persist (encrypted) in the local store.
@@ -302,8 +304,8 @@ export type LocalSourceView = {
   cloudSync?: CloudSync;
 };
 export type LocalSourcesDeps = {
-  /** OS dialog in the main process; the renderer never supplies a path. */
-  pickPath(): Promise<string | null>;
+  /** OS dialog in the main process; the renderer never supplies a path. "note": one existing Markdown file. */
+  pickPath(purpose?: "note"): Promise<string | null>;
   start(grant: SourceGrant, emit: (evidence: Evidence) => void, options: WatchOptions): Promise<WatchHandle>;
   store: {
     enqueueEvidence(evidence: Evidence, ownerId: OwnerId): Promise<boolean>;
@@ -351,6 +353,35 @@ export function createLocalSources(deps: LocalSourcesDeps) {
     };
   };
 
+  /** A new active grant; an unsupported or unsaved selection grants nothing. */
+  async function add(ownerId: OwnerId, kind: SourceKind, selectors: string[], projectIds: ProjectId[]): Promise<LocalSourceView> {
+    const entry: Entry = {
+      grant: {
+        id: SourceIdSchema.parse(randomUUID()),
+        ownerId,
+        kind,
+        selectors,
+        projectIds,
+        read: true,
+        writeTargets: [],
+        cloudProcessing: false,
+        version: 1,
+        state: "active",
+      },
+      mirroredVersion: null,
+    };
+    entries.set(entry.grant.id, entry);
+    try {
+      await start(entry);
+      await persist(entry);
+    } catch (err) {
+      stop(entry);
+      entries.delete(entry.grant.id);
+      throw err;
+    }
+    return view(entry);
+  }
+
   async function start(entry: Entry): Promise<void> {
     const sourceId = entry.grant.id;
     entry.handle = await deps.start(
@@ -377,32 +408,46 @@ export function createLocalSources(deps: LocalSourcesDeps) {
   return {
     async choose(ownerId: OwnerId, input: { kind: LocalSourceKind; projectIds: ProjectId[] }): Promise<LocalSourceView | null> {
       const path = await deps.pickPath();
-      if (!path) return null;
-      const entry: Entry = {
-        grant: {
-          id: SourceIdSchema.parse(randomUUID()),
-          ownerId,
-          kind: input.kind,
-          selectors: [path],
-          projectIds: input.projectIds,
-          read: true,
-          writeTargets: [],
-          cloudProcessing: false,
-          version: 1,
-          state: "active",
-        },
-        mirroredVersion: null,
-      };
-      entries.set(entry.grant.id, entry);
-      try {
-        await start(entry);
-        await persist(entry);
-      } catch (err) {
-        stop(entry);
-        entries.delete(entry.grant.id); // an unsupported or unsaved selection grants nothing
-        throw err;
+      return path ? add(ownerId, input.kind, [path], input.projectIds) : null;
+    },
+    /** Observation of the apps/sites the user selected; one active observation at a time (one helper). */
+    async observe(ownerId: OwnerId, input: { selectors: string[]; projectIds: ProjectId[] }): Promise<LocalSourceView> {
+      const active = [...entries.values()].some(
+        (e) => e.grant.ownerId === ownerId && e.grant.kind === "observation" && e.grant.state === "active",
+      );
+      if (active) throw new Error("Only one observation can run at a time: pause or revoke the current one first");
+      return add(ownerId, "observation", input.selectors, input.projectIds);
+    },
+    /** Deletes retained (unsent) observation excerpts. Separate from pause: pausing keeps them. */
+    async deleteRetained(ownerId: OwnerId, sourceId: string): Promise<void> {
+      const entry = find(ownerId, sourceId);
+      if (entry.grant.kind !== "observation") throw new Error("Unknown source");
+      await deps.store.discardSource(ownerId, entry.grant.id);
+    },
+    /**
+     * The user picks the outcome-log note in the OS dialog; it becomes this notes grant's write target,
+     * so the watcher stops reading it as evidence. Returns the opaque id the cloud names it by.
+     */
+    async designateLog(ownerId: OwnerId, sourceId: string): Promise<{ sourceId: SourceId; target: string; name: string } | null> {
+      const entry = find(ownerId, sourceId);
+      if (entry.grant.kind !== "obsidian") throw new Error("Only an Obsidian notes source can hold the outcome log");
+      const picked = await deps.pickPath("note");
+      if (!picked) return null;
+      const note = await realpath(picked);
+      if (!note.toLowerCase().endsWith(".md")) throw new Error("Choose a Markdown note (.md) for the outcome log");
+      const roots = await resolveRoots(entry.grant.selectors);
+      if (!roots.some((r) => !r.missing && !r.isFile && note.startsWith(r.real + sep))) {
+        throw new Error("Choose a note inside the selected notes folder");
       }
-      return view(entry);
+      // A new version, as with consent: evidence read under the old one must not be sent under the new one.
+      stop(entry);
+      entry.grant = { ...entry.grant, writeTargets: [note], version: entry.grant.version + 1 };
+      delete entry.cloudSync;
+      await persist(entry);
+      await deps.store.discardSource(ownerId, entry.grant.id);
+      if (entry.grant.state === "active") await start(entry);
+      deps.onChange(ownerId);
+      return { sourceId: entry.grant.id, target: logTargetId(note), name: basename(note) };
     },
     /** Loads the owner's saved grants (app start, sign-in) and restarts watchers of active ones. */
     async restore(ownerId: OwnerId): Promise<void> {

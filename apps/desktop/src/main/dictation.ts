@@ -5,10 +5,11 @@
 import { open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { DICTATION_LIMITS } from "./dictation-limits";
 import type { Cipher } from "./local-store";
 
-/** Shown before capture; the renderer stops recording at these, main rejects anything beyond them. */
-export const DICTATION_LIMITS = { maxBytes: 20_000_000, maxDurationMs: 5 * 60_000 } as const;
+export { DICTATION_LIMITS };
+
 // Stop-to-finish latency allowance so a recording stopped exactly at the limit is accepted.
 const DURATION_GRACE_MS = 30_000;
 

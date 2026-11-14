@@ -1,8 +1,11 @@
 // Narrow typed bridge. The renderer gets these methods only: no fs, shell, network or raw ipcRenderer.
 import { contextBridge, ipcRenderer } from "electron";
 import type { CaptureInput, CaptureReceipt } from "@companion/domain";
+import { DICTATION_LIMITS } from "../main/dictation-limits";
+import type { DictationErrorCode, Recoverable } from "../main/dictation";
 import type { IpcChannel } from "../main/ipc";
-import type { LocalSourceKind, LocalSourceView } from "../main/source-watch";
+import type { ShortcutStatus } from "../main/shortcut";
+import type { LocalSourceKind, LocalSourceView, SourceStatus } from "../main/source-watch";
 
 const invoke = (channel: IpcChannel, payload?: unknown) => ipcRenderer.invoke(channel, payload);
 /** Main-to-renderer pushes carry only an optional project id; anything else arrives as null. */
@@ -11,6 +14,15 @@ const listen = (channel: "app:navigate" | "panel:show", callback: (projectId: st
   ipcRenderer.on(channel, handler);
   return () => void ipcRenderer.removeListener(channel, handler);
 };
+const subscribe = <T>(channel: "observation:status" | "capture:open", callback: (value: T) => void) => {
+  const handler = (_event: unknown, value: T) => callback(value);
+  ipcRenderer.on(channel, handler);
+  return () => void ipcRenderer.removeListener(channel, handler);
+};
+
+/** A transcript for the editable composer, or why not; recoveryId (when set) can be retried or discarded. */
+export type DictationResult = { ok: true; text: string; recoveryId: string } | { ok: false; code: DictationErrorCode; recoveryId?: string };
+export type ObservationStatusEvent = { sourceId: string } & SourceStatus;
 
 const api = {
   saveCapture: (input: CaptureInput): Promise<CaptureReceipt> => invoke("capture:save", input),
@@ -35,6 +47,44 @@ const api = {
   openApp: (projectId?: string): Promise<void> => invoke("window:openApp", projectId ? { projectId } : {}),
   closePanel: (): Promise<void> => invoke("window:closePanel"),
   setPetVisible: (visible: boolean): Promise<void> => invoke("pet:setVisible", { visible }),
+  /** The persisted hide-pet choice. */
+  petVisible: (): Promise<boolean> => invoke("pet:visible"),
+  // Opens Google or Microsoft sign-in in the system browser; any other URL is refused by main.
+  openExternalAuth: (url: string): Promise<void> => invoke("auth:openExternal", { url }),
+  // Dictation: begin only on a Record click; the mic is allowed for this window only after begin.
+  dictation: {
+    limits: DICTATION_LIMITS,
+    begin: (): Promise<{ microphone: "granted" | "denied" }> => invoke("dictation:begin"),
+    finish: (bytes: Uint8Array, mime: string): Promise<DictationResult> => invoke("dictation:finish", { bytes, mime }),
+    retry: (recoveryId: string): Promise<DictationResult> => invoke("dictation:retry", { recoveryId }),
+    discard: (recoveryId: string): Promise<void> => invoke("dictation:discard", { recoveryId }),
+    /** Call only after the composer text is durably saved. */
+    acknowledge: (recoveryId: string): Promise<void> => invoke("dictation:acknowledge", { recoveryId }),
+    listRecoverable: (): Promise<Recoverable[]> => invoke("dictation:listRecoverable"),
+  },
+  shortcut: {
+    status: (): Promise<ShortcutStatus> => invoke("shortcut:status"),
+    set: (accelerator: string): Promise<ShortcutStatus> => invoke("shortcut:set", { accelerator }),
+  },
+  /** The shortcut opened the panel for capture: focus the composer (never start recording). */
+  onCaptureOpen: (callback: () => void) => subscribe("capture:open", () => callback()),
+  // Outcome log: main opens the file dialog; the result names the note only by an opaque id.
+  designateLogNote: (sourceId: string): Promise<{ sourceId: string; target: string; name: string } | null> =>
+    invoke("logs:designate", { sourceId }),
+  // Observation of user-selected apps ("bundleId") or browser sites ("bundleId|https://origin").
+  observation: {
+    list: async (): Promise<LocalSourceView[]> =>
+      ((await invoke("sources:list")) as LocalSourceView[]).filter((s) => s.kind === "observation"),
+    start: (selectors: string[], projectIds: string[]): Promise<LocalSourceView> =>
+      invoke("observation:start", { selectors, projectIds }),
+    pause: (sourceId: string): Promise<LocalSourceView> => invoke("sources:pause", { sourceId }),
+    resume: (sourceId: string): Promise<LocalSourceView> => invoke("sources:resume", { sourceId }),
+    revoke: (sourceId: string): Promise<{ id: string; state: "revoked"; version: number }> => invoke("sources:revoke", { sourceId }),
+    deleteRetained: (sourceId: string): Promise<void> => invoke("observation:deleteRetained", { sourceId }),
+    /** Call only from the user's click: opens System Settings > Accessibility; nothing is requested. */
+    openAccessibilitySettings: (): Promise<void> => invoke("observation:openAccessibilitySettings"),
+    onStatus: (callback: (status: ObservationStatusEvent) => void) => subscribe("observation:status", callback),
+  },
   onNavigate: (callback: (projectId: string | null) => void) => listen("app:navigate", callback),
   onPanelShow: (callback: (projectId: string | null) => void) => listen("panel:show", callback),
 };

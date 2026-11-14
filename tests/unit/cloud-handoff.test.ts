@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Evidence, IntakeResult, OwnerId, SourceGrant, SourceId } from "@companion/domain";
 import { createHandoff, type CloudGrant, type CloudSync } from "../../apps/desktop/src/main/cloud-handoff";
 import type { LocalGrantRecord } from "../../apps/desktop/src/main/local-store";
+import { logTargetId } from "../../apps/desktop/src/main/outcome-log";
 import { makeEvidence, makeOwners, makeProjects } from "../fixtures";
 
-function setup(opts: { cloudProcessing?: boolean; mirroredVersion?: number | null; state?: SourceGrant["state"] } = {}) {
+function setup(
+  opts: { cloudProcessing?: boolean; mirroredVersion?: number | null; state?: SourceGrant["state"]; writeTargets?: string[] } = {},
+) {
   const { alice } = makeOwners();
   const project = makeProjects(alice.ownerId).avt.id;
   const first = makeEvidence(alice.ownerId, [project], { externalId: "a.md", version: "1" });
@@ -16,7 +19,7 @@ function setup(opts: { cloudProcessing?: boolean; mirroredVersion?: number | nul
     selectors: ["/Users/illustrative/private-vault"],
     projectIds: [project],
     read: true,
-    writeTargets: [],
+    writeTargets: opts.writeTargets ?? [],
     cloudProcessing: opts.cloudProcessing ?? true,
     version: 1,
     state: opts.state ?? "active",
@@ -74,6 +77,14 @@ function setup(opts: { cloudProcessing?: boolean; mirroredVersion?: number | nul
 }
 
 describe("cloud hand-off", () => {
+  it("mirrors a designated log note as its opaque id, never its path", async () => {
+    const note = "/Users/illustrative/private-vault/Outcomes.md";
+    const s = setup({ writeTargets: [note] });
+    await s.handoff.trigger();
+    expect(s.grantsSent[0]?.writeTargets).toEqual([logTargetId(note)]);
+    expect(JSON.stringify(s.grantsSent)).not.toContain("private-vault");
+  });
+
   it("mirrors a consented grant without its local path, then sends its evidence in order", async () => {
     const s = setup();
     await s.handoff.trigger();

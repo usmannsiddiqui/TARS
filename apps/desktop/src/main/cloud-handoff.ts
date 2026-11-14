@@ -3,10 +3,11 @@
 // timer; a failure becomes a visible "needs-retry" status and the next event tries again.
 import type { Evidence, IntakeResult, OwnerId, SourceGrant, SourceId } from "@companion/domain";
 import type { LocalGrantRecord } from "./local-store";
+import { logTargetId } from "./outcome-log";
 
 export type CloudSync = { state: "synced" } | { state: "needs-retry"; reason: string } | { state: "denied"; count: number };
 
-/** A grant as mirrored to the cloud: no ownerId (the cloud takes it from the token) and no selectors (local paths are private). */
+/** A grant as mirrored to the cloud: no ownerId (the cloud takes it from the token) and no local paths (private). */
 export type CloudGrant = Omit<SourceGrant, "ownerId">;
 
 export type HandoffDeps = {
@@ -26,14 +27,15 @@ export type HandoffDeps = {
   };
 };
 
-// An explicit allowlist: selectors and write targets can be local paths, so neither is sent.
+// An explicit allowlist: selectors and write targets can be local paths, so neither is sent as such.
+// A write target goes as its opaque id: the cloud names the log note by it (setLogDestination, pendingLocalLogs).
 const cloudGrantOf = (g: SourceGrant): CloudGrant => ({
   id: g.id,
   kind: g.kind,
   selectors: [],
   projectIds: g.projectIds,
   read: g.read,
-  writeTargets: [],
+  writeTargets: g.writeTargets.map(logTargetId),
   cloudProcessing: g.cloudProcessing,
   version: g.version,
   state: g.state,

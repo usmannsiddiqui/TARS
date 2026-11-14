@@ -3,15 +3,21 @@ import { defineConfig, loadEnv } from "electron-vite";
 
 export default defineConfig(({ mode }) => {
   // The Convex deployment URL is public (not a secret) and fixed at build time; the CSP allows only its origin.
-  const raw = loadEnv(mode, resolve(import.meta.dirname, "../.."), "CONVEX_URL")["CONVEX_URL"];
-  if (!raw || !URL.canParse(raw) || new URL(raw).protocol !== "https:") {
-    throw new Error("Set CONVEX_URL (https://…convex.cloud) in the repository's .env.local before building");
-  }
-  const convex = new URL(raw);
+  const env = loadEnv(mode, resolve(import.meta.dirname, "../.."), "CONVEX_");
+  const httpsOrigin = (name: string, example: string) => {
+    const raw = env[name];
+    if (!raw || !URL.canParse(raw) || new URL(raw).protocol !== "https:") {
+      throw new Error(`Set ${name} (https://…${example}) in the repository's .env.local before building`);
+    }
+    return new URL(raw);
+  };
+  const convex = httpsOrigin("CONVEX_URL", "convex.cloud");
   const define = { "import.meta.env.CONVEX_URL": JSON.stringify(convex.origin) };
+  // Dictation uploads go from the main process only, so the site origin is not added to the renderer's CSP.
+  const site = httpsOrigin("CONVEX_SITE_URL", "convex.site");
   return {
     main: {
-      define,
+      define: { ...define, "import.meta.env.CONVEX_SITE_URL": JSON.stringify(site.origin) },
       // @companion/domain ships TypeScript source, so it is bundled instead of required at runtime.
       build: { externalizeDeps: { exclude: ["@companion/domain"] } },
     },
