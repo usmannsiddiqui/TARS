@@ -55,8 +55,15 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     revoke: record("revoke"),
     setCloudProcessing: record("setCloudProcessing"),
   };
-  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources, cloud });
-  return { router, calls, sourceCalls, tokenRequests, signIns: () => signIns, cloudTriggers: () => cloudTriggers };
+  const windowCalls: unknown[][] = [];
+  const windows = {
+    openPanel: (projectId?: string) => void windowCalls.push(["openPanel", projectId]),
+    openApp: (projectId?: string) => void windowCalls.push(["openApp", projectId]),
+    closePanel: () => void windowCalls.push(["closePanel"]),
+    setPetVisible: (visible: boolean) => void windowCalls.push(["setPetVisible", visible]),
+  };
+  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources, cloud, windows });
+  return { router, calls, sourceCalls, windowCalls, tokenRequests, signIns: () => signIns, cloudTriggers: () => cloudTriggers };
 }
 
 describe("ipc router", () => {
@@ -200,5 +207,35 @@ describe("ipc router", () => {
     expect(cloudTriggers()).toBe(0);
     expect(await router.handle("cloud:online", trusted, undefined)).toBeUndefined();
     expect(cloudTriggers()).toBe(1);
+  });
+
+  it("window requests take only an optional project and work before sign-in; nothing else opens a window", async () => {
+    const { router, windowCalls } = setup(null);
+    for (const [channel, payload] of [
+      ["window:openPanel", { projectId: "" }],
+      ["window:openPanel", { projectId: "p1", focus: true }],
+      ["window:openApp", { url: "https://evil.example/" }],
+      ["window:openApp", "p1"],
+      ["window:closePanel", { projectId: "p1" }],
+      ["pet:setVisible", { visible: "no" }],
+      ["pet:setVisible", undefined],
+    ] as const) {
+      await expect(router.handle(channel, trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("window:openApp", { frameUrl: "https://evil.example/" }, {})).rejects.toBeInstanceOf(
+      IpcRejected,
+    );
+    expect(windowCalls).toEqual([]);
+
+    await router.handle("window:openPanel", trusted, {});
+    await router.handle("window:openApp", trusted, { projectId: "p1" });
+    await router.handle("window:closePanel", trusted, undefined);
+    await router.handle("pet:setVisible", trusted, { visible: false });
+    expect(windowCalls).toEqual([
+      ["openPanel", undefined],
+      ["openApp", "p1"],
+      ["closePanel"],
+      ["setPetVisible", false],
+    ]);
   });
 });

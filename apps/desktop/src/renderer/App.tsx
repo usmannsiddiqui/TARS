@@ -1,156 +1,113 @@
-// Deliberately minimal, accessible capture screen. The real UI arrives in a later task.
-import { useConvex, useConvexConnectionState, useQuery } from "convex/react";
-import { Component, useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
+// The full app window: routes between Today, a project, memory and connections. Focus changes
+// only when the user picks a project here (switchProject with userInitiated: true).
+import { useMutation, useQuery } from "convex/react";
+import { useCallback, useEffect, useState } from "react";
 import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
+import { Home } from "./Home";
+import { Boundary, ConnectionsLive, MemoryLive, ProjectLive, useCloud, useProjectSummaries } from "./live";
+import { recommendStart } from "./recommend";
+import { Shell, Stopped, type Route } from "./Shell";
 
-type Status =
-  | { kind: "idle" }
-  | { kind: "busy"; label: string }
-  | { kind: "saved"; summary: string }
-  | { kind: "error"; message: string };
-
-// Electron prefixes rejected invoke() errors; show only the main process's own message.
-const reason = (err: unknown) =>
-  err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (\w+: )?/, "") : String(err);
-
-/** A failing cloud query shows as an error here instead of blanking the capture screen. */
-class CloudBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  override state = { error: null as string | null };
-  static getDerivedStateFromError(err: unknown) {
-    return { error: err instanceof Error ? err.message : String(err) };
-  }
-  override render() {
-    return this.state.error ? <p role="alert">Could not load cloud projects: {this.state.error}</p> : this.props.children;
-  }
-}
-
-/** The signed-in owner's projects, live from Convex. Every state is said plainly; old data is never shown as current. */
-function CloudProjects() {
-  const convex = useConvex();
-  const connection = useConvexConnectionState();
-  const [cloudAuth, setCloudAuth] = useState<"checking" | "accepted" | "rejected">("checking");
-
-  useEffect(() => {
-    convex.setAuth(
-      ({ forceRefreshToken }) => window.companion.idToken(forceRefreshToken),
-      (accepted) => setCloudAuth(accepted ? "accepted" : "rejected"),
-    );
-    return () => convex.clearAuth();
-  }, [convex]);
-
-  const projects = useQuery(api.projects.listProjects, cloudAuth === "accepted" ? {} : "skip");
-
-  let body: ReactNode;
-  if (!connection.isWebSocketConnected) {
-    body = connection.hasEverConnected
-      ? "Cloud unreachable. Captures still save on this Mac; projects reappear when the connection returns."
-      : "Connecting to the cloud…";
-  } else if (cloudAuth === "checking") body = "Checking your sign-in with the cloud…";
-  else if (cloudAuth === "rejected") body = "The cloud did not accept this sign-in. Sign in again to see your projects.";
-  else if (projects === undefined) body = "Loading projects…";
-  else if (projects.length === 0) body = "No projects yet.";
-  else
-    body = (
-      <ul aria-label="Projects">
-        {projects.map((project) => (
-          <li key={project.id}>{project.name}</li>
-        ))}
-      </ul>
-    );
-
-  return (
-    <section aria-labelledby="cloud-projects">
-      <h2 id="cloud-projects">Projects</h2>
-      {typeof body === "string" ? <p aria-live="polite">{body}</p> : body}
-    </section>
-  );
-}
+const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
 
 export function App() {
-  const inputId = useId();
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
-  const [text, setText] = useState("");
-  const [pending, setPending] = useState<CaptureInput[]>([]);
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const cloud = useCloud();
+  const [route, setRoute] = useState<Route>({ view: "today" });
+  const [stopped, setStopped] = useState(false);
+  const [petVisible, setPetVisible] = useState(true);
+  const [ideas, setIdeas] = useState<CaptureInput[]>([]);
 
-  const fail = (err: unknown) => setStatus({ kind: "error", message: reason(err) });
-  const refresh = () => window.companion.loadPending().then(setPending, fail);
+  const projects = useQuery(api.projects.listProjects, cloud.ready ? {} : "skip");
+  const focus = useQuery(api.projects.getFocus, cloud.ready ? {} : "skip");
+  const summaries = useProjectSummaries(projects);
+  const switchProject = useMutation(api.projects.switchProject);
+  const createProject = useMutation(api.projects.createProject);
 
+  const loadIdeas = useCallback(() => window.companion.loadPending().then(setIdeas), []);
   useEffect(() => {
-    window.companion.authStatus().then(({ signedIn }) => {
-      setSignedIn(signedIn);
-      if (signedIn) void refresh();
-    }, fail);
-  }, []);
+    if (cloud.signedIn) void loadIdeas();
+  }, [cloud.signedIn, loadIdeas]);
 
-  async function signIn() {
-    setStatus({ kind: "busy", label: "Waiting for sign-in in your browser…" });
-    try {
-      const result = await window.companion.signIn();
-      setSignedIn(result.signedIn);
-      setStatus({ kind: "idle" });
-      if (result.signedIn) await refresh();
-    } catch (err) {
-      fail(err);
-    }
+  // "Open app" from the panel: the main process says which project to show.
+  useEffect(
+    () =>
+      window.companion.onNavigate((projectId) => {
+        setStopped(false);
+        setRoute(projectId ? { view: "project", projectId } : { view: "today" });
+      }),
+    [],
+  );
+
+  const focusId = focus?.projectId;
+  const pick = (projectId: string) => {
+    if (projectId !== focusId) void switchProject({ targetProjectId: projectId, userInitiated: true });
+  };
+  const nameOf = (id?: string) => projects?.find((p) => p.id === id)?.name;
+
+  if (stopped) return <Stopped {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} onResume={() => setStopped(false)} />;
+
+  let screen;
+  if (route.view === "project") {
+    const name = nameOf(route.projectId);
+    screen = name ? (
+      <ProjectLive
+        key={route.projectId}
+        projectId={route.projectId}
+        name={name}
+        isFocus={route.projectId === focusId}
+        {...(route.mode ? { mode: route.mode } : {})}
+        onMakeFocus={() => pick(route.projectId)}
+        onStop={() => setStopped(true)}
+      />
+    ) : null;
+  } else if (route.view === "memory") {
+    const projectId = route.projectId ?? focusId ?? projects?.[0]?.id;
+    screen = <MemoryLive projects={projects ?? []} {...(projectId ? { projectId } : {})} onSelectProject={(id) => setRoute({ view: "memory", projectId: id })} />;
+  } else if (route.view === "connections") {
+    screen = <ConnectionsLive projects={projects ?? null} />;
+  } else {
+    screen = (
+      <Home
+        dateLabel={dateLabel.format(new Date())}
+        projects={summaries}
+        {...(cloud.honest ? { cloud: cloud.honest } : {})}
+        {...(focusId ? { focusProjectId: focusId } : {})}
+        recommendation={summaries ? recommendStart(summaries, focusId, new Date().toISOString()) : null}
+        signedIn={cloud.signedIn === true}
+        ideas={ideas}
+        onCapture={async (text) => {
+          const receipt = await window.companion.saveCapture({ text, origin: "typed" });
+          await loadIdeas();
+          return receipt.summary;
+        }}
+        onStart={(projectId, mode) => {
+          pick(projectId); // accepting the recommended start is the user's pick
+          setRoute({ view: "project", projectId, mode });
+        }}
+        onOpenProject={(projectId) => setRoute({ view: "project", projectId })}
+        onCreateProject={async (name) => void (await createProject({ name }))}
+      />
+    );
   }
-
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    setStatus({ kind: "busy", label: "Saving…" });
-    try {
-      const receipt = await window.companion.saveCapture({ text, origin: "typed" });
-      setStatus({ kind: "saved", summary: receipt.summary });
-      setText("");
-      await refresh();
-    } catch (err) {
-      fail(err);
-    }
-  }
-
-  const busy = status.kind === "busy";
 
   return (
-    <main>
-      <h1>Companion</h1>
-      {signedIn === false && (
-        <section aria-label="Account">
-          <p>Not signed in. Sign in to save captures on this Mac.</p>
-          <button type="button" onClick={signIn} disabled={busy}>
-            Sign in with browser
-          </button>
-        </section>
-      )}
-      {signedIn && (
-        <>
-          <form onSubmit={onSubmit}>
-            <label htmlFor={inputId}>Capture an idea</label>
-            <textarea id={inputId} value={text} onChange={(e) => setText(e.target.value)} required />
-            <button type="submit" disabled={busy || text.trim() === ""}>
-              Save
-            </button>
-          </form>
-          <h2>Pending captures</h2>
-          {pending.length === 0 ? (
-            <p>No pending captures.</p>
-          ) : (
-            <ul aria-label="Pending captures">
-              {pending.map((capture, i) => (
-                <li key={i}>{capture.text}</li>
-              ))}
-            </ul>
-          )}
-          <CloudBoundary>
-            <CloudProjects />
-          </CloudBoundary>
-        </>
-      )}
-      <p role="status" aria-live="polite">
-        {status.kind === "busy" && status.label}
-        {status.kind === "saved" && `Saved on this Mac: ${status.summary}`}
-        {status.kind === "error" && `Error: ${status.message}`}
-      </p>
-    </main>
+    <Shell
+      route={route}
+      projects={summaries && summaries.map((p) => ({ id: p.id, name: p.name, ...(p.prepared?.status === "needs-retry" ? { note: "Needs retry" } : {}) }))}
+      {...(focusId ? { focusProjectId: focusId } : {})}
+      account={{ signedIn: cloud.signedIn, busy: cloud.signingIn, onSignIn: () => void cloud.signIn().then(loadIdeas) }}
+      pet={{
+        visible: petVisible,
+        onToggle: () => {
+          void window.companion.setPetVisible(!petVisible);
+          setPetVisible(!petVisible);
+        },
+      }}
+      onNavigate={setRoute}
+      onStop={() => setStopped(true)}
+    >
+      <Boundary key={JSON.stringify(route)}>{screen}</Boundary>
+    </Shell>
   );
 }

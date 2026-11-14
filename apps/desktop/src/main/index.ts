@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ConvexHttpClient } from "convex/browser";
-import { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, protocol, safeStorage, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, protocol, safeStorage, screen, session, shell } from "electron";
 import { api } from "../../../../convex/_generated/api";
 import { watchAiContext } from "./ai-context";
 import { authConfigFromEnv, createAuth, type SecretVault } from "./auth";
@@ -66,11 +66,16 @@ function isAppUrl(raw: string): boolean {
   return `${url.protocol}//${url.host}` === appOrigin;
 }
 
-function createWindow(): BrowserWindow {
+// One renderer, three views: the full app, the pet and the compact panel (chosen by the URL hash).
+type View = "app" | "pet" | "panel";
+const SIZES = { app: { width: 1200, height: 800 }, pet: { width: 104, height: 124 }, panel: { width: 360, height: 420 } };
+const GROUND = "#141110";
+
+function newWindow(view: View, options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
   const win = new BrowserWindow({
-    width: 720,
-    height: 640,
-    title: "Companion",
+    ...SIZES[view],
+    show: false,
+    ...options,
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -79,8 +84,106 @@ function createWindow(): BrowserWindow {
       webSecurity: true,
     },
   });
-  void win.loadURL(devServerUrl ?? `${appOrigin}/index.html`);
+  void win.loadURL(`${devServerUrl ?? `${appOrigin}/index.html`}${view === "app" ? "" : `#${view}`}`);
   return win;
+}
+
+/**
+ * Window policy: only a user action opens or focuses a window. The pet is never focusable and is
+ * shown inactive; background changes reach windows as subscription updates, never as focus or a notification.
+ */
+function createWindows() {
+  let main: BrowserWindow | null = null;
+  let pet: BrowserWindow | null = null;
+  let panel: BrowserWindow | null = null;
+  let panelReady: Promise<void> | null = null;
+  const live = (win: BrowserWindow | null): win is BrowserWindow => win !== null && !win.isDestroyed();
+
+  const openMain = () => {
+    if (live(main)) return main;
+    const win = newWindow("app", { title: "Companion", minWidth: 960, minHeight: 640, backgroundColor: GROUND });
+    // Launching the app is the user's action, so its window may take focus once it has painted.
+    win.once("ready-to-show", () => win.show());
+    main = win;
+    return win;
+  };
+
+  const openPet = () => {
+    const { workArea } = screen.getPrimaryDisplay();
+    pet = newWindow("pet", {
+      title: "Companion pet",
+      x: workArea.x + workArea.width - SIZES.pet.width - 24,
+      y: workArea.y + workArea.height - SIZES.pet.height - 24,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      hasShadow: false,
+      alwaysOnTop: true,
+    });
+    pet.setAlwaysOnTop(true, "floating");
+    pet.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    const shown = pet;
+    shown.once("ready-to-show", () => shown.showInactive());
+  };
+
+  const ensurePanel = () => {
+    if (live(panel) && panelReady) return { win: panel, ready: panelReady };
+    const win = newWindow("panel", {
+      title: "Companion panel",
+      frame: false,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      backgroundColor: GROUND,
+    });
+    win.on("blur", () => win.hide());
+    panel = win;
+    panelReady = new Promise((done) => win.once("ready-to-show", () => done()));
+    return { win, ready: panelReady };
+  };
+
+  return {
+    openMain,
+    openPet,
+    hasMain: () => live(main),
+    async openPanel(projectId?: string) {
+      const { win, ready } = ensurePanel();
+      await ready;
+      const { workArea } = screen.getPrimaryDisplay();
+      const anchor = live(pet) && pet.isVisible() ? pet.getBounds() : null;
+      const x = anchor ? anchor.x + anchor.width - SIZES.panel.width : workArea.x + workArea.width - SIZES.panel.width - 24;
+      const y = anchor ? anchor.y - SIZES.panel.height - 8 : workArea.y + workArea.height - SIZES.panel.height - 24;
+      win.setPosition(Math.max(workArea.x, x), Math.max(workArea.y, y));
+      win.webContents.send("panel:show", projectId ?? null);
+      win.show(); // the user clicked the pet: the panel may take focus
+    },
+    openApp(projectId?: string) {
+      if (live(panel)) panel.hide();
+      const win = openMain();
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+      const navigate = () => win.webContents.send("app:navigate", projectId ?? null);
+      if (win.webContents.isLoading()) win.webContents.once("did-finish-load", navigate);
+      else navigate();
+    },
+    closePanel() {
+      if (live(panel)) panel.hide();
+    },
+    setPetVisible(visible: boolean) {
+      if (!live(pet)) return;
+      if (visible) pet.showInactive();
+      else pet.hide();
+    },
+  };
 }
 
 let store: LocalStore | undefined;
@@ -159,6 +262,7 @@ async function start(): Promise<void> {
     void handoff.trigger();
   });
 
+  const windows = createWindows();
   const router = createIpcRouter({
     appOrigin,
     auth: {
@@ -172,6 +276,7 @@ async function start(): Promise<void> {
     store,
     sources,
     cloud: handoff,
+    windows,
   });
   for (const channel of IPC_CHANNELS) {
     ipcMain.handle(channel, (event, payload: unknown) =>
@@ -179,9 +284,11 @@ async function start(): Promise<void> {
     );
   }
 
-  createWindow();
+  windows.openMain();
+  windows.openPet();
+  // Clicking the Dock icon is a user action: bring back the full app if it was closed.
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (!windows.hasMain()) windows.openMain();
   });
 }
 

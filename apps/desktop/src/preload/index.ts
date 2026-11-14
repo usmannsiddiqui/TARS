@@ -5,6 +5,12 @@ import type { IpcChannel } from "../main/ipc";
 import type { LocalSourceKind, LocalSourceView } from "../main/source-watch";
 
 const invoke = (channel: IpcChannel, payload?: unknown) => ipcRenderer.invoke(channel, payload);
+/** Main-to-renderer pushes carry only an optional project id; anything else arrives as null. */
+const listen = (channel: "app:navigate" | "panel:show", callback: (projectId: string | null) => void) => {
+  const handler = (_event: unknown, value: unknown) => callback(typeof value === "string" && value !== "" ? value : null);
+  ipcRenderer.on(channel, handler);
+  return () => void ipcRenderer.removeListener(channel, handler);
+};
 
 const api = {
   saveCapture: (input: CaptureInput): Promise<CaptureReceipt> => invoke("capture:save", input),
@@ -24,6 +30,13 @@ const api = {
     invoke("sources:setCloudProcessing", { sourceId, enabled }),
   revokeSource: (sourceId: string): Promise<{ id: string; state: "revoked"; version: number }> =>
     invoke("sources:revoke", { sourceId }),
+  // Windows: call these only from the user's own clicks or key presses.
+  openPanel: (projectId?: string): Promise<void> => invoke("window:openPanel", projectId ? { projectId } : {}),
+  openApp: (projectId?: string): Promise<void> => invoke("window:openApp", projectId ? { projectId } : {}),
+  closePanel: (): Promise<void> => invoke("window:closePanel"),
+  setPetVisible: (visible: boolean): Promise<void> => invoke("pet:setVisible", { visible }),
+  onNavigate: (callback: (projectId: string | null) => void) => listen("app:navigate", callback),
+  onPanelShow: (callback: (projectId: string | null) => void) => listen("panel:show", callback),
 };
 
 export type CompanionApi = typeof api;

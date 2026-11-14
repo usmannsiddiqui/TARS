@@ -34,6 +34,13 @@ export type IpcRouterDeps = {
   };
   /** Event-driven hand-off of consented local evidence to the cloud. */
   cloud: { trigger(): Promise<void> };
+  /** Window control. Called only from the user's own clicks in the renderer; never on a timer or event. */
+  windows: {
+    openPanel(projectId?: string): void;
+    openApp(projectId?: string): void;
+    closePanel(): void;
+    setPetVisible(visible: boolean): void;
+  };
 };
 
 const SourceChoiceSchema = z.strictObject({
@@ -45,6 +52,8 @@ const SourceRefSchema = z.strictObject({ sourceId: z.string().min(1).max(100) })
 type SourceRef = z.infer<typeof SourceRefSchema>;
 const CloudConsentSchema = SourceRefSchema.extend({ enabled: z.boolean() });
 type CloudConsent = z.infer<typeof CloudConsentSchema>;
+const WindowTargetSchema = z.strictObject({ projectId: ProjectIdSchema.optional() });
+type WindowTarget = z.infer<typeof WindowTargetSchema>;
 
 // Payload schemas per channel. None accepts an ownerId: the main process supplies it.
 const routes = {
@@ -84,6 +93,23 @@ const routes = {
   "cloud:online": {
     payload: z.undefined(),
     run: async (deps: IpcRouterDeps) => void deps.cloud.trigger(),
+  },
+  // Window routes need no owner: they show what the renderer already subscribes to.
+  "window:openPanel": {
+    payload: WindowTargetSchema,
+    run: async (deps: IpcRouterDeps, { projectId }: WindowTarget) => deps.windows.openPanel(projectId),
+  },
+  "window:openApp": {
+    payload: WindowTargetSchema,
+    run: async (deps: IpcRouterDeps, { projectId }: WindowTarget) => deps.windows.openApp(projectId),
+  },
+  "window:closePanel": {
+    payload: z.undefined(),
+    run: async (deps: IpcRouterDeps) => deps.windows.closePanel(),
+  },
+  "pet:setVisible": {
+    payload: z.strictObject({ visible: z.boolean() }),
+    run: async (deps: IpcRouterDeps, { visible }: { visible: boolean }) => deps.windows.setPetVisible(visible),
   },
   "auth:idToken": {
     payload: z.strictObject({ forceRefresh: z.boolean() }),

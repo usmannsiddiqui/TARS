@@ -4,7 +4,15 @@ A Mac-first companion app for entrepreneurs with ADHD: quick capture, project-sc
 Electron + React + TypeScript desktop app; Convex for owner-isolated cloud state and push subscriptions; Auth0 for native sign-in.
 Captures are saved first to an encrypted local SQLite queue, so they survive restarts and offline use.
 The renderer is sandboxed and talks to the main process only through a narrow, schema-validated IPC API.
-Status: foundation only. Live Auth0 sign-in is implemented but **unverified** (no tenant yet).
+Status: foundation plus the first real UI. Live Auth0 sign-in is implemented but **unverified** (no tenant yet).
+
+## The app
+
+Three windows from one renderer: the full app (Today across projects, a project with its prepared work and editable
+run-through, What I remember, Connections), a small always-on-top pet that never takes focus on its own, and the
+compact panel the pet opens (current context, one next action, Open app). Every source starts off; capture works
+before any source is connected. `tests/e2e/harness/` is a test-only page that mounts the same screens with
+illustrative props for visual review; it is never bundled into the app.
 
 ## Scripts (run from the repo root, with pnpm)
 
@@ -12,7 +20,7 @@ Status: foundation only. Live Auth0 sign-in is implemented but **unverified** (n
 | --- | --- |
 | `pnpm test:unit` | Vitest unit tests in `tests/unit` |
 | `pnpm test:integration` | Vitest integration tests in `tests/integration` (Convex) |
-| `pnpm test:e2e` | Playwright drives the packaged app (`pnpm package:mac` first) |
+| `pnpm test:e2e` | Playwright drives the packaged app (`pnpm package:mac` first) and the test-only screen harness |
 | `pnpm typecheck` | TypeScript for tests, domain, Convex and every workspace package |
 | `pnpm lint` | ESLint |
 | `pnpm build` | electron-vite build of the desktop app into `apps/desktop/out` |
