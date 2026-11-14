@@ -9,7 +9,7 @@ import { evidenceFields, grantInputFields } from "./schema";
 
 const GrantInputSchema = SourceGrantSchema.omit({ ownerId: true });
 // Non-strict copy drops Convex system fields (_id, _creationTime) when reading a grant row.
-const StoredGrantSchema = z.object(SourceGrantSchema.shape);
+export const StoredGrantSchema = z.object(SourceGrantSchema.shape);
 
 /** Create or change the caller's grant for one source. A revoke is a new version, state "revoked". */
 export const setGrant = mutation({
