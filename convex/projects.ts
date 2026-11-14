@@ -14,7 +14,7 @@ const MAX_NEXT_STEP_LENGTH = 500;
 // require `userInitiated: v.literal(true)` call them. Capture, observation, notifications,
 // recommendations and model output have no path here (tests/integration/project-continuity.test.ts).
 
-async function loadFocus(ctx: Pick<QueryCtx, "db">, ownerId: string): Promise<FocusState> {
+export async function loadFocus(ctx: Pick<QueryCtx, "db">, ownerId: string): Promise<FocusState> {
   const row = await ctx.db
     .query("focus")
     .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
