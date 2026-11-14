@@ -456,7 +456,16 @@ describe("connection seam", () => {
     await connectNotion(ctx);
     const rows = await ctx.asAlice.query(api.connections.listConnections, {});
     expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0]!).sort()).toEqual(["availability", "lastCheckedAt", "provider", "sourceId"]);
+    expect(Object.keys(rows[0]!).sort()).toEqual([
+      "availability",
+      "lastCheckedAt",
+      "projectIds",
+      "provider",
+      "selectors",
+      "sourceId",
+      "state",
+      "version",
+    ]);
     const serialized = JSON.stringify(rows);
     expect(serialized).not.toContain(NOTION_TOKEN);
     expect(serialized).not.toContain(NOTION_VERIFICATION);

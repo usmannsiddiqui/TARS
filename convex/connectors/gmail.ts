@@ -536,6 +536,26 @@ export const refresh = action({
   },
 });
 
+/**
+ * Scheduled once by the revoke itself: one users.stop. Best effort; a failure is a visible code
+ * and is not retried. Intake is already denied by the revoked grant either way.
+ */
+export const stopWatch = internalAction({
+  args: { sourceId: v.string(), grantVersion: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { sourceId, grantVersion }): Promise<null> => {
+    const { grant, connection } = await ctx.runQuery(internal.connections.context, { sourceId });
+    if (grant?.version !== grantVersion || grant.state !== "revoked" || connection?.provider !== "gmail") return null;
+    try {
+      await providerJson(`${API}/stop`, { method: "POST", headers: { authorization: `Bearer ${await accessToken(connection)}` } });
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      await ctx.runMutation(internal.connections.markCleanupFailed, { sourceId });
+    }
+    return null;
+  },
+});
+
 /** Re-arms users.watch a day before it lapses. Revalidates the grant; never reads mail. */
 export const renewLease = internalAction({
   args: { sourceId: v.string(), grantVersion: v.number() },

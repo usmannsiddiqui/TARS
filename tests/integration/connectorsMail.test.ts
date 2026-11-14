@@ -95,7 +95,11 @@ async function setup(kind: SourceKind, selectors: string[]) {
     );
   const connection = () => asAlice.query(api.connections.listConnections, {}).then((rows) => rows[0]);
   const stored = () => t.run((ctx) => ctx.db.query("connections").first());
-  const revoke = () => asAlice.mutation(api.evidence.setGrant, { ...grant, version: 2, state: "revoked" });
+  // A revoke schedules one provider cleanup (runAfter 0); wait for it so later stubs see no stray call.
+  const revoke = async () => {
+    await asAlice.mutation(api.evidence.setGrant, { ...grant, version: 2, state: "revoked" });
+    await t.finishAllScheduledFunctions(() => {});
+  };
   return { t, alice, bob, avt, asAlice, sourceId, evidence, scheduled, connection, stored, revoke };
 }
 type Ctx = Awaited<ReturnType<typeof setup>>;
@@ -165,6 +169,7 @@ function googleRoutes(history: HistoryStub = () => json({ historyId: "5200" }), 
     [GOOGLE_CERTS]: () => json({ keys: [googleJwk] }),
     [`${GMAIL}/profile`]: () => json({ emailAddress: EMAIL, historyId: "5000" }),
     [`${GMAIL}/watch`]: () => json({ historyId: "5000", expiration: String(Date.now() + 7 * DAY) }),
+    [`${GMAIL}/stop`]: () => new Response(null, { status: 204 }),
     [`${GMAIL}/history`]: history,
     [`${GMAIL}/messages?`]: () => json({ messages: [] }),
     [`${GMAIL}/messages/`]: (call: Call) => json(gmailMessage(call.url.split("/messages/")[1]!.split("?")[0]!)),
@@ -255,12 +260,15 @@ async function connectOutlook(ctx: Ctx, routes: Record<string, Stub> = microsoft
   return { calls, clientState };
 }
 
-async function postGraph(ctx: Ctx, value: unknown[]) {
-  return ctx.t.fetch(`/outlook/notifications?source=${encodeURIComponent(ctx.sourceId)}`, {
+/** Deliver notifications and wait for the work handed off after the 202 (one runAfter(0) job). */
+async function postGraph(ctx: Ctx, value: unknown[], opts: { settle?: boolean } = {}) {
+  const response = await ctx.t.fetch(`/outlook/notifications?source=${encodeURIComponent(ctx.sourceId)}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ value }),
   });
+  if (opts.settle !== false) await ctx.t.finishAllScheduledFunctions(() => {});
+  return response;
 }
 
 const change = (clientState: string, subscriptionId = "sub-1", id = "mail-1", type = "Message") => ({
@@ -418,6 +426,25 @@ describe("outlook notifications", () => {
     expect(rows[0]!.text).toContain("Subject: OVPCC follow-up");
     expect(rows[0]!.text).toContain("please confirm the pitch slot");
     expect(calls.filter((call) => call.url.startsWith(`${GRAPH}/me/messages/mail-1`))).toHaveLength(2);
+  });
+
+  test("graph_notification_is_acknowledged_before_the_fetch", async () => {
+    const ctx = await setup("outlook-mail", [FOLDER]);
+    const { clientState } = await connectOutlook(ctx);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const calls = stubFetch(microsoftRoutes({ [`${GRAPH}/me/messages/`]: async () => (await held, json(graphMessage)) }));
+    // The provider read is held open; the 202 must not wait for it.
+    const response = await postGraph(ctx, [change(clientState)], { settle: false });
+    expect(response.status).toBe(202);
+    const job = (await ctx.t.run((c) => c.db.system.query("_scheduled_functions").collect())).find((row) =>
+      row.name.includes("processNotifications"),
+    )!;
+    expect(JSON.stringify(job.args)).not.toContain(clientState); // the secret never lands in the job table
+    release();
+    await ctx.t.finishAllScheduledFunctions(() => {});
+    expect(await ctx.evidence()).toHaveLength(1);
+    expect(calls.filter((call) => call.url.startsWith(`${GRAPH}/me/messages/mail-1`))).toHaveLength(1);
   });
 
   test("calendar_event_keeps_timezone_and_cancelled_state", async () => {
@@ -601,9 +628,13 @@ describe("oauth callbacks", () => {
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "availability",
       "lastCheckedAt",
+      "projectIds",
       "provider",
+      "selectors",
       "sourceId",
+      "state",
       "subscriptionExpiresAt",
+      "version",
     ]);
     const serialized = JSON.stringify(rows);
     const stored = (await ctx.stored())!;
@@ -664,5 +695,74 @@ describe("lease renewal", () => {
     });
     expect(calls).toEqual([]);
     expect((await ctx.scheduled()).length).toBe(before); // nothing new scheduled
+  });
+});
+
+describe("grant state and revoke cleanup", () => {
+  test("list_connections_shows_selection_and_state_across_pause_and_resume", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connectGmail(ctx);
+    expect(await ctx.connection()).toMatchObject({ state: "active", version: 1, selectors: [LABEL], projectIds: [ctx.avt.id] });
+    const setState = (state: "active" | "paused" | "revoked") =>
+      ctx.asAlice.mutation(api.evidence.setGrantState, { sourceId: ctx.sourceId, state });
+    await setState("paused");
+    expect(await ctx.connection()).toMatchObject({ state: "paused", version: 2 });
+    await setState("active");
+    expect(await ctx.connection()).toMatchObject({ state: "active", version: 3, selectors: [LABEL] });
+    const asBob = ctx.t.withIdentity({ tokenIdentifier: ctx.bob.ownerId, subject: "bob" });
+    await expect(asBob.mutation(api.evidence.setGrantState, { sourceId: ctx.sourceId, state: "paused" })).rejects.toThrow(
+      /not available/i,
+    );
+    await setState("revoked");
+    await ctx.t.finishAllScheduledFunctions(() => {});
+    expect(await ctx.connection()).toMatchObject({ state: "revoked", version: 4 });
+    await expect(setState("active")).rejects.toThrow(/connect it again/i); // Disconnect is final
+  });
+
+  test.each([
+    { kind: "gmail" as const, selectors: [LABEL], stop: `POST ${GMAIL}/stop` },
+    { kind: "outlook-mail" as const, selectors: [FOLDER], stop: `DELETE ${GRAPH}/subscriptions/sub-1` },
+  ])("revoke_stops_the_provider_watch_once ($kind)", async ({ kind, selectors, stop }) => {
+    const ctx = await setup(kind, selectors);
+    if (kind === "gmail") await connectGmail(ctx);
+    else await connectOutlook(ctx);
+    const calls = stubFetch(kind === "gmail" ? googleRoutes() : microsoftRoutes());
+    await ctx.revoke();
+    const effects = calls.filter((call) => call.method !== "POST" || !call.url.includes("/token")).map((c) => `${c.method} ${c.url}`);
+    expect(effects).toEqual([stop]);
+    expect((await ctx.connection())!.lastError).toBeUndefined();
+  });
+
+  test.each([
+    { kind: "gmail" as const, selectors: [LABEL] },
+    { kind: "outlook-mail" as const, selectors: [FOLDER] },
+  ])("revoke_cleanup_failure_is_visible_and_intake_stays_denied ($kind)", async ({ kind, selectors }) => {
+    const ctx = await setup(kind, selectors);
+    if (kind === "gmail") await connectGmail(ctx);
+    else await connectOutlook(ctx);
+    const failing = () => json({ error: "unavailable" }, 503);
+    const calls = stubFetch(
+      kind === "gmail" ? googleRoutes(undefined, { [`${GMAIL}/stop`]: failing }) : microsoftRoutes({ [`${GRAPH}/subscriptions`]: failing }),
+    );
+    await ctx.revoke();
+    expect(await ctx.connection()).toMatchObject({ state: "revoked", lastError: "watch_stop_failed" });
+    const attempts = calls.filter((call) => call.url.endsWith("/stop") || call.method === "DELETE");
+    expect(attempts).toHaveLength(1); // one best-effort call, no retry
+    expect((await ctx.scheduled()).every((job) => job.name.includes("renewLease"))).toBe(true); // nothing new queued
+    const record = {
+      id: `${ctx.sourceId}:late:1`,
+      ownerId: ctx.alice.ownerId,
+      sourceId: ctx.sourceId,
+      externalId: "late",
+      version: "1",
+      text: "Illustrative late delivery.",
+      occurredAt: NOW.toISOString(),
+      receivedAt: NOW.toISOString(),
+      projectIds: [ctx.avt.id],
+      grantVersion: 2,
+      freshness: "current",
+      origin: "live",
+    };
+    expect(await ctx.t.mutation(internal.evidence.ingest, { ownerId: ctx.alice.ownerId, sourceId: ctx.sourceId, record })).toBe("denied");
   });
 });

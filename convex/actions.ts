@@ -37,6 +37,9 @@ const normalizePage = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 const receipt = v.object({
   id: v.string(),
+  kind: v.union(v.literal("update-note"), v.literal("send-mail")),
+  destination: v.string(), // the address or Notion page id the user named
+  revision: v.string(), // the artifact revision the instruction was bound to
   state: v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("unknown")),
   externalId: v.optional(v.string()),
   verifiedAt: v.optional(v.string()),
@@ -50,6 +53,9 @@ const clarify = (reason: string): Clarification => ({ status: "needs-clarificati
 
 const toReceipt = (row: Doc<"actions">): Receipt => ({
   id: row._id,
+  kind: row.kind,
+  destination: row.destination,
+  revision: row.revision,
   state: row.state,
   logState: row.logState,
   ...(row.externalId === undefined ? {} : { externalId: row.externalId }),
@@ -383,6 +389,25 @@ export const setLogDestination = mutation({
     if (existing === null) await ctx.db.insert("logDestinations", next);
     else await ctx.db.replace(existing._id, next);
     return null;
+  },
+});
+
+/**
+ * What the chooser shows as set. A Notion page id is a cloud id and is returned as the label; an
+ * Obsidian target is an opaque hash with no stored label, so none is returned.
+ */
+export const getLogDestination = query({
+  args: { projectId: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({ kind: v.union(v.literal("notion"), v.literal("obsidian")), label: v.optional(v.string()) }),
+  ),
+  handler: async (ctx, { projectId }) => {
+    const ownerId = await requireOwnerId(ctx);
+    await requireOwnedProject(ctx, ownerId, projectId);
+    const row = await loadLogDestination(ctx, ownerId, projectId);
+    if (row === null) return null;
+    return row.kind === "notion" ? { kind: row.kind, label: row.target } : { kind: row.kind };
   },
 });
 

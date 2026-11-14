@@ -219,16 +219,42 @@ export const acceptWithheld = mutation({
   },
 });
 
-/** The user dismisses a withheld item: it is removed from review and stays unused. */
+/**
+ * The user dismisses a withheld item: it leaves review and becomes a suppression (key + evidence
+ * IDs, no value), the same tombstone `forget` keeps, so preparation does not propose it again until
+ * `allowRelearning` lifts it. Evidence is never touched.
+ */
 export const dismissWithheld = mutation({
   args: { id: v.string() },
   returns: v.null(),
   handler: async (ctx, { id }) => {
-    const row = await requireOwnedReview(ctx, await requireOwnerId(ctx), id);
+    const ownerId = await requireOwnerId(ctx);
+    const row = await requireOwnedReview(ctx, ownerId, id);
+    await suppress(ctx, ownerId, row.projectId, row.key, row.evidenceIds);
     await ctx.db.delete(row._id);
     return null;
   },
 });
+
+/** Activate (or create) the tombstone for this key and scope, adding the evidence IDs. */
+async function suppress(ctx: MutationCtx, ownerId: string, projectId: string | undefined, key: string, evidenceIds: string[]) {
+  const tombstones = await ctx.db
+    .query("suppressions")
+    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+    .collect();
+  const existing = tombstones.find((row) => row.key === key && row.projectId === projectId);
+  if (existing === undefined) {
+    await ctx.db.insert("suppressions", {
+      ownerId,
+      ...(projectId === undefined ? {} : { projectId }),
+      key,
+      evidenceIds,
+      active: true,
+    });
+  } else {
+    await ctx.db.patch(existing._id, { active: true, evidenceIds: [...new Set([...existing.evidenceIds, ...evidenceIds])] });
+  }
+}
 
 /**
  * Forget a key in a project (or globally when projectId is omitted): delete the active facts,
@@ -255,22 +281,7 @@ export const forget = mutation({
     for (const row of forgotten) await ctx.db.delete(row._id);
     const evidenceIds = [...new Set(forgotten.flatMap((row) => row.evidenceIds))];
 
-    const tombstones = await ctx.db
-      .query("suppressions")
-      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
-      .collect();
-    const existing = tombstones.find((row) => row.key === key && row.projectId === projectId);
-    if (existing === undefined) {
-      await ctx.db.insert("suppressions", {
-        ownerId,
-        ...(projectId === undefined ? {} : { projectId }),
-        key,
-        evidenceIds,
-        active: true,
-      });
-    } else {
-      await ctx.db.patch(existing._id, { active: true, evidenceIds: [...new Set([...existing.evidenceIds, ...evidenceIds])] });
-    }
+    await suppress(ctx, ownerId, projectId, key, evidenceIds);
 
     const prepared = await ctx.db
       .query("preparedWork")

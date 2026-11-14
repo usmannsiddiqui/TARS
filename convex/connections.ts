@@ -25,7 +25,10 @@ async function loadContext(ctx: QueryCtx, sourceId: string): Promise<SourceConte
   return { grant: grantRow === null ? null : StoredGrantSchema.parse(grantRow), connection };
 }
 
-/** Status of the caller's connections for the UI. Never includes credentials or secrets. */
+/**
+ * Status of the caller's connections for the UI, with the grant's state, version, selection and
+ * projects (cloud selectors are ids, returned to their owner). Never credentials or secrets.
+ */
 export const listConnections = query({
   args: {},
   returns: v.array(
@@ -36,6 +39,10 @@ export const listConnections = query({
       lastCheckedAt: v.optional(v.string()),
       lastError: v.optional(v.string()),
       subscriptionExpiresAt: v.optional(v.number()),
+      state: v.string(),
+      version: v.number(),
+      selectors: v.array(v.string()),
+      projectIds: v.array(v.string()),
     }),
   ),
   handler: async (ctx) => {
@@ -44,14 +51,24 @@ export const listConnections = query({
       .query("connections")
       .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
       .collect();
-    return rows.map((row) => ({
-      sourceId: row.sourceId,
-      provider: row.provider,
-      availability: row.availability,
-      ...(row.lastCheckedAt === undefined ? {} : { lastCheckedAt: row.lastCheckedAt }),
-      ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
-      ...(row.subscriptionExpiresAt === undefined ? {} : { subscriptionExpiresAt: row.subscriptionExpiresAt }),
-    }));
+    const out = [];
+    for (const row of rows) {
+      const { grant } = await loadContext(ctx, row.sourceId);
+      if (grant === null || grant.ownerId !== ownerId) continue;
+      out.push({
+        sourceId: row.sourceId,
+        provider: row.provider,
+        availability: row.availability,
+        ...(row.lastCheckedAt === undefined ? {} : { lastCheckedAt: row.lastCheckedAt }),
+        ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
+        ...(row.subscriptionExpiresAt === undefined ? {} : { subscriptionExpiresAt: row.subscriptionExpiresAt }),
+        state: grant.state,
+        version: grant.version,
+        selectors: grant.selectors,
+        projectIds: grant.projectIds,
+      });
+    }
+    return out;
   },
 });
 
@@ -134,6 +151,17 @@ export const setStatus = internalMutation({
       lastError: status.lastError,
       ...(checkedAt === undefined ? {} : { lastCheckedAt: checkedAt }),
     });
+    return null;
+  },
+});
+
+/** After a revoke: record a failed provider cleanup as a visible code. The grant stays revoked. */
+export const markCleanupFailed = internalMutation({
+  args: { sourceId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { sourceId }) => {
+    const { connection } = await loadContext(ctx, sourceId);
+    if (connection !== null) await ctx.db.patch(connection._id, { lastError: "watch_stop_failed" });
     return null;
   },
 });

@@ -432,6 +432,27 @@ describe("project memory", () => {
     expect(await s.memory(guides)).toEqual([]);
   });
 
+  test("dismissed_withheld_item_is_not_proposed_again_until_relearning_is_allowed", async () => {
+    const s = await setup();
+    const { guides, item } = await withheldParaphrase(s);
+    const before = await s.asAlice.query(api.evidence.listCurrentEvidence, { projectId: guides });
+    await s.asAlice.mutation(api.memory.dismissWithheld, { id: item.id });
+    const again = () =>
+      stubModel(completed(prepared({ evidenceIds: item.evidenceIds, facts: [{ key: item.key, value: item.value, evidenceIds: item.evidenceIds }] })));
+
+    again();
+    expect(await s.prepare(guides)).toEqual({ status: "ready" });
+    expect(await s.asAlice.query(api.memory.listWithheld, { projectId: guides })).toEqual([]);
+    expect(await s.memory(guides)).toEqual([]);
+    expect(await s.asAlice.query(api.evidence.listCurrentEvidence, { projectId: guides })).toEqual(before); // originals untouched
+
+    await s.asAlice.mutation(api.memory.allowRelearning, { projectId: guides, key: item.key });
+    again();
+    await s.prepare(guides);
+    // Lifted: proposed again (still withheld for review, since it resembles the earlier forget).
+    expect((await s.asAlice.query(api.memory.listWithheld, { projectId: guides })).map((w) => w.key)).toEqual([item.key]);
+  });
+
   test("withheld_items_are_owner_only", async () => {
     const s = await setup();
     const { guides, item } = await withheldParaphrase(s);

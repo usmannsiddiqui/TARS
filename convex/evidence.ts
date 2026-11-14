@@ -2,6 +2,7 @@ import { ConvexError, v, type Infer } from "convex/values";
 import { z } from "zod";
 import { decideIntake } from "../packages/domain/src/evidence";
 import { EvidenceSchema, SourceGrantSchema, type SourceGrant } from "../packages/domain/src/types";
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
@@ -32,13 +33,51 @@ export const setGrant = mutation({
     if (existing.ownerId !== ownerId) {
       throw new ConvexError("Source is not available");
     }
-    if (args.version <= existing.version) {
-      throw new ConvexError(`Grant version must be greater than ${existing.version}`);
-    }
-    await ctx.db.replace(existing._id, { ...args, ownerId });
+    await replaceGrant(ctx, existing, { ...args, ownerId });
     return null;
   },
 });
+
+/** Pause, resume or disconnect one of the caller's sources: the next version, nothing else changed. */
+export const setGrantState = mutation({
+  args: { sourceId: v.string(), state: v.union(v.literal("active"), v.literal("paused"), v.literal("revoked")) },
+  returns: v.null(),
+  handler: async (ctx, { sourceId, state }) => {
+    const ownerId = await requireOwnerId(ctx);
+    const existing = await ctx.db
+      .query("grants")
+      .withIndex("by_source", (q) => q.eq("id", sourceId))
+      .unique();
+    if (existing === null || existing.ownerId !== ownerId) throw new ConvexError("Source is not available");
+    // Revoke already stopped the provider watch; coming back is a new connect, not a resume.
+    if (existing.state === "revoked") throw new ConvexError("This source was disconnected; connect it again");
+    const { _id, _creationTime, ...grant } = existing;
+    void [_id, _creationTime];
+    await replaceGrant(ctx, existing, { ...grant, state, version: existing.version + 1 });
+    return null;
+  },
+});
+
+const WATCHED_KINDS = new Set(["gmail", "outlook-mail", "outlook-calendar"]);
+
+/**
+ * The one way a stored grant changes: a strictly newer version. Entering "revoked" on a connected
+ * Gmail/Outlook source hands one provider cleanup (stop watch / delete subscriptions) to an action.
+ */
+async function replaceGrant(ctx: MutationCtx, existing: Doc<"grants">, next: Omit<Doc<"grants">, "_id" | "_creationTime">) {
+  if (next.version <= existing.version) {
+    throw new ConvexError(`Grant version must be greater than ${existing.version}`);
+  }
+  await ctx.db.replace(existing._id, next);
+  if (next.state !== "revoked" || existing.state === "revoked" || !WATCHED_KINDS.has(existing.kind)) return;
+  const connection = await ctx.db
+    .query("connections")
+    .withIndex("by_source", (q) => q.eq("sourceId", existing.id))
+    .unique();
+  if (connection === null) return;
+  const stop = existing.kind === "gmail" ? internal.connectors.gmail.stopWatch : internal.connectors.outlook.stopSubscriptions;
+  await ctx.scheduler.runAfter(0, stop, { sourceId: existing.id, grantVersion: next.version });
+}
 
 export const intakeResult = v.union(v.literal("accepted"), v.literal("duplicate"), v.literal("denied"));
 

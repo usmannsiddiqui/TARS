@@ -464,6 +464,32 @@ async function unsubscribe(connection: Doc<"connections">, token: string): Promi
   }
 }
 
+/**
+ * Scheduled once by the revoke itself: delete each Graph subscription. Best effort; any failure
+ * is a visible code and is not retried. Intake is already denied by the revoked grant either way.
+ */
+export const stopSubscriptions = internalAction({
+  args: { sourceId: v.string(), grantVersion: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { sourceId, grantVersion }): Promise<null> => {
+    const { grant, connection } = await ctx.runQuery(internal.connections.context, { sourceId });
+    if (grant?.version !== grantVersion || grant.state !== "revoked" || connection === null || !isKind(connection.provider)) {
+      return null;
+    }
+    try {
+      const secrets = (await openCredential(connection.credential)) as Secrets;
+      const token = await accessToken(ctx, sourceId, connection.provider, secrets);
+      for (const id of Object.keys(JSON.parse(secrets.subscriptions) as Record<string, string>)) {
+        await graph(`/subscriptions/${encodeURIComponent(id)}`, token, { method: "DELETE" });
+      }
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      await ctx.runMutation(internal.connections.markCleanupFailed, { sourceId });
+    }
+    return null;
+  },
+});
+
 // ---- Notifications
 
 const status = (code: number) => new Response(null, { status: code });
@@ -480,7 +506,6 @@ export const handleNotification = httpAction(async (ctx, request) => {
   if (sourceId === null) return status(404);
   const { grant, connection } = await ctx.runQuery(internal.connections.context, { sourceId });
   if (grant === null || connection === null || !isKind(connection.provider)) return status(404);
-  const kind = connection.provider;
 
   let notes: Notification[];
   try {
@@ -493,48 +518,77 @@ export const handleNotification = httpAction(async (ctx, request) => {
   // clientState is the secret only Graph and we know; a mismatch is not from our subscription.
   if (notes.length === 0 || notes.some((note) => note.clientState !== secrets.clientState)) return status(401);
   if (!active(grant)) return status(202);
+  // Graph wants a 2xx within 3 s and throttles slow endpoints, so the work runs after the 202.
+  // Ids only are handed off: the clientState secret never goes into the scheduled job's args.
+  await ctx.scheduler.runAfter(0, internal.connectors.outlook.processNotifications, {
+    sourceId,
+    notes: notes.map((note) => ({
+      subscriptionId: note.subscriptionId ?? "",
+      ...(note.lifecycleEvent === undefined ? {} : { lifecycleEvent: note.lifecycleEvent }),
+      ...(typeof note.resourceData?.id === "string" ? { resourceId: note.resourceData.id } : {}),
+    })),
+  });
+  return status(202);
+});
 
-  const subscriptions = JSON.parse(secrets.subscriptions) as Record<string, string>;
-  const ours = notes.filter((note) => subscriptions[note.subscriptionId ?? ""] !== undefined);
-  const changes = ours.filter((note) => note.lifecycleEvent === undefined && typeof note.resourceData?.id === "string");
-  let token: string | undefined;
-  const getToken = async () => (token ??= await accessToken(ctx, sourceId, kind, secrets));
-  try {
-    for (const note of ours.filter((n) => n.lifecycleEvent !== undefined)) {
-      const id = note.subscriptionId!;
-      if (note.lifecycleEvent === "missed") {
-        await ctx.runMutation(internal.connections.setStatus, { sourceId, availability: "stale", lastError: "notifications_missed" });
-      } else if (note.lifecycleEvent === "reauthorizationRequired") {
-        await graph(`/subscriptions/${encodeURIComponent(id)}/reauthorize`, await getToken(), { method: "POST" });
-      } else if (note.lifecycleEvent === "subscriptionRemoved") {
-        const created = await subscribe(sourceId, kind, subscriptions[id]!, secrets.clientState, await getToken());
-        subscriptions[created.id] = subscriptions[id]!;
-        delete subscriptions[id];
-        secrets.subscriptions = JSON.stringify(subscriptions);
-        await ctx.runMutation(internal.connectors.outlook.storeCredential, { sourceId, credential: await sealCredential(secrets) });
-        // Changes made while it was gone were not delivered.
-        await ctx.runMutation(internal.connections.setStatus, { sourceId, availability: "stale", lastError: "subscription_removed" });
-      }
-    }
-    if (changes.length > 0) {
-      if (connection.availability !== "connected") {
-        await readSelected(ctx, grant, kind, await getToken()); // this event repairs a stale source
-      } else {
-        const items: ProviderItem[] = [];
-        for (const note of changes) {
-          const item = await fetchChanged(grant, kind, subscriptions[note.subscriptionId!]!, note.resourceData!.id as string, await getToken());
-          if (item !== null) items.push(item);
+/**
+ * One validated delivery, run once right after the 202. Not retried: a failure is a visible status,
+ * and the next provider event (or the user's Refresh) repairs a source that is not connected.
+ */
+export const processNotifications = internalAction({
+  args: {
+    sourceId: v.string(),
+    notes: v.array(
+      v.object({ subscriptionId: v.string(), lifecycleEvent: v.optional(v.string()), resourceId: v.optional(v.string()) }),
+    ),
+  },
+  returns: v.null(),
+  handler: async (ctx, { sourceId, notes }): Promise<null> => {
+    const { grant, connection } = await ctx.runQuery(internal.connections.context, { sourceId });
+    // Revalidated: a revoke or pause that landed after the 202 wins.
+    if (grant === null || connection === null || !isKind(connection.provider) || !active(grant)) return null;
+    const kind = connection.provider;
+    const secrets = (await openCredential(connection.credential)) as Secrets;
+    const subscriptions = JSON.parse(secrets.subscriptions) as Record<string, string>;
+    const ours = notes.filter((note) => subscriptions[note.subscriptionId] !== undefined);
+    const changes = ours.filter((note) => note.lifecycleEvent === undefined && note.resourceId !== undefined);
+    let token: string | undefined;
+    const getToken = async () => (token ??= await accessToken(ctx, sourceId, kind, secrets));
+    try {
+      for (const note of ours.filter((n) => n.lifecycleEvent !== undefined)) {
+        const id = note.subscriptionId;
+        if (note.lifecycleEvent === "missed") {
+          await ctx.runMutation(internal.connections.setStatus, { sourceId, availability: "stale", lastError: "notifications_missed" });
+        } else if (note.lifecycleEvent === "reauthorizationRequired") {
+          await graph(`/subscriptions/${encodeURIComponent(id)}/reauthorize`, await getToken(), { method: "POST" });
+        } else if (note.lifecycleEvent === "subscriptionRemoved") {
+          const created = await subscribe(sourceId, kind, subscriptions[id]!, secrets.clientState, await getToken());
+          subscriptions[created.id] = subscriptions[id]!;
+          delete subscriptions[id];
+          secrets.subscriptions = JSON.stringify(subscriptions);
+          await ctx.runMutation(internal.connectors.outlook.storeCredential, { sourceId, credential: await sealCredential(secrets) });
+          // Changes made while it was gone were not delivered.
+          await ctx.runMutation(internal.connections.setStatus, { sourceId, availability: "stale", lastError: "subscription_removed" });
         }
-        await ingestItems(ctx, grant, items);
-        await markChecked(ctx, sourceId);
       }
+      if (changes.length > 0) {
+        if (connection.availability !== "connected") {
+          await readSelected(ctx, grant, kind, await getToken()); // this event repairs a stale source
+        } else {
+          const items: ProviderItem[] = [];
+          for (const note of changes) {
+            const item = await fetchChanged(grant, kind, subscriptions[note.subscriptionId]!, note.resourceId!, await getToken());
+            if (item !== null) items.push(item);
+          }
+          await ingestItems(ctx, grant, items);
+          await markChecked(ctx, sourceId);
+        }
+      }
+    } catch (error) {
+      await markFailed(ctx, sourceId, error); // visible; the next event or Refresh repairs it
     }
-    return status(202);
-  } catch (error) {
-    const failure = await markFailed(ctx, sourceId, error);
-    // 503 asks Graph to redeliver (its own backoff, up to 4 h); missing access will not fix itself.
-    return status(failure.availability === "needs-retry" ? 503 : 202);
-  }
+    return null;
+  },
 });
 
 // ---- User Refresh and lease renewal

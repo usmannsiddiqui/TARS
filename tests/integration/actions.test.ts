@@ -491,6 +491,41 @@ describe("instructed actions", () => {
       s.asAlice.mutation(api.actions.setLogDestination, { projectId: s.projectId, kind: "notion", target: "some-other-page" }),
     ).rejects.toThrow(/write target/);
   });
+
+  test("receipts_say_what_was_sent_where_after_reload", async () => {
+    const gmail = fakeGmail();
+    stubFetch({ ...gmail.routes, ...fakeNotion().routes });
+    const s = await setup();
+    const receipt = await s.receiptOf(await s.intent());
+    const expected = { kind: "send-mail", destination: BOB, revision: "1" };
+    expect(receipt).toMatchObject(expected);
+    expect(await s.asAlice.query(api.actions.getReceipt, { actionId: receipt.id })).toMatchObject(expected);
+    expect(await s.asAlice.query(api.actions.listReceipts, { projectId: s.projectId })).toMatchObject([expected]);
+  });
+
+  test("log_destination_is_readable_by_its_owner_only", async () => {
+    stubFetch({});
+    const s = await setup();
+    expect(await s.asAlice.query(api.actions.getLogDestination, { projectId: s.projectId })).toEqual({ kind: "notion", label: LOG_PAGE });
+    const empty = await setup({ logDestination: false });
+    expect(await empty.asAlice.query(api.actions.getLogDestination, { projectId: empty.projectId })).toBeNull();
+    const asBob = s.t.withIdentity({ tokenIdentifier: "bob-token", subject: "bob" });
+    await expect(asBob.query(api.actions.getLogDestination, { projectId: s.projectId })).rejects.toThrow(/Project not found/);
+    // An Obsidian target is an opaque hash, not a label: none is returned.
+    await s.asAlice.mutation(api.evidence.setGrant, {
+      id: "source-obsidian",
+      kind: "obsidian",
+      selectors: ["vault-hash"],
+      projectIds: [s.projectId],
+      read: true,
+      writeTargets: ["note-hash-1"],
+      cloudProcessing: true,
+      version: 1,
+      state: "active",
+    });
+    await s.asAlice.mutation(api.actions.setLogDestination, { projectId: s.projectId, kind: "obsidian", target: "note-hash-1" });
+    expect(await s.asAlice.query(api.actions.getLogDestination, { projectId: s.projectId })).toEqual({ kind: "obsidian" });
+  });
 });
 
 describe("outlook send", () => {
