@@ -26,8 +26,6 @@ export type EditorActions = {
 
 export type ProjectViewProps = {
   name: string;
-  /** The project's place in the rail (1-based), shown as its section mark. */
-  index: number;
   isFocus: boolean;
   mode?: "help" | "improve";
   /** undefined = nothing prepared yet; `preparedState` overrides with loading / retry states. */
@@ -116,9 +114,6 @@ export function ProjectView(props: ProjectViewProps) {
   return (
     <div className="screen project">
       <header className="screen-head">
-        <span className="section-mark" aria-hidden="true">
-          SECTION {String(props.index).padStart(2, "0")}
-        </span>
         <h1>{props.name}</h1>
         <p className="screen-sub">
           {props.isFocus ? (

@@ -257,7 +257,7 @@ const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; und
   ...(r.undoRevision ? { undoRevision: r.undoRevision } : {}),
 });
 
-export function ProjectLive(props: { projectId: string; name: string; index: number; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
+export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
@@ -343,7 +343,6 @@ export function ProjectLive(props: { projectId: string; name: string; index: num
   return (
     <ProjectView
       name={props.name}
-      index={props.index}
       isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}

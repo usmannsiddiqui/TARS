@@ -24,6 +24,8 @@ test.afterAll(async () => {
 const scene = (name: string, options?: Parameters<Harness["open"]>[1]) => harness.open(name, options);
 const calls = (page: Page) => page.evaluate(() => (globalThis as unknown as { __calls: unknown[][] }).__calls);
 const focused = (page: Page) => page.locator("*:focus");
+/** Today types its recommended step once; photographs wait until the sentence stands whole. */
+const typed = (page: Page) => page.waitForFunction(() => !(globalThis as unknown as { CSS: { highlights: { has(n: string): boolean } } }).CSS.highlights.has("type-rest"));
 const style = (page: Page, selector: string, property: string) =>
   page.locator(selector).first().evaluate((el, property) => el.ownerDocument.defaultView.getComputedStyle(el)[property] as string, property);
 
@@ -444,6 +446,7 @@ test("ui_shots", async () => {
   // Harness renders (ILLUSTRATIVE props), at the real window sizes.
   for (const name of ["today", "project", "memory", "connections"]) {
     const page = await scene(name);
+    await typed(page);
     await page.screenshot({ path: join(SHOTS, `harness-${name}-1200x800.png`) });
     await page.close();
   }
@@ -463,6 +466,7 @@ test("ui_shots", async () => {
     ["today-reentry", "reentry"],
   ] as const) {
     const page = await scene(name, { size: { width: 1200, height: 1300 } });
+    await typed(page);
     await page.screenshot({ path: join(SHOTS, `harness-${file}-1200x1300.png`) });
     await page.close();
   }
@@ -489,10 +493,13 @@ test("ui_shots", async () => {
     await page.close();
   }
   for (const state of ["idle", "working", "done"]) {
-    const page = await scene(`pet-${state}`, { size: { width: 184, height: 136 } });
-    await page.addStyleTag({ content: "html { background: #3a3f46 !important }" }); // stand-in desktop behind the transparent window
-    await page.screenshot({ path: join(SHOTS, `harness-pet-${state}-184x136.png`) });
-    await page.close();
+    // Stand-in desktops behind the transparent window: light, mid and dark wallpaper.
+    for (const [ground, tone] of [["#ecebe8", "light"], ["#7d8187", "mid"], ["#1d2024", "dark"]]) {
+      const page = await scene(`pet-${state}`, { size: { width: 184, height: 136 } });
+      await page.addStyleTag({ content: `html { background: ${ground} !important }` });
+      await page.screenshot({ path: join(SHOTS, `harness-pet-${state}-${tone}-184x136.png`) });
+      await page.close();
+    }
   }
   // Live packaged app with a seeded (unconfirmed) session.
   const userData = await signedInProfile();

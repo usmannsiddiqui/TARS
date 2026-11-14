@@ -131,12 +131,23 @@ export function StateNote({ state, children }: { state: Honest; children?: React
   );
 }
 
+/** A state as its glyph and one word, for a compact place such as a pill; the detail lives elsewhere. */
+export function StateTag({ state, id }: { state: Honest; id?: string }) {
+  return (
+    <span className="state-tag" data-kind={state.kind} id={id}>
+      <Glyph kind={state.kind} />
+      {HONEST_LABEL[state.kind]}
+    </span>
+  );
+}
+
 export const PET_LABEL: Record<PetState, string> = { idle: "Idle", working: "Working", done: "Done" };
 
 // TARS, drawn from the owner's photo: four tall brushed-aluminium slabs side by side, a small dark
-// terminal screen set across the two inner slabs, amber "TARS" running up the lower centre with a
-// dot-matrix beside it. Each outer slab is drawn once at rest and posed by a transform, so a state change
-// glides between poses (CSS transition on the group). Units: slabs are 15 x 62, centred on x = 0.
+// screen set across the two inner slabs with two soft oval eyes, black "TARS" running up the lower
+// centre with a dot-matrix beside it. Each outer slab is drawn once at rest and posed by a transform, so
+// a state change glides between poses (CSS transition on the group). Units: slabs are 15 x 62, centred
+// on x = 0.
 const SLAB_X = { s1: -31.5, s2: -15.5, s3: 0.5, s4: 16.5 } as const;
 type Slab = keyof typeof SLAB_X;
 const W = 15;
@@ -151,7 +162,9 @@ const POSE: Record<PetState, Partial<Record<Slab, string>>> = {
 };
 // Flat aluminium planes: a lit left edge, the body, a brushed mid band, a shaded right band and edge.
 const AL = { lit: "#CDD0D0", body: "#B4B8BA", brush: "#ABAFB2", streak: "#C2C5C7", shade: "#989DA0", edge: "#73787B", cap: "#DADCDC", foot: "#6F7477", rivet: "#858A8D" };
-const AMBER_INK = "#D9992E";
+const LETTER_INK = "#18191A";
+const EYE = "#E7E5EF"; // pale lilac-white, flat: eyes, never a light
+export const SIGNAL = "#F25A1D";
 
 function SlabShape({ x }: { x: number }) {
   return (
@@ -181,11 +194,61 @@ const DOTS = [
 ] as const;
 
 /**
+ * The face on TARS's screen, one mark group per state so it reads by shape: idle, two soft ovals that
+ * blink; working, the eyes narrowed in concentration beside the signal-orange active light; done, two
+ * closed happy arcs. `small` leaves room under the eyes for the pet's state word.
+ */
+function Face({ state, small }: { state: PetState; small: boolean }) {
+  const y = small ? 7.7 : 11;
+  const dx = small ? 4.6 : 5.6;
+  const rx = small ? 1.6 : 2.3;
+  const ry = small ? 1.95 : 3.1;
+  return (
+    <g className="pet-mark">
+      {state === "idle" && (
+        <g className="pet-eyes" fill={EYE}>
+          <ellipse cx={-dx} cy={y} rx={rx} ry={ry} />
+          <ellipse cx={dx} cy={y} rx={rx} ry={ry} />
+        </g>
+      )}
+      {state === "working" && (
+        <>
+          <ellipse cx={-dx} cy={y + ry * 0.35} rx={rx * 1.05} ry={ry * 0.5} fill={EYE} />
+          <ellipse cx={dx} cy={y + ry * 0.35} rx={rx * 1.05} ry={ry * 0.5} fill={EYE} />
+          <circle className="pet-tick" cx="11.4" cy="6.4" r={small ? 1 : 1.2} fill={SIGNAL} />
+        </>
+      )}
+      {state === "done" && (
+        <path
+          d={`M${-dx - rx} ${y + 0.6}Q${-dx} ${y - ry * 1.2} ${-dx + rx} ${y + 0.6}M${dx - rx} ${y + 0.6}Q${dx} ${y - ry * 1.2} ${dx + rx} ${y + 0.6}`}
+          fill="none"
+          stroke={EYE}
+          strokeWidth={small ? 1.1 : 1.4}
+          strokeLinecap="round"
+        />
+      )}
+    </g>
+  );
+}
+
+/**
  * TARS on transparency. `variant` sets its frame: "tile" is the pet window (room for every pose, and the
  * state word on its own screen as real text); "mark" and "hero" are framed tight on the figure. States
- * differ by pose and by the screen marks, never by colour or motion alone.
+ * differ by pose and by the face, never by colour or motion alone. The screen sits in `.pet-head`, whose
+ * `.head-face` and `.head-side` the desk scene moves to turn the head; `box` places the figure inside
+ * another SVG.
  */
-export function PetFigure({ state, variant = "tile", className }: { state: PetState; variant?: "tile" | "mark" | "hero"; className?: string }) {
+export function PetFigure({
+  state,
+  variant = "tile",
+  className,
+  box,
+}: {
+  state: PetState;
+  variant?: "tile" | "mark" | "hero";
+  className?: string;
+  box?: { x: number; y: number; width: number; height: number };
+}) {
   const pose = POSE[state];
   const tile = variant === "tile";
   const slab = (name: Slab) => {
@@ -205,34 +268,32 @@ export function PetFigure({ state, variant = "tile", className }: { state: PetSt
       viewBox={tile ? "-50 -8 100 73" : "-33 -2 66 66"}
       overflow="visible"
       aria-hidden="true"
+      {...box}
     >
       <rect x="-17" y="1" width="34" height={H - 2} fill="#2F3335" />
       {slab("s1")}
       {slab("s2")}
       {slab("s3")}
       {slab("s4")}
-      <rect x="-15" y="3" width="30" height="15" fill="#1D2122" />
-      <rect x="-14" y="4" width="28" height="13" fill="#0C100F" />
-      <g className="pet-mark" fill={AMBER_INK} stroke={AMBER_INK} transform={tile ? undefined : "translate(0 10.5) scale(1.8) translate(0 -7.5)"}>
-        {state === "idle" && <path d="M-3 7.5h6" strokeWidth="1.1" />}
-        {state === "working" && (
-          <>
-            <rect x="-4.3" y="6.7" width="1.6" height="1.6" stroke="none" />
-            <rect x="-0.8" y="6.7" width="1.6" height="1.6" stroke="none" />
-            <rect className="pet-tick" x="2.7" y="6.7" width="1.6" height="1.6" stroke="none" />
-          </>
-        )}
-        {state === "done" && <path d="M-2.4 7.6 -0.9 9 2.4 6" fill="none" strokeWidth="1.1" />}
+      <g className="pet-head">
+        <rect className="head-side" x="-15" y="3" width="0" height="16" fill="#3E4244" />
+        <g className="head-face">
+          <rect x="-15" y="3" width="30" height="16" fill="#1D2122" />
+          <rect x="-14" y="4" width="28" height="14" fill="#0B0C0D" />
+          <g className="head-eyes">
+            <Face state={state} small={tile} />
+          </g>
+          {tile && (
+            <text className="pet-word" x="0" y="16.4" textAnchor="middle">
+              {PET_LABEL[state]}
+            </text>
+          )}
+        </g>
       </g>
-      {tile && (
-        <text className="pet-word" x="0" y="15.3" textAnchor="middle">
-          {PET_LABEL[state].toUpperCase()}
-        </text>
-      )}
-      <text className="pet-letters" transform="translate(-6.2 57) rotate(-90)" fill={AMBER_INK}>
+      <text className="pet-letters" transform="translate(-6.2 57) rotate(-90)" fill={LETTER_INK}>
         TARS
       </text>
-      <g fill={AMBER_INK}>
+      <g fill={LETTER_INK}>
         {DOTS.map(([c, r]) => (
           <circle key={`${c}${r}`} cx={3.4 + c * 2.8} cy={36 + r * 3.4} r="0.95" />
         ))}

@@ -4,11 +4,6 @@
 
 /* ---------- Project ---------- */
 
-.section-mark {
-  display: block;
-  margin-bottom: 10px;
-}
-
 .project .readout {
   margin-top: 14px;
 }
@@ -194,8 +189,7 @@
   justify-content: space-between;
   gap: 10px 16px;
   padding: 12px 14px;
-  background: var(--rail);
-  border: 1px solid var(--hairline);
+  background: var(--well);
   border-radius: var(--r-control);
 }
 
@@ -220,8 +214,9 @@
 }
 
 .receipt-facts dt {
-  font: 12px/1.5 var(--mono);
-  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
 }
 
 .receipt-facts dd {
@@ -242,8 +237,7 @@
   justify-content: space-between;
   gap: 10px 12px;
   padding: 10px;
-  background: var(--rail);
-  border: 1px solid var(--line);
+  background: var(--well);
   border-radius: var(--r-control);
 }
 
@@ -257,17 +251,19 @@
 .tape-counter {
   min-width: 76px;
   padding: 4px 8px;
-  background: var(--space);
+  background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--r-tag);
-  font: 500 22px/1.1 var(--mono);
-  letter-spacing: 0.04em;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.1;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
 .tape-limit {
-  font: 12px/1.4 var(--mono);
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--ink-2);
 }
 
@@ -301,7 +297,7 @@
 }
 
 .tape-deck[data-state="recording"] .tape-counter {
-  border-color: var(--ink-2);
+  border-color: var(--ink);
 }
 
 /* The running counter: two registered integers stepped by CSS, minutes over the hour, seconds per minute. */
@@ -385,7 +381,6 @@
 .withheld .proposal {
   padding: 14px 16px;
   background: var(--raised);
-  border: 1px solid var(--line);
   border-radius: var(--r-control);
 }
 

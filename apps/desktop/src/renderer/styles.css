@@ -1,50 +1,51 @@
-/* TARS, "lamplight": a ship's console at night in a lived-in megastructure. A deep teal-charcoal ground
-   (night shadow on wet concrete) in four surface steps with 1px lines; warm bone for everything people
-   read. SF Pro for reading, SF Mono for instrument chrome. Amber, a lamp rather than a neon, is the only
-   interactive accent. Oxide red is signage ink for stencilled section marks and nothing else. Muted and
-   flat throughout: no glow, no bloom, no light-emitting gradients. Cards carry a slim header strip, bone
-   for ordinary cards, amber when TARS is speaking. One cinematic surface: the megastructure scene behind
-   TARS on Today. Status always reads by glyph and word, never colour. */
+/* TARS, "front desk": one light colour world, a seamless studio grey (a photographer's backdrop) in a few
+   surface steps, all reading text near-black, set in Helvetica Neue. Black is the loud tone: TARS speaks
+   under a black label, problems sit on a black plate. One flat signal orange (a Braun power light, not a
+   neon) marks only the screen's one primary action, the typewriter cursor and TARS's active light. No
+   gradients, no glow, no coloured shadows. The rail is a sheet of grey glass floating over the canvas.
+   Status always reads by glyph and word, never colour. */
 
 :root {
-  --space: #0e1514;
-  --rail: #121a19;
-  --card: #172120;
-  --raised: #1e2a28;
-  --hover: #253331;
-  --hairline: #2a3633;
-  --line: #3b4845;
-  --ink: #eae2d4;
-  --ink-2: #bcb2a2;
-  --ink-3: #9b9284;
-  --amber: #e09a33;
-  --amber-hi: #eca947;
-  --on-amber: #1a1208;
-  --focus: #efe8da;
-  /* Signage: a bone strip for card headers, patina for state plates, weathered oxide for section marks. */
-  --bone: #cbc1ae;
-  --on-bone: #161c1b;
-  --patina: #2b4541;
-  --oxide: #d0705a;
-  --oxide-deep: #8c3a2a;
-  --stencil: "DIN Condensed", "Avenir Next Condensed", "Helvetica Neue", var(--sans);
-  /* A fine static screen-line texture on card bodies, kept far below text contrast. */
-  --screen-lines: repeating-linear-gradient(0deg, rgb(234 226 212 / 0.022) 0 1px, transparent 1px 3px);
-  /* Weathering for stencils: an alpha mask with small worn-away flecks (shape only, no light). */
-  --weathered: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cpath fill-rule='evenodd' d='M0 0h64v64H0zM9 7h3v1H9zM40 4h1v4h-1zM22 18h2v2h-2zM54 15h4v1h-4zM5 31h1v3H5zM31 29h3v1h-3zM47 36h2v2h-2zM14 47h4v1h-4zM36 51h1v3h-1zM58 49h2v1h-2zM25 60h3v1h-3zM50 26h1v1h-1zM18 38h1v1h-1z'/%3E%3C/svg%3E");
+  /* The studio: wall, floor, and the surfaces that sit in it. */
+  --canvas: #d6d5d2;
+  --floor: #cbcac6;
+  --well: #c9c8c4;
+  --card: #e4e3e0;
+  --raised: #edece9;
+  --paper: #ffffff;
+  --hover: rgb(0 0 0 / 0.05);
+  --hairline: rgb(0 0 0 / 0.1);
+  --line: rgb(0 0 0 / 0.2);
+  --ink: #0b0b0b;
+  --ink-2: #393937;
+  --ink-3: #52514e;
+  --black: #111111;
+  --on-black: #ffffff;
+  --signal: #f25a1d;
+  --signal-press: #e2531a;
+  --on-signal: #0b0b0b;
+  --focus: #0b0b0b;
+  /* The rail's glass: a grey tint solid enough that its text keeps 4.5:1 over anything behind it. */
+  --glass: rgb(229 228 225 / 0.64);
+  --glass-solid: #e2e1de;
 
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace; /* real codes only: webhook URLs and tokens */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --r-card: 12px;
+  --r-card: 14px;
   --r-control: 8px;
   --r-tag: 4px;
+  --r-pill: 999px;
+  --rail-w: 220px;
+  --rail-inset: 10px;
+  --gutter: 40px;
 
   color: var(--ink);
-  font: 15px/1.5 var(--sans);
+  font: 15px/1.45 var(--sans);
+  font-kerning: normal;
   -webkit-font-smoothing: antialiased;
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 *,
@@ -61,7 +62,7 @@ body,
 }
 
 body {
-  background: var(--space);
+  background: var(--canvas);
   overflow: hidden;
 }
 
@@ -71,8 +72,8 @@ body {
 }
 
 ::selection {
-  background: #3d4f4b;
-  color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
 }
 
 h1,
@@ -104,7 +105,7 @@ ol {
 }
 
 .why {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--ink);
 }
 
@@ -113,20 +114,20 @@ ol {
   font-variant-numeric: tabular-nums;
 }
 
-/* A count is an instrument tag. */
 .count {
   display: inline-block;
   margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: var(--r-tag);
-  background: var(--patina);
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: rgb(0 0 0 / 0.08);
   color: var(--ink);
-  font: 600 12px/1.5 var(--mono);
-  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
   vertical-align: 1px;
 }
 
-/* ---------- Controls ---------- */
+/* ---------- Controls: pills ---------- */
 
 button {
   font: inherit;
@@ -145,24 +146,27 @@ button:disabled {
   justify-content: center;
   gap: 8px;
   min-height: 40px;
-  padding: 9px 18px;
-  border: 1px solid transparent;
-  border-radius: var(--r-control);
+  padding: 8px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.25;
   text-align: center;
-  transition: transform 160ms var(--ease-out);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
 }
 
 .primary {
-  background: var(--amber);
-  color: var(--on-amber);
+  background: var(--signal);
+  color: var(--on-signal);
 }
 
 .secondary {
-  background: var(--raised);
-  border-color: var(--line);
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -174,30 +178,32 @@ button:disabled {
 
 .primary:disabled,
 .secondary:disabled {
-  background: var(--card);
+  background: rgb(255 255 255 / 0.4);
   border-color: var(--hairline);
   color: var(--ink-3);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .primary:hover:not(:disabled) {
-    background: var(--amber-hi);
+    background: var(--signal-press);
   }
   .secondary:hover:not(:disabled) {
-    background: var(--hover);
+    background: var(--black);
+    border-color: var(--black);
+    color: var(--on-black);
   }
   .text-button:hover:not(:disabled) {
-    text-decoration-color: var(--ink);
+    opacity: 0.6;
   }
   .rail-item:hover:not([aria-current]) {
-    background: var(--card);
+    background: rgb(0 0 0 / 0.045);
   }
 }
 
 /* Buttons inside forms and rows are one step smaller. */
 :is(.inline-field, .capture-foot, .row-actions, .editor-bar, .confirm) :is(.primary, .secondary) {
   min-height: 34px;
-  padding: 6px 14px;
+  padding: 6px 16px;
   font-size: 14px;
 }
 
@@ -209,7 +215,9 @@ button:disabled {
   color: var(--ink);
   text-decoration: underline 1px var(--ink-3);
   text-underline-offset: 4px;
-  transition: transform 160ms var(--ease-out);
+  transition:
+    transform 160ms var(--ease-out),
+    opacity 200ms ease;
 }
 
 .text-button:disabled {
@@ -225,7 +233,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 10px 12px;
+  gap: 10px;
 }
 
 /* Continue and stop are the same size even when one label wraps: stopping is never the lesser choice. */
@@ -262,7 +270,7 @@ textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--r-control);
-  background: var(--rail);
+  background: var(--paper);
   color: var(--ink);
   font: 15px/1.45 var(--sans);
   padding: 8px 12px;
@@ -271,7 +279,7 @@ textarea {
 input[type="radio"],
 input[type="checkbox"] {
   width: auto;
-  accent-color: var(--amber);
+  accent-color: var(--ink);
 }
 
 textarea {
@@ -300,7 +308,7 @@ textarea {
 
 .field-error {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 500;
   margin-top: 6px;
 }
 
@@ -337,151 +345,140 @@ textarea {
 }
 
 .state-label {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--ink);
 }
 
-/* Problems sit on a solid bone sign plate, so they stand apart from Empty and Done even in greyscale. */
+/* Problems sit on a solid black plate, so they stand apart from Empty and Done even in greyscale. */
 .state-note:is([data-kind="needs-retry"], [data-kind="missing-access"], [data-kind="unknown"], [data-kind="not-signed-in"]) .state-label {
   border-radius: var(--r-tag);
   padding: 0 6px;
-  background: var(--bone);
-  color: var(--on-bone);
+  background: var(--black);
+  color: var(--on-black);
 }
 
-/* ---------- Instrument chrome: figure labels ---------- */
-
-.screen {
-  counter-reset: plate;
+/* The compact form inside a pill: glyph and word in the pill's own ink, so it inverts with it. */
+.state-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 400;
+  opacity: 0.78;
 }
 
-.block-title,
+/* ---------- Labels and headings ---------- */
+
+/* One small-label treatment everywhere: 13px Helvetica, sentence case, the second ink. */
 .rail-heading,
-.backlog > summary {
-  font: 500 12px/1.4 var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.readout-key,
+.free-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
   color: var(--ink-2);
 }
 
-/* "01 — Recommended start": the number is decoration, so screen readers hear only the title. */
-:is(.block, .capture, .start, .free) > .block-title:first-child::before {
-  content: counter(plate, decimal-leading-zero) "\2002\2014\2002" / "";
-  counter-increment: plate;
-  color: var(--ink-3);
-}
-
-/* Card header strip (after the dialogue boxes in Stray): the card's caps label on a solid plate across
-   the top edge. Bone for ordinary cards, amber when TARS is speaking. */
-:is(.block, .capture) > .block-title:first-child,
+.block-title,
 .backlog > summary {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+/* Where TARS speaks, its card carries a black header with white words. */
+:is(.block, .suggestion).tars-voice > :is(.block-title, h2, h3, summary):first-child {
   margin: -18px -22px 0;
-  padding: 7px 22px 6px;
+  padding: 10px 22px 9px;
   border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0;
-  background: var(--bone);
-  color: var(--on-bone);
-  font-weight: 600;
-}
-
-:is(.block, .capture, .start) > .block-title:first-child::before {
-  color: rgb(22 28 27 / 0.62);
-}
-
-.tars-voice > :is(.block-title, h2, h3, summary):first-child,
-.start > .block-title:first-child {
-  background: var(--amber);
-  color: var(--on-amber);
+  background: var(--black);
+  color: var(--on-black);
+  font-size: 15px;
 }
 
 .group-title {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
-/* A project's stencilled section mark ("SECTION 02"): weathered oxide signage, display weight, tracked
-   caps. Always aria-hidden; the project name carries the meaning. */
-.section-mark {
-  display: block;
-  font: 700 30px/0.95 var(--stencil);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--oxide);
-  -webkit-mask: var(--weathered);
-  mask: var(--weathered);
-  user-select: none;
-}
-
-/* ---------- Shell ---------- */
+/* ---------- Shell: a glass rail floating over the canvas ---------- */
 
 .shell {
-  display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
+  position: relative;
   height: 100%;
 }
 
 .rail {
+  position: absolute;
+  z-index: 2;
+  top: var(--rail-inset);
+  bottom: var(--rail-inset);
+  left: var(--rail-inset);
   display: flex;
   flex-direction: column;
-  background: var(--rail);
-  border-right: 1px solid var(--hairline);
+  width: var(--rail-w);
   overflow-y: auto;
+  border-radius: 16px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+  /* A bright inner edge where light catches the sheet, a hairline outside, a soft neutral ambient shadow. */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.7),
+    inset 0 0 0 1px rgb(255 255 255 / 0.35),
+    0 0 0 1px rgb(0 0 0 / 0.07),
+    0 10px 30px rgb(0 0 0 / 0.07);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .rail {
+    background: var(--glass-solid);
+  }
 }
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 18px 14px;
-}
-
-.brand-mark {
-  height: 30px;
-  width: auto;
-  flex: none;
+  align-items: baseline;
+  gap: 6px;
+  padding: 18px 18px 16px;
 }
 
 .wordmark {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.brand-star {
   font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.22em;
+  line-height: 1;
 }
 
 .rail-list {
   list-style: none;
   padding: 0 8px;
-  counter-reset: rail;
 }
 
 .rail-item {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: baseline;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   width: 100%;
   min-height: 34px;
   padding: 7px 10px;
   background: none;
   border: 0;
-  border-radius: var(--r-control);
+  border-radius: 9px;
   text-align: left;
   font-size: 14px;
   line-height: 1.35;
-  color: var(--ink-2);
-  transition: transform 160ms var(--ease-out);
-}
-
-.rail-item::before {
-  content: "" / "";
-}
-
-/* Each project's number is its stencilled section mark. */
-.rail-list[aria-labelledby] .rail-item::before {
-  content: counter(rail, decimal-leading-zero) / "";
-  counter-increment: rail;
-  font: 700 16px/1 var(--stencil);
-  letter-spacing: 0.04em;
-  color: var(--oxide);
-  -webkit-mask: var(--weathered);
-  mask: var(--weathered);
+  color: var(--ink);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 200ms ease;
 }
 
 .rail-item:active {
@@ -489,21 +486,17 @@ textarea {
 }
 
 .rail-item[aria-current] {
-  background: var(--raised);
-  color: var(--ink);
-}
-
-.rail-name {
-  grid-column: 2;
+  background: rgb(0 0 0 / 0.085);
+  font-weight: 500;
 }
 
 .rail-note {
-  grid-column: 2;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 2px;
   font-size: 12px;
+  font-weight: 400;
   color: var(--ink-2);
 }
 
@@ -527,8 +520,7 @@ textarea {
 }
 
 .rail-heading {
-  padding: 22px 18px 6px;
-  color: var(--ink-3);
+  padding: 20px 18px 6px;
 }
 
 .rail-empty {
@@ -538,7 +530,7 @@ textarea {
 }
 
 .rail-after {
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 .rail-foot {
@@ -548,18 +540,14 @@ textarea {
   gap: 8px;
   margin-top: auto;
   padding: 14px 18px 18px;
-  border-top: 1px solid var(--hairline);
 }
 
-.rail-foot .signage {
-  font: 12px var(--mono);
-  letter-spacing: 0.08em;
-  color: var(--ink-3);
-}
-
+/* The canvas spans the whole window, under the glass, so the room the desk stands in runs beneath it. */
 .canvas {
-  overflow-y: auto;
-  padding: 0 40px 72px;
+  position: absolute;
+  inset: 0;
+  overflow: hidden auto;
+  padding: 0 var(--gutter) 72px calc(var(--rail-w) + 2 * var(--rail-inset) + var(--gutter));
 }
 
 .screen {
@@ -581,7 +569,7 @@ textarea {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px 10px;
-  margin: 28px 0 12px 24px;
+  margin: 24px 0 12px 24px;
 }
 
 .canvas-stop .secondary:last-child::before {
@@ -589,23 +577,23 @@ textarea {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  background: var(--ink-2);
+  background: currentColor;
 }
 
-/* Status tags are small solid sign plates: mono caps, a shape, never colour alone. */
+/* Status tags: a soft filled pill, a shape before the word, never colour alone. */
 .session-state,
 .source-state,
 .panel-state {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 9px;
-  border-radius: var(--r-tag);
-  background: var(--patina);
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  background: rgb(0 0 0 / 0.08);
   color: var(--ink);
-  font: 600 12px/1.5 var(--mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
 .session-state::before {
@@ -619,14 +607,14 @@ textarea {
 /* ---------- Screen head ---------- */
 
 .screen-head {
-  padding-top: 36px;
+  padding-top: 30px;
 }
 
 .screen-head h1 {
-  font-size: 52px;
-  line-height: 1.04;
-  font-weight: 600;
-  letter-spacing: -0.028em;
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.04em;
   overflow-wrap: anywhere;
 }
 
@@ -635,7 +623,7 @@ textarea {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
-  margin-top: 10px;
+  margin-top: 12px;
   font-size: 15px;
   color: var(--ink-2);
 }
@@ -643,6 +631,7 @@ textarea {
 .sub-sep {
   width: 4px;
   height: 4px;
+  border-radius: 50%;
   background: var(--ink-3);
 }
 
@@ -662,40 +651,30 @@ textarea {
   transform: rotate(45deg);
 }
 
-/* The systems readout: one line of what TARS holds right now. */
+/* The readout: one honest line of what TARS holds right now. */
 .readout {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 0;
-  margin-top: 18px;
+  gap: 4px 22px;
+  margin-top: 14px;
   padding: 0;
   list-style: none;
-  font: 12px/1.5 var(--mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 13px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
 
-.readout li {
-  padding: 0 14px;
-  border-left: 1px solid var(--line);
-}
-
-.readout li:first-child {
-  padding-left: 0;
-  border-left: 0;
-}
-
 .readout-key {
-  color: var(--ink-3);
+  font-weight: 400;
+  margin-right: 4px;
 }
 
 /* ---------- Surfaces ---------- */
 
 .block,
 .capture {
-  background: var(--screen-lines), var(--card);
-  border: 1px solid var(--hairline);
+  background: var(--card);
   border-radius: var(--r-card);
   padding: 18px 22px 22px;
 }
@@ -707,151 +686,187 @@ textarea {
 
 /* A decision waiting on the user sits one step forward. */
 .tradeoff {
-  background: var(--screen-lines), var(--raised);
-  border-color: var(--line);
+  background: var(--raised);
 }
 
 /* ---------- Today ---------- */
 
 .reentry-lead {
-  margin-top: 28px;
+  margin-top: 24px;
   font-size: 17px;
   max-width: 64ch;
 }
 
-/* The hero: TARS's recommendation on the calm side, the megastructure scene on the other, four corner
-   brackets around it. */
+/* The hero, after the reference: the words on the left in a 36rem column, TARS at the front desk on the
+   right, standing on a floor that runs the full width of the window (under the glass too). */
 .start {
+  --scene-w: 440px;
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 44%);
-  grid-template-rows: auto 1fr;
-  margin-top: 28px;
-  background: var(--card);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-card);
+  grid-template-columns: minmax(0, 36rem) var(--scene-w);
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  margin-top: 20px;
 }
 
+/* The floor: from the wall line behind the counter (250 of the scene's 330 units, 460 wide) to the hero's foot. */
 .start::after {
-  --b: var(--ink-3);
   content: "";
   position: absolute;
-  inset: -7px;
-  pointer-events: none;
-  /* Solid fills placed at the corners: brackets, not gradients. */
-  background:
-    linear-gradient(var(--b) 0 0) left top / 16px 1px,
-    linear-gradient(var(--b) 0 0) left top / 1px 16px,
-    linear-gradient(var(--b) 0 0) right top / 16px 1px,
-    linear-gradient(var(--b) 0 0) right top / 1px 16px,
-    linear-gradient(var(--b) 0 0) left bottom / 16px 1px,
-    linear-gradient(var(--b) 0 0) left bottom / 1px 16px,
-    linear-gradient(var(--b) 0 0) right bottom / 16px 1px,
-    linear-gradient(var(--b) 0 0) right bottom / 1px 16px;
-  background-repeat: no-repeat;
-}
-
-.start > .block-title:first-child {
-  grid-column: 1;
-  align-self: start;
-  padding: 7px 32px 6px;
-  border-radius: calc(var(--r-card) - 1px) 0 0 0;
-  font-weight: 600;
+  z-index: -1;
+  left: -100vw;
+  right: calc(-1 * var(--gutter));
+  bottom: 0;
+  height: calc(var(--scene-w) * 80 / 460);
+  background: var(--floor);
 }
 
 .start-body {
-  grid-column: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
-  padding: 24px 32px 32px;
+  padding-bottom: 28px;
 }
 
-.start-project {
-  font-size: 15px;
+/* (1) The intro: two lines set soft, decoration only. */
+.start-intro {
+  display: flex;
+  flex-direction: column;
+  font-size: 20px;
   font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
   color: var(--ink-2);
+  filter: blur(4px);
+  user-select: none;
 }
 
+.start-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 6px;
+}
+
+/* TARS is speaking: the black label. */
+.start-meta .block-title {
+  padding: 3px 10px;
+  border-radius: var(--r-tag);
+  background: var(--black);
+  color: var(--on-black);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+
+.start-meta .start-project {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+/* (2) The step, typed. */
 .start-step {
-  font-size: 30px;
-  line-height: 1.18;
-  font-weight: 600;
-  letter-spacing: -0.018em;
-  max-width: 24ch;
+  font-size: 40px;
+  line-height: 1.08;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  max-width: 20ch;
   text-wrap: balance;
 }
 
-.start-reason {
-  font-size: 15px;
-  color: var(--ink-2);
-  max-width: 54ch;
+::highlight(type-rest) {
+  color: transparent;
 }
 
-.start .actions {
-  margin-top: 10px;
+::highlight(type-cursor) {
+  color: transparent;
+  background-color: var(--signal);
+}
+
+.start-reason {
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  max-width: 46ch;
 }
 
 .start .recap li {
   font-size: 16px;
 }
 
-.start-figure {
-  grid-column: 2;
-  grid-row: 1 / -1;
-  min-height: 312px;
-  border-left: 1px solid var(--hairline);
-  border-radius: 0 calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0;
+/* (3) The actions rise into place 400 ms in, without waiting for the typing. */
+.start .actions,
+.start .free {
+  animation: rise 400ms var(--ease-out) 400ms both;
 }
 
-/* The one cinematic surface: an original flat megastructure scene. TARS stands on the ledge in front of
-   the dark seam and air (80% across, 22.7% up), sized to the scene so it fits any column. */
-.scene {
-  position: relative;
-  overflow: hidden;
-  background: #1a2523 url("/hero-section.svg") center / 100% 100% no-repeat;
+.start .actions {
+  margin-top: 8px;
 }
 
-.hero-pet {
-  position: absolute;
-  left: 80%;
-  bottom: 22.7%;
-  width: 27%;
-  height: auto;
-  translate: -50% 0;
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
-/* The stencil painted on the bone slab: decoration only (its parent is aria-hidden). */
-.scene-stencil {
-  position: absolute;
-  top: 7%;
-  left: 5%;
+.free {
   display: flex;
   flex-direction: column;
-  font: 700 22px/0.9 var(--stencil);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--oxide-deep);
-  -webkit-mask: var(--weathered);
-  mask: var(--weathered);
-  user-select: none;
+  gap: 8px;
+  margin-top: 10px;
 }
 
-.scene-stencil b {
-  font-size: 84px;
-  font-weight: 700;
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+}
+
+.pills .secondary {
+  min-height: 34px;
+  padding: 5px 16px;
+  font-size: 14px;
+}
+
+.start-figure {
+  align-self: end;
+}
+
+.desk {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.desk-label,
+.desk-plate {
+  font: 500 9px var(--sans);
+  fill: #ffffff;
+}
+
+.desk-plate {
+  font-size: 11px;
   letter-spacing: 0.02em;
 }
 
-/* Below the hero: the working surfaces, then capture on the right. */
+/* Below the hero, the floor carries on to the foot of the window: the working surfaces sit on it. */
 .home-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 24px;
   align-items: start;
-  margin-top: 28px;
+  padding-top: 28px;
+  background: var(--floor);
+  box-shadow: 0 0 0 100vmax var(--floor);
+  clip-path: inset(0 -100vmax -100vmax);
 }
 
 .home-grid:has(> .home-main:empty) {
@@ -866,47 +881,8 @@ textarea {
 .home-side {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   min-width: 0;
-}
-
-.cards {
-  list-style: none;
-  padding: 0;
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
-}
-
-.card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  background: var(--card);
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.card-title {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.card .text-button {
-  margin-top: auto;
-}
-
-/* Adding a project takes its own row, so it never strands half a row of empty grid. */
-.card-add {
-  grid-column: 1 / -1;
-}
-
-.card-add .new-project {
-  align-self: stretch;
-  max-width: 420px;
 }
 
 .backlog > summary {
@@ -924,7 +900,9 @@ textarea {
 .backlog > summary::after {
   content: "+" / "";
   margin-left: auto;
-  font: 16px/1 var(--mono);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1;
   color: var(--ink-2);
 }
 
@@ -951,7 +929,7 @@ textarea {
 
 .ideas li {
   padding: 4px 0 4px 12px;
-  border-left: 2px solid var(--line);
+  border-left: 2px solid var(--ink);
 }
 
 .ideas li + li {
@@ -996,7 +974,7 @@ textarea {
 .connections {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   min-width: 0;
 }
 
@@ -1014,7 +992,6 @@ textarea {
 
 .completion {
   background: var(--raised);
-  border: 1px solid var(--line);
   border-radius: var(--r-card);
   padding: 22px;
   margin-top: 28px;
@@ -1027,8 +1004,8 @@ textarea {
 .completion h2,
 .completion h1 {
   font-size: 28px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-weight: 500;
+  letter-spacing: -0.025em;
 }
 
 .confirm,
@@ -1037,7 +1014,6 @@ textarea {
 .receipt,
 .question {
   background: var(--raised);
-  border: 1px solid var(--hairline);
   border-radius: 10px;
   padding: 14px 16px;
 }
@@ -1045,6 +1021,12 @@ textarea {
 .confirm > * + *,
 .suggestion > * + * {
   margin-top: 10px;
+}
+
+.suggestion.tars-voice > :is(.block-title, h2, h3):first-child {
+  margin: -14px -16px 0;
+  padding: 8px 16px;
+  border-radius: 9px 9px 0 0;
 }
 
 .confirm {
@@ -1095,7 +1077,7 @@ textarea {
 .source-name,
 .fact-key {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .prepared > * + * {
@@ -1104,14 +1086,14 @@ textarea {
 
 .prepared-title {
   font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.012em;
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
 
 .gaps h4,
 .sources h4 {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
   margin-bottom: 6px;
 }
 
@@ -1174,7 +1156,7 @@ textarea {
 .copyable {
   display: block;
   font: 13px/1.4 var(--mono);
-  background: var(--rail);
+  background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: 6px;
   padding: 8px 10px;
@@ -1183,7 +1165,7 @@ textarea {
 
 .next .step {
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: -0.01em;
 }
 
@@ -1204,7 +1186,7 @@ li[data-done] {
   color: var(--ink-3);
 }
 
-/* ---------- Stopped ---------- */
+/* ---------- Stopped: the desk, lamp off, light off ---------- */
 
 .stopped {
   display: grid;
@@ -1216,11 +1198,9 @@ li[data-done] {
 .stopped-slab {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
-  width: min(820px, 100%);
-  min-height: 320px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-card);
-  overflow: hidden;
+  align-items: end;
+  gap: 32px;
+  width: min(860px, 100%);
 }
 
 .stopped-text {
@@ -1228,16 +1208,14 @@ li[data-done] {
   flex-direction: column;
   align-items: flex-start;
   gap: 14px;
-  padding: 36px;
-  background: var(--screen-lines), var(--card);
-  border-right: 1px solid var(--hairline);
+  padding-bottom: 40px;
 }
 
 .stopped h1 {
-  font-size: 40px;
-  line-height: 1.08;
-  font-weight: 600;
-  letter-spacing: -0.024em;
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.04em;
 }
 
 .stopped p {
@@ -1248,7 +1226,7 @@ li[data-done] {
 /* ---------- Panel ---------- */
 
 html[data-view="panel"] body {
-  background: var(--rail);
+  background: var(--canvas);
 }
 
 .panel {
@@ -1272,7 +1250,7 @@ html[data-view="panel"] body {
 }
 
 .panel-head .wordmark {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .panel-head .text-button {
@@ -1287,27 +1265,20 @@ html[data-view="panel"] body {
 }
 
 .panel-body h1 {
-  font-size: 22px;
-  line-height: 1.2;
-  font-weight: 600;
-  letter-spacing: -0.012em;
+  font-size: 24px;
+  line-height: 1.15;
+  font-weight: 500;
+  letter-spacing: -0.025em;
 }
 
 .panel-body.completion {
   margin: 0;
-  border: 0;
   border-radius: 0;
   background: none;
 }
 
 .panel .capture {
   padding: 14px 16px 16px;
-}
-
-/* The header strip bleeds to the card edge, so it follows the panel's smaller padding. */
-.panel .capture > .block-title:first-child {
-  margin: -14px -16px 0;
-  padding-inline: 16px;
 }
 
 /* ---------- Pet window: TARS alone on transparency ---------- */
@@ -1334,7 +1305,7 @@ html[data-view="pet"] body {
   transform: scale(0.97);
 }
 
-/* 1.8px per unit, so the 6.2-unit state word renders at 11.2px. */
+/* 1.8px per unit, so the 6.7-unit state word renders at 12px. */
 .pet .pet-figure {
   display: block;
   width: 180px;
@@ -1342,13 +1313,12 @@ html[data-view="pet"] body {
 }
 
 .pet-word {
-  font: 600 6.2px var(--mono);
-  letter-spacing: 0.02em;
-  fill: var(--ink);
+  font: 500 6.7px var(--sans);
+  fill: #f1f0f4;
 }
 
 .pet-letters {
-  font: 800 7.4px var(--sans);
+  font: 700 7.4px var(--sans);
   letter-spacing: 0.06em;
 }
 
@@ -1356,22 +1326,26 @@ html[data-view="pet"] body {
   outline-offset: -2px;
 }
 
-/* ---------- Pet motion: poses glide, the status light blinks ---------- */
+/* ---------- Pet motion: poses glide, the eyes blink, the active light ticks ---------- */
 
 .pet-part {
   transition: transform 240ms var(--ease-in-out);
 }
 
-.pet-figure[data-state="idle"] .pet-mark {
-  animation: blink 6s steps(1, end) infinite;
+.pet-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: blink 5.4s var(--ease-in-out) infinite;
 }
 
 @keyframes blink {
-  96% {
-    opacity: 1;
+  0%,
+  95%,
+  100% {
+    transform: scaleY(1);
   }
   97% {
-    opacity: 0;
+    transform: scaleY(0.12);
   }
 }
 
@@ -1384,7 +1358,7 @@ html[data-view="pet"] body {
     opacity: 1;
   }
   71% {
-    opacity: 0.15;
+    opacity: 0.2;
   }
 }
 
@@ -1397,10 +1371,23 @@ html[data-view="pet"] body {
     grid-template-columns: minmax(0, 1fr);
   }
   .start {
-    grid-template-columns: minmax(0, 1fr) minmax(240px, 40%);
+    --scene-w: 340px;
+  }
+  .start-step {
+    font-size: 34px;
   }
   .screen-head h1 {
-    font-size: 44px;
+    font-size: 46px;
+  }
+}
+
+/* ---------- Reduced transparency and contrast: the glass turns solid ---------- */
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .rail {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 

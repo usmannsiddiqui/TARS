@@ -256,6 +256,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           onBriefShown={(key) => (record("markDelivered", key, "panel"), setDelivered((d) => [...d, key]))}
           onResolveTradeoff={async (id, choice) => record("resolveTradeoff", id, choice)}
           ideas={ideas}
+          sessionWorking={session === "working"}
           onCaptured={() => undefined}
           onStart={(id, mode) => (pick(id), session === "idle" && (record("session", "start"), setSession("working")), setRoute({ view: "project", projectId: id, mode }))}
           onOpenProject={(id) => setRoute({ view: "project", projectId: id })}
@@ -266,7 +267,6 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
         <ProjectView
           key={project.id}
           name={project.name}
-          index={projects.indexOf(project) + 1}
           logDestination={variant === "unknown" ? null : { kind: "notion", label: "8f2c…a41" }}
           isFocus={project.id === focus}
           {...(route.mode ? { mode: route.mode } : {})}

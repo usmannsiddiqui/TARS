@@ -2,10 +2,11 @@
 // apart from suggested work, one recommended start with its reason), the evening recap when it is the
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
 // stay one click away. Presentational: data and actions arrive as props.
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
-import type { Brief, CapturedIdea, HardItem, Honest, ProjectSummary, Reentry, Tradeoff, TradeoffChoice } from "./model";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import type { Brief, CapturedIdea, HardItem, Honest, PetState, ProjectSummary, Reentry, Tradeoff, TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
-import { formatWhen, PetFigure, reason, SOURCE_NAME, StateNote } from "./ui";
+import { Desk } from "./Desk";
+import { formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
   dateLabel: string;
@@ -22,6 +23,8 @@ export type HomeProps = {
   /** The brief service could not be set up or reached. */
   briefError?: string;
   ideas: CapturedIdea[];
+  /** A work session is running (the desk's signal light). */
+  sessionWorking: boolean;
   /** A capture was saved on this Mac: reload the list of ideas. */
   onCaptured(): void;
   onStart(projectId: string, mode: "help" | "improve"): void;
@@ -53,11 +56,36 @@ export function Home(props: HomeProps) {
   const backlog = (projects ?? []).map((p) => ({ p, open: p.commitments.filter((c) => c.state === "open" || c.state === "waiting") })).filter((g) => g.open.length > 0);
   const backlogCount = backlog.reduce((n, g) => n + g.open.length, 0);
   const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name;
-  // The hero's stencil carries the same number the rail shows beside the project: decoration only.
-  const sectionOf = (id: string | undefined) => {
-    const i = projects?.findIndex((p) => p.id === id) ?? -1;
-    return i < 0 ? undefined : String(i + 1).padStart(2, "0");
+  const preparedCount = projects?.filter((p) => p.prepared?.status === "ready" && p.prepared.work).length;
+  // The desk shows only what this screen already knows: ideas in, prepared work out, the session's light.
+  const desk = {
+    state: (evening ? "done" : props.sessionWorking ? "working" : "idle") as PetState,
+    inTray: props.ideas.length,
+    outTray: preparedCount,
+    signal: props.sessionWorking,
   };
+  const othersRegion = projects !== null && projects.length > 0 && (
+    <section className="free" aria-labelledby="others-h">
+      <h2 id="others-h" className="free-title">
+        Other ways to start
+      </h2>
+      {others.length === 0 ? (
+        <p className="quiet">No other projects.</p>
+      ) : (
+        <ul className="pills" aria-labelledby="others-h">
+          {others.map((p) => (
+            <li key={p.id}>
+              <button type="button" className="secondary" onClick={() => props.onOpenProject(p.id)} aria-label={`Open ${p.name}`} aria-describedby={`others-${p.id}`}>
+                {p.name}
+                <StateTag state={preparedNote(p)} id={`others-${p.id}`} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+  const heroFrame = { intro: props.dateLabel, desk, after: othersRegion };
   const shownKey = !reentry && brief && !brief.delivered ? brief.key : undefined;
 
   const reported = useRef<string | null>(null);
@@ -69,17 +97,17 @@ export function Home(props: HomeProps) {
 
   const hero =
     projects === null ? (
-      <Hero title="Recommended start">
+      <Hero title="Recommended start" {...heroFrame}>
         <StateNote state={props.cloud ?? { kind: "loading" }} />
         <p>You can still capture ideas; they wait safely on this Mac.</p>
       </Hero>
     ) : projects.length === 0 ? (
-      <Hero title="Start with a project">
+      <Hero title="Start with a project" {...heroFrame}>
         <p className="start-step">Name the first thing you are working on. You can add the others later.</p>
         <NewProject onCreate={props.onCreateProject} />
       </Hero>
     ) : evening && brief ? (
-      <Hero title="Evening recap">
+      <Hero title="Evening recap" {...heroFrame}>
         {brief.items.length === 0 ? (
           <StateNote state={{ kind: "empty", detail: "Nothing finished or parked today. That is fine." }} />
         ) : (
@@ -92,14 +120,13 @@ export function Home(props: HomeProps) {
         <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
       </Hero>
     ) : (
-      <Hero title={reentry ? "One way back in" : "Recommended start"} section={sectionOf(recommended?.id ?? props.focusProjectId)}>
+      <Hero title={reentry ? "One way back in" : "Recommended start"} {...heroFrame} project={recommended?.name}>
         {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
         {brief === undefined && !reentry ? (
           <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
         ) : action ? (
           <>
-            {recommended && <p className="start-project">{recommended.name}</p>}
-            <p className="start-step">{action}</p>
+            <Typed key={action} className="start-step" text={action} />
             {why && (
               <p className="start-reason">
                 <span className="why">Why this one:</span> {why}
@@ -134,7 +161,12 @@ export function Home(props: HomeProps) {
       evening ? "Recap" : "Brief",
       brief === undefined ? (projects === null ? "not yet read" : "reading") : brief === null ? "first one at 9:00" : `prepared ${formatWhen(new Date(brief.preparedAt).toISOString())}`,
     ],
-    ...(projects ? [["Open items", String(backlogCount)] as [string, string]] : []),
+    ...(projects
+      ? [
+          ["Open items", String(backlogCount)] as [string, string],
+          ["Prepared", String(preparedCount)] as [string, string],
+        ]
+      : []),
     ["Ideas on this Mac", String(props.ideas.length)],
     ...(brief ? [["Out of date", brief.stale.length === 0 ? "none" : brief.stale.map((s) => s.name).join(", ")] as [string, string]] : []),
   ];
@@ -231,27 +263,6 @@ export function Home(props: HomeProps) {
                 )
               )}
 
-              <section className="free" aria-labelledby="others-h">
-                <h2 id="others-h" className="block-title">
-                  Other ways to start
-                </h2>
-                <ul className="cards" aria-labelledby="others-h">
-                  {others.map((p) => (
-                    <li key={p.id} className="card">
-                      <span className="card-title">{p.name}</span>
-                      <StateNote state={preparedNote(p)} />
-                      <button type="button" className="text-button go" onClick={() => props.onOpenProject(p.id)} aria-label={`Open ${p.name}`}>
-                        Open
-                      </button>
-                    </li>
-                  ))}
-                  <li className="card card-add">
-                    {others.length === 0 && <p className="quiet">No other projects.</p>}
-                    <NewProject onCreate={props.onCreateProject} compact />
-                  </li>
-                </ul>
-              </section>
-
               <details className="block backlog">
                 <summary>
                   All open work <span className="count num">{backlogCount}</span>
@@ -274,6 +285,9 @@ export function Home(props: HomeProps) {
                   ))
                 )}
               </details>
+              <div className="block">
+                <NewProject onCreate={props.onCreateProject} compact />
+              </div>
             </>
           )}
         </div>
@@ -301,23 +315,100 @@ export function Home(props: HomeProps) {
   );
 }
 
-/** The one framed, cinematic surface on Today: TARS's recommendation beside the megastructure scene. */
-function Hero({ title, section, children }: { title: string; section?: string | undefined; children: ReactNode }) {
+/**
+ * Today's hero, after the reference's choreography: a blurred two-line intro (decoration), TARS's words
+ * under a black "speaking" label, then the actions as pills; TARS at the front desk on the right.
+ */
+function Hero({
+  title,
+  intro,
+  project,
+  desk,
+  after,
+  children,
+}: {
+  title: string;
+  intro: string;
+  project?: string | undefined;
+  desk: Parameters<typeof Desk>[0];
+  after: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="start tars-voice" aria-labelledby="start-h">
-      <h2 id="start-h" className="block-title">
-        {title}
-      </h2>
-      <div className="start-body">{children}</div>
-      <div className="start-figure scene" aria-hidden="true">
-        {section && (
-          <span className="scene-stencil">
-            Section <b>{section}</b>
-          </span>
-        )}
-        <PetFigure state="idle" variant="hero" className="hero-pet" />
+      <div className="start-body">
+        <p className="start-intro" aria-hidden="true">
+          <span>TARS, at the front desk</span>
+          <span>{intro}</span>
+        </p>
+        <div className="start-meta">
+          <h2 id="start-h" className="block-title">
+            {title}
+          </h2>
+          {project && <p className="start-project">{project}</p>}
+        </div>
+        {children}
+        {after}
+      </div>
+      <div className="start-figure">
+        <Desk {...desk} />
       </div>
     </section>
+  );
+}
+
+// Sentences typed once per app session: coming back to Today shows them whole.
+const typedOnce = new Set<string>();
+
+/**
+ * TARS's sentence typed out (38 ms a character after 600 ms) behind a signal-orange block cursor. The
+ * whole sentence is one text node from the first frame, so it is read whole; CSS highlights only paint
+ * the untyped rest transparent. Reduced motion, or a sentence already typed, shows it at once.
+ */
+function Typed({ text, className }: { text: string; className: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const node = ref.current?.firstChild;
+    if (!node || typedOnce.has(text) || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const rest = new Highlight();
+    const cursor = new Highlight();
+    CSS.highlights.set("type-rest", rest);
+    CSS.highlights.set("type-cursor", cursor);
+    const span = (from: number, to: number) => {
+      const r = new Range();
+      r.setStart(node, from);
+      r.setEnd(node, to);
+      return r;
+    };
+    const t0 = performance.now();
+    let raf = 0;
+    const frame = (t: number) => {
+      const elapsed = t - t0;
+      const typed = Math.max(0, Math.floor((elapsed - 600) / 38));
+      rest.clear();
+      cursor.clear();
+      if (typed >= text.length) {
+        typedOnce.add(text);
+        CSS.highlights.delete("type-rest");
+        CSS.highlights.delete("type-cursor");
+        return;
+      }
+      const lit = elapsed >= 600 || Math.floor(elapsed / 500) % 2 === 0; // blinks while waiting, steady while typing
+      if (lit) cursor.add(span(typed, typed + 1));
+      rest.add(span(lit ? typed + 1 : typed, text.length));
+      raf = requestAnimationFrame(frame);
+    };
+    frame(t0);
+    return () => {
+      cancelAnimationFrame(raf);
+      CSS.highlights.delete("type-rest");
+      CSS.highlights.delete("type-cursor");
+    };
+  }, [text]);
+  return (
+    <p ref={ref} className={className}>
+      {text}
+    </p>
   );
 }
 

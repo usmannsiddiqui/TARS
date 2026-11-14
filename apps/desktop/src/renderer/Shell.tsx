@@ -1,8 +1,8 @@
-// The full app's frame: where am I (rail + title), the one next thing (each screen's single amber
-// action) and how do I stop ("Stop for now", always in the same corner, the same size as its neighbour).
+// The full app's frame: where am I (the glass rail + title), the one next thing (each screen's single
+// signal-orange action) and how do I stop ("Stop for now", always in the same corner, the same size as its neighbour).
 import type { ReactNode } from "react";
 import type { SessionEvent, SessionState } from "./model";
-import { PetFigure } from "./ui";
+import { Desk } from "./Desk";
 
 export type Route =
   | { view: "today" }
@@ -52,8 +52,10 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
     <div className="shell">
       <nav className="rail" aria-label="TARS">
         <div className="brand">
-          <PetFigure state="idle" variant="mark" className="brand-mark" />
           <span className="wordmark">TARS</span>
+          <span className="brand-star" aria-hidden="true">
+            {"\u2733\uFE0E"}
+          </span>
         </div>
         <ul className="rail-list">{item({ view: "today" }, "Today")}</ul>
         <h2 className="rail-heading" id="rail-projects">
@@ -73,9 +75,6 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
           {item({ view: "connections" }, "Connections")}
         </ul>
         <div className="rail-foot">
-          <span className="signage" aria-hidden="true">
-            T-01
-          </span>
           <button type="button" className="text-button" aria-pressed={!pet.visible} onClick={pet.onToggle}>
             {pet.visible ? "Hide pet" : "Show pet"}
           </button>
@@ -116,8 +115,8 @@ export function Stopped({ projectName, note, onResume }: { projectName?: string;
             Come back
           </button>
         </div>
-        <div className="stopped-figure scene" aria-hidden="true">
-          <PetFigure state="idle" variant="hero" className="hero-pet" />
+        <div className="stopped-figure">
+          <Desk state="idle" signal={false} />
         </div>
       </section>
     </main>

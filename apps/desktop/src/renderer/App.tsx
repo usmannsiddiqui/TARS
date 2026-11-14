@@ -64,7 +64,6 @@ export function App() {
         key={route.projectId}
         projectId={route.projectId}
         name={name}
-        index={(projects?.findIndex((p) => p.id === route.projectId) ?? 0) + 1}
         isFocus={route.projectId === focusId}
         {...(route.mode ? { mode: route.mode } : {})}
         onMakeFocus={() => pick(route.projectId)}
@@ -90,6 +89,7 @@ export function App() {
         onBriefShown={today.onBriefShown}
         onResolveTradeoff={today.onResolveTradeoff}
         ideas={ideas}
+        sessionWorking={session.state === "working"}
         onCaptured={() => void loadIdeas()}
         onStart={(projectId, mode) => {
           pick(projectId); // accepting the recommended start is the user's pick
