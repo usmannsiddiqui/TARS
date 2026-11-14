@@ -2,9 +2,10 @@
 // that carry IDs only, so each event triggers one bounded read of the changed page.
 // Deliveries are routed by the `?source=<sourceId>` the owner puts in the subscription URL.
 import { ConvexError, v } from "convex/values";
+import { outcomeForFailure, sameContent, type EffectOutcome } from "../../packages/domain/src/actions";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
-import { action, httpAction } from "../_generated/server";
+import { action, type ActionCtx, httpAction } from "../_generated/server";
 import { ingestItems, markChecked, markFailed, requireOwnedSource, type ProviderItem } from "../connections";
 import { decryptSecret, encryptSecret } from "../lib/crypto";
 import { openCredential, ProviderError, providerJson, sealCredential, verifyHmacSha256Hex } from "../lib/providerAuth";
@@ -12,6 +13,8 @@ import { openCredential, ProviderError, providerJson, sealCredential, verifyHmac
 const API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2026-03-11";
 const BLOCK_PAGE_SIZE = 100; // first page of top-level blocks only
+const RICH_TEXT_CHUNK = 2000; // Notion's per-text-object limit
+const MAX_SCAN_PAGES = 50; // marker search bound: 5,000 top-level blocks
 
 type RichText = { plain_text?: string }[];
 type NotionPage = {
@@ -74,6 +77,91 @@ export async function readSelected(ctx: Parameters<typeof ingestItems>[0], grant
     if (item !== null) items.push(item);
   }
   return { records: await ingestItems(ctx, grant, items) };
+}
+
+// ---- Write path: append-only to a designated write target, with a marker, then read back.
+
+export type NoteJob = { sourceId: string; pageId: string; marker: string; text: string };
+type RunCtx = Pick<ActionCtx, "runQuery" | "runMutation">;
+type TextBlock = { id?: string; type?: string; parent?: { page_id?: string } } & Record<string, unknown>;
+
+const blockText = (block: TextBlock) =>
+  plain(block.type === undefined ? undefined : (block[block.type] as { rich_text?: RichText } | undefined)?.rich_text);
+
+/** The write token, only while the page is still a write target of the active grant. */
+async function writeToken(ctx: RunCtx, job: NoteJob): Promise<string | null> {
+  const { grant, connection } = await ctx.runQuery(internal.connections.context, { sourceId: job.sourceId });
+  const target = grant?.state === "active" && grant.writeTargets.some((w) => normalize(w) === normalize(job.pageId));
+  if (!target || connection === null) return null;
+  return (await openCredential(connection.credential)).token ?? null;
+}
+
+/** Bounded scan of the page's top-level blocks for the marker. */
+async function findMarker(token: string, job: NoteJob): Promise<EffectOutcome> {
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_SCAN_PAGES; page++) {
+    const query = `page_size=${BLOCK_PAGE_SIZE}${cursor === undefined ? "" : `&start_cursor=${encodeURIComponent(cursor)}`}`;
+    const children = (await notionGet(`/blocks/${normalize(job.pageId)}/children?${query}`, token)) as {
+      results?: TextBlock[];
+      has_more?: boolean;
+      next_cursor?: string | null;
+    };
+    const found = (children.results ?? []).find((block) => blockText(block).includes(job.marker));
+    if (found !== undefined) {
+      return sameContent(blockText(found), job.text)
+        ? { state: "succeeded", ...(found.id === undefined ? {} : { externalId: found.id }) }
+        : { state: "unknown", reason: "marker_content_mismatch" };
+    }
+    if (children.has_more !== true || !children.next_cursor) return { state: "failed", reason: "marker_absent" };
+    cursor = children.next_cursor;
+  }
+  return { state: "unknown", reason: "page_too_long_to_check" };
+}
+
+/** Append one paragraph unless the marker is already there; unrelated blocks are never touched. */
+export async function appendMarked(ctx: RunCtx, job: NoteJob): Promise<EffectOutcome> {
+  const token = await writeToken(ctx, job);
+  if (token === null) return { state: "failed", reason: "not_write_target" };
+  let appended: { results?: { id?: string }[] };
+  try {
+    const existing = await findMarker(token, job);
+    if (existing.state !== "failed") return existing; // already written, or cannot tell: never append blindly
+    const chunks = job.text.match(new RegExp(`[\\s\\S]{1,${RICH_TEXT_CHUNK}}`, "g")) ?? [""];
+    appended = (await providerJson(`${API}/blocks/${normalize(job.pageId)}/children`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${token}`, "notion-version": NOTION_VERSION, "content-type": "application/json" },
+      body: JSON.stringify({
+        children: [{ object: "block", type: "paragraph", paragraph: { rich_text: chunks.map((content) => ({ type: "text", text: { content } })) } }],
+      }),
+    })) as typeof appended;
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: outcomeForFailure(error.code), reason: error.code };
+    throw error;
+  }
+  const id = appended.results?.[0]?.id;
+  if (id === undefined) return { state: "unknown", reason: "no_block_id" };
+  try {
+    const block = (await notionGet(`/blocks/${encodeURIComponent(id)}`, token)) as TextBlock;
+    const onPage = normalize(block.parent?.page_id ?? "") === normalize(job.pageId);
+    return onPage && blockText(block).includes(job.marker) && sameContent(blockText(block), job.text)
+      ? { state: "succeeded", externalId: id }
+      : { state: "unknown", externalId: id, reason: "read_back_mismatch" };
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "unknown", externalId: id, reason: error.code };
+    throw error;
+  }
+}
+
+/** Reconcile: the marker on the page decides; it is never appended again from here. */
+export async function lookupMarked(ctx: RunCtx, job: NoteJob): Promise<EffectOutcome> {
+  const token = await writeToken(ctx, job);
+  if (token === null) return { state: "unknown", reason: "not_write_target" };
+  try {
+    return await findMarker(token, job);
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "unknown", reason: error.code };
+    throw error;
+  }
 }
 
 export const connect = action({

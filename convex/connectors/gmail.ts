@@ -2,6 +2,13 @@
 // push carrying only {emailAddress, historyId} → history.list from the stored cursor → bounded
 // read of the selected messages. The watch lease is the only scheduled job; it reads no mail.
 import { ConvexError, v } from "convex/values";
+import {
+  mailSubject,
+  messageIdFor,
+  outcomeForFailure,
+  sameContent,
+  type EffectOutcome,
+} from "../../packages/domain/src/actions";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -27,12 +34,15 @@ const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"; // Google's OIDC signing keys (JWKS)
 const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+// Asked for separately and alone (no include_granted_scopes): the send token can only send.
+const SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 const ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const MAX_MESSAGES = 20; // per push, and per label on a repair read
 const HISTORY_PAGE = 100;
 const MAX_TEXT = 4000;
 const HISTORY_ID = /^\d+$/;
 const STATE_PREFIX = "gmail:";
+const SEND_STATE_PREFIX = "gmail-send:";
 
 type Header = { name?: string; value?: string };
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[]; headers?: Header[] };
@@ -202,12 +212,43 @@ export const startConnect = mutation({
   },
 });
 
+/** Separate consent to send from this mailbox: requests gmail.send only, for the connected address. */
+export const startSendConsent = mutation({
+  args: { sourceId: v.string() },
+  returns: v.string(),
+  handler: async (ctx, { sourceId }) => {
+    const ownerId = await requireOwnerId(ctx);
+    const connection = await ctx.db
+      .query("connections")
+      .withIndex("by_source", (q) => q.eq("sourceId", sourceId))
+      .unique();
+    if (connection === null || connection.ownerId !== ownerId || connection.provider !== "gmail") {
+      throw new ConvexError("Connect Gmail before allowing it to send");
+    }
+    const url = new URL(AUTHORIZE_URL);
+    url.search = new URLSearchParams({
+      client_id: requireEnv("GOOGLE_CLIENT_ID"),
+      redirect_uri: redirectUri(),
+      response_type: "code",
+      scope: SEND_SCOPE,
+      access_type: "offline",
+      prompt: "consent",
+      login_hint: connection.accountKey, // the same mailbox the read connection verifies against
+      state: await issueOAuthState(ctx, ownerId, `${SEND_STATE_PREFIX}${sourceId}`),
+    }).toString();
+    return url.toString();
+  },
+});
+
 export const claimState = internalMutation({
   args: { state: v.string() },
-  handler: async (ctx, { state }): Promise<{ ownerId: string; sourceId: string } | null> => {
+  handler: async (ctx, { state }): Promise<{ ownerId: string; sourceId: string; send: boolean } | null> => {
     const bound = await takeOAuthState(ctx, state);
-    if (bound === null || !bound.provider.startsWith(STATE_PREFIX)) return null;
-    return { ownerId: bound.ownerId, sourceId: bound.provider.slice(STATE_PREFIX.length) };
+    if (bound === null) return null;
+    for (const [prefix, send] of [[STATE_PREFIX, false], [SEND_STATE_PREFIX, true]] as const) {
+      if (bound.provider.startsWith(prefix)) return { ownerId: bound.ownerId, sourceId: bound.provider.slice(prefix.length), send };
+    }
+    return null;
   },
 });
 
@@ -220,6 +261,7 @@ export const oauthCallback = httpAction(async (ctx, request) => {
     return oauthResultPage(400, "This link has expired or was already used. Start connecting again from the app.");
   }
   const { ownerId, sourceId } = claimed;
+  if (claimed.send) return finishSendConsent(ctx, ownerId, sourceId, code);
   try {
     const tokens = await oauthToken(TOKEN_URL, {
       grant_type: "authorization_code",
@@ -255,6 +297,139 @@ export const oauthCallback = httpAction(async (ctx, request) => {
     throw error;
   }
 });
+
+async function finishSendConsent(ctx: ActionCtx, ownerId: string, sourceId: string, code: string): Promise<Response> {
+  try {
+    const tokens = (await oauthToken(TOKEN_URL, {
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri(),
+      client_id: requireEnv("GOOGLE_CLIENT_ID"),
+      client_secret: requireEnv("GOOGLE_CLIENT_SECRET"),
+    })) as { refresh_token?: string; scope?: string };
+    if (tokens.refresh_token === undefined) throw new ProviderError("missing-access", "no_refresh_token");
+    if (tokens.scope !== undefined && !tokens.scope.split(" ").includes(SEND_SCOPE)) {
+      throw new ProviderError("missing-access", "send_scope_not_granted");
+    }
+    await ctx.runMutation(internal.actions.saveSendPermission, {
+      ownerId,
+      sourceId,
+      provider: "gmail",
+      credential: await sealCredential({ refreshToken: tokens.refresh_token }),
+    });
+  } catch (error) {
+    if (error instanceof ProviderError || error instanceof ConvexError) {
+      return oauthResultPage(400, "Sending was not allowed. Start again from the app.");
+    }
+    throw error;
+  }
+  await ctx.runAction(internal.actions.reconcileOutstanding, { ownerId, sourceId }); // reconnect checks unknown sends
+  return oauthResultPage(200, "Gmail can now send mail you ask for. You can return to the app.");
+}
+
+// ---- Send (an explicit user instruction only; see convex/actions.ts)
+
+export type MailJob = { actionId: string; sourceId: string; to: string; body: string; externalId?: string };
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+const base64Text = (text: string) => base64(new TextEncoder().encode(text));
+
+/** RFC 822 plain-text mail with our Message-ID, so it can be found again without resending. */
+function rfc822(job: MailJob): string {
+  const body = base64Text(job.body).replace(/.{76}/g, "$&\r\n");
+  return [
+    `To: ${job.to}`, // validated as one address with no whitespace (domain checkBinding)
+    `Subject: =?UTF-8?B?${base64Text(mailSubject(job.body))}?=`,
+    `Message-ID: ${messageIdFor(job.actionId)}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    body,
+  ].join("\r\n");
+}
+
+async function sendToken(ctx: RunCtx, sourceId: string): Promise<string> {
+  const sealed = await ctx.runQuery(internal.actions.sendCredential, { sourceId });
+  if (sealed === null) throw new ProviderError("missing-access", "missing-send-permission");
+  const { refreshToken } = await openCredential(sealed);
+  const tokens = await oauthToken(TOKEN_URL, {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken!,
+    client_id: requireEnv("GOOGLE_CLIENT_ID"),
+    client_secret: requireEnv("GOOGLE_CLIENT_SECRET"),
+  });
+  return tokens.access_token;
+}
+
+/** Read back through the read connection: in Sent, to the destination, our Message-ID, the approved text. */
+async function verifySent(ctx: RunCtx, job: MailJob, id: string): Promise<EffectOutcome> {
+  const unverified: EffectOutcome = { state: "unknown", externalId: id, reason: "not_read_back" };
+  const { connection } = await ctx.runQuery(internal.connections.context, { sourceId: job.sourceId });
+  if (connection === null) return unverified;
+  try {
+    const message = (await gmailGet(`/messages/${encodeURIComponent(id)}?format=full`, await accessToken(connection))) as GmailMessage;
+    const header = (name: string) =>
+      message.payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? "";
+    const matches =
+      (message.labelIds ?? []).includes("SENT") &&
+      header("To").toLowerCase().includes(job.to.toLowerCase()) &&
+      header("Message-ID") === messageIdFor(job.actionId) &&
+      sameContent(plainText(message.payload) ?? "", job.body);
+    return matches ? { state: "succeeded", externalId: id } : { ...unverified, reason: "read_back_mismatch" };
+  } catch (error) {
+    if (error instanceof ProviderError) return unverified;
+    throw error;
+  }
+}
+
+export async function sendMail(ctx: RunCtx, job: MailJob): Promise<EffectOutcome> {
+  let token: string;
+  try {
+    token = await sendToken(ctx, job.sourceId);
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "failed", reason: error.code }; // nothing was sent
+    throw error;
+  }
+  let sent: { id?: unknown };
+  try {
+    sent = (await providerJson(`${API}/messages/send`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ raw: base64(new TextEncoder().encode(rfc822(job))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") }),
+    })) as { id?: unknown };
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: outcomeForFailure(error.code), reason: error.code };
+    throw error;
+  }
+  // An accepted response is not done: only the read-back below is.
+  if (typeof sent.id !== "string") return { state: "unknown", reason: "no_message_id" };
+  return verifySent(ctx, job, sent.id);
+}
+
+/**
+ * Find a sent message by the Message-ID we set. Not finding it proves nothing (the search
+ * index can lag a delivered mail), so the outcome stays unknown and nothing is resent.
+ */
+export async function lookupSentMail(ctx: RunCtx, job: MailJob): Promise<EffectOutcome> {
+  const { connection } = await ctx.runQuery(internal.connections.context, { sourceId: job.sourceId });
+  if (connection === null) return { state: "unknown", reason: "not_connected" };
+  try {
+    const query = `rfc822msgid:${messageIdFor(job.actionId).slice(1, -1)}`;
+    const page = (await gmailGet(`/messages?q=${encodeURIComponent(query)}`, await accessToken(connection))) as {
+      messages?: { id: string }[];
+    };
+    const id = page.messages?.[0]?.id;
+    return id === undefined ? { state: "unknown", reason: "not_found_yet" } : verifySent(ctx, job, id);
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "unknown", reason: error.code };
+    throw error;
+  }
+}
 
 // ---- Push
 

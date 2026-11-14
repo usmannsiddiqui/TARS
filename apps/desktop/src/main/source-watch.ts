@@ -94,6 +94,7 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
   let disposed = false;
   let scanning = true;
   let roots: Root[] = [];
+  let writeTargets = new Set<string>();
   const known = new Map<string, string>(); // externalId -> version (content hash)
   const issues = new Map<string, SourceIssue>();
   const latest = new Map<string, number>(); // path -> newest read, so an older read never wins
@@ -129,6 +130,8 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
       if (superseded()) return;
       const owner = containing(real);
       if (!owner) return setIssue(candidateId, "outside-grant");
+      // Our own outcome log is a write target, never evidence: its edits must not create obligations.
+      if (writeTargets.has(real)) return;
       const externalId = idFor(owner, real);
       if (!reader.accepts(externalId)) return;
       const info = await stat(real);
@@ -237,6 +240,7 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
     scanning = true;
     report();
     roots = await resolveRoots(grant.selectors);
+    writeTargets = new Set((await resolveRoots(grant.writeTargets)).map((r) => r.real));
     if (disposed) return;
     if (live) startWatchers(); // before the scan, so changes during the scan are not missed
     await scan();

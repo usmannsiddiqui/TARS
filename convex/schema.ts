@@ -205,4 +205,135 @@ export default defineSchema({
     artifactRevision: v.optional(v.string()),
     savedAt: v.string(),
   }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // T11 contact settings, one row per owner, with the one pending 09:00 and 19:30 deadline each.
+  attentionSettings: defineTable({
+    ownerId: v.string(),
+    timezone: v.string(), // IANA
+    quietHours: v.optional(v.object({ start: v.string(), end: v.string() })), // local "HH:MM"
+    morningAt: v.number(),
+    morningJob: v.id("_scheduled_functions"),
+    eveningAt: v.number(),
+    eveningJob: v.id("_scheduled_functions"),
+  }).index("by_owner", ["ownerId"]),
+
+  // Explicit session/meeting events and returns (wake/unlock/app focus), append-only.
+  sessionEvents: defineTable({
+    ownerId: v.string(),
+    kind: v.union(
+      v.literal("start"),
+      v.literal("stop"),
+      v.literal("break"),
+      v.literal("resume"),
+      v.literal("meeting-start"),
+      v.literal("meeting-end"),
+      v.literal("return"),
+    ),
+    at: v.number(),
+  }).index("by_owner_at", ["ownerId", "at"]),
+
+  // At most one pending brief per (owner, kind); a newer one replaces the older.
+  pendingBriefs: defineTable({
+    ownerId: v.string(),
+    kind: v.union(v.literal("morning"), v.literal("evening")),
+    key: v.string(), // "morning:YYYY-MM-DD" (local date)
+    preparedAt: v.number(),
+    brief: v.object({
+      kind: v.union(v.literal("morning"), v.literal("evening")),
+      items: v.array(v.string()),
+      recommendedAction: v.optional(v.string()),
+      reason: v.optional(v.string()),
+      staleSourceIds: v.array(v.string()),
+      hard: v.array(
+        v.object({
+          commitmentId: v.string(),
+          projectId: v.string(),
+          text: v.string(),
+          dueAt: v.string(),
+          kind: v.union(v.literal("meeting"), v.literal("deadline")),
+          sourceId: v.optional(v.string()),
+          sourceKind: v.optional(v.string()),
+          lastCheckedAt: v.optional(v.string()),
+          current: v.boolean(),
+          label: v.string(),
+        }),
+      ),
+      suggested: v.array(v.object({ projectId: v.string(), text: v.string(), commitmentId: v.optional(v.string()) })),
+      triage: v.array(
+        v.object({
+          commitmentId: v.string(),
+          action: v.union(v.literal("prioritize"), v.literal("defer"), v.literal("renegotiate")),
+          reason: v.string(),
+        }),
+      ),
+    }),
+  }).index("by_owner_kind", ["ownerId", "kind"]),
+
+  // One receipt per delivered brief/invitation key; a receipt means "never deliver this again".
+  deliveryReceipts: defineTable({
+    ownerId: v.string(),
+    key: v.string(),
+    channel: v.union(v.literal("notification"), v.literal("panel")),
+    at: v.number(),
+  }).index("by_owner_key", ["ownerId", "key"]),
+
+  dismissedInvitations: defineTable({ ownerId: v.string(), key: v.string(), at: v.number() }).index("by_owner_key", [
+    "ownerId",
+    "key",
+  ]),
+
+  // One row per evaluated commitment (key = project + normalized text, stable across re-preparation).
+  // "none": no clash; "open": shown once until the user chooses; "resolved": never shown again.
+  tradeoffFlags: defineTable({
+    ownerId: v.string(),
+    key: v.string(),
+    text: v.optional(v.string()),
+    state: v.union(v.literal("none"), v.literal("open"), v.literal("resolved")),
+    choice: v.optional(v.union(v.literal("keep"), v.literal("defer"), v.literal("renegotiate"))),
+  })
+    .index("by_owner_key", ["ownerId", "key"])
+    .index("by_owner_state", ["ownerId", "state"]),
+
+  // ActionIntent + ActionReceipt (T10). One row per user instruction, written BEFORE the provider
+  // call (the reservation), so the same instruction can never execute twice.
+  actions: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    taskId: v.optional(v.string()),
+    kind: v.union(v.literal("update-note"), v.literal("send-mail")),
+    destination: v.string(),
+    artifactId: v.string(),
+    revision: v.string(),
+    contentHash: v.string(),
+    instructionId: v.string(),
+    sourceId: v.string(), // the source the effect goes through
+    provider: v.string(), // gmail | outlook-mail | notion
+    body: v.string(), // the approved text at `revision`
+    state: v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("unknown")),
+    externalId: v.optional(v.string()), // provider message/block id, kept for lookup
+    verifiedAt: v.optional(v.string()),
+    reason: v.optional(v.string()), // short explanation of failed/unknown, never provider content
+    logState: v.union(v.literal("not-due"), v.literal("pending"), v.literal("written"), v.literal("failed")),
+  })
+    .index("by_instruction", ["ownerId", "instructionId"])
+    .index("by_owner_project", ["ownerId", "projectId"])
+    .index("by_owner_log", ["ownerId", "logState"])
+    .index("by_source_state", ["sourceId", "state"]),
+
+  // The user's chosen outcome log per project: a write target of one of their grants.
+  logDestinations: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    kind: v.union(v.literal("notion"), v.literal("obsidian")),
+    sourceId: v.string(),
+    target: v.string(),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // Separate consent to send (gmail.send / Mail.Send): the read connection never carries it.
+  sendPermissions: defineTable({
+    ownerId: v.string(),
+    sourceId: v.string(),
+    provider: v.string(),
+    credential: v.string(), // sealed {refreshToken}
+  }).index("by_source", ["sourceId"]),
 });

@@ -158,5 +158,7 @@ export async function providerJson(url: string, init: RequestInit = {}): Promise
     throw new ProviderError("needs-retry", timedOut ? "timeout" : "network");
   }
   if (!response.ok) throw new ProviderError(availabilityForStatus(response.status), `http_${response.status}`);
-  return response.status === 204 ? null : response.json();
+  // 204, and Graph's 202 from message send, carry no body.
+  const text = await response.text();
+  return text.length === 0 ? null : JSON.parse(text);
 }

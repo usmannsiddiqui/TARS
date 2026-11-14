@@ -4,6 +4,7 @@
 // Deliveries are routed by `?source=<sourceId>` in the notification URL; the lease is the only
 // scheduled job and it reads no content.
 import { ConvexError, v } from "convex/values";
+import { mailSubject, outcomeForFailure, sameContent, type EffectOutcome } from "../../packages/domain/src/actions";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -33,6 +34,11 @@ const SCOPES: Record<Kind, string> = {
   "outlook-mail": "offline_access Mail.Read",
   "outlook-calendar": "offline_access Calendars.Read",
 };
+// Separate send consent. Draft-then-send gives an id to verify; creating a draft needs Mail.ReadWrite.
+const SEND_SCOPE = "offline_access Mail.ReadWrite Mail.Send";
+const SEND_STATE = "outlook-send";
+// Immutable ids survive the draft's move to Sent Items, so the draft id finds the sent copy.
+const SEND_PREFER = { prefer: 'IdType="ImmutableId", outlook.body-content-type="text"' };
 const LEASE_MS = 10_000 * 60 * 1000; // Graph's Outlook maximum is 10,080 minutes
 const MAX_ITEMS = 20; // per selected folder or calendar on a bounded read
 const CALENDAR_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
@@ -241,14 +247,38 @@ export const startConnect = mutation({
   },
 });
 
+/** Separate consent to send from this Outlook mailbox; the read connection keeps Mail.Read only. */
+export const startSendConsent = mutation({
+  args: { sourceId: v.string() },
+  returns: v.string(),
+  handler: async (ctx, { sourceId }) => {
+    const ownerId = await requireOwnerId(ctx);
+    const grant = await ctx.db
+      .query("grants")
+      .withIndex("by_source", (q) => q.eq("id", sourceId))
+      .unique();
+    if (grant === null || grant.ownerId !== ownerId || grant.kind !== "outlook-mail") throw new ConvexError("Source is not available");
+    const url = new URL(`${AUTHORITY}/authorize`);
+    url.search = new URLSearchParams({
+      client_id: requireEnv("MICROSOFT_CLIENT_ID"),
+      response_type: "code",
+      redirect_uri: redirectUri(),
+      response_mode: "query",
+      scope: SEND_SCOPE,
+      state: await issueOAuthState(ctx, ownerId, `${SEND_STATE}:${sourceId}`),
+    }).toString();
+    return url.toString();
+  },
+});
+
 export const claimState = internalMutation({
   args: { state: v.string() },
-  handler: async (ctx, { state }): Promise<{ ownerId: string; kind: Kind; sourceId: string } | null> => {
+  handler: async (ctx, { state }): Promise<{ ownerId: string; kind: Kind | typeof SEND_STATE; sourceId: string } | null> => {
     const bound = await takeOAuthState(ctx, state);
     const split = bound?.provider.indexOf(":") ?? -1;
     if (bound === null || split < 0) return null;
     const kind = bound.provider.slice(0, split);
-    return isKind(kind) ? { ownerId: bound.ownerId, kind, sourceId: bound.provider.slice(split + 1) } : null;
+    return isKind(kind) || kind === SEND_STATE ? { ownerId: bound.ownerId, kind, sourceId: bound.provider.slice(split + 1) } : null;
   },
 });
 
@@ -261,6 +291,7 @@ export const oauthCallback = httpAction(async (ctx, request) => {
     return oauthResultPage(400, "This link has expired or was already used. Start connecting again from the app.");
   }
   const { ownerId, kind, sourceId } = claimed;
+  if (kind === SEND_STATE) return finishSendConsent(ctx, ownerId, sourceId, code);
   try {
     const tokens = await oauthToken(`${AUTHORITY}/token`, {
       grant_type: "authorization_code",
@@ -309,6 +340,117 @@ export const oauthCallback = httpAction(async (ctx, request) => {
     throw error;
   }
 });
+
+async function finishSendConsent(ctx: ActionCtx, ownerId: string, sourceId: string, code: string): Promise<Response> {
+  try {
+    const tokens = await oauthToken(`${AUTHORITY}/token`, {
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri(),
+      scope: SEND_SCOPE,
+      client_id: requireEnv("MICROSOFT_CLIENT_ID"),
+      client_secret: requireEnv("MICROSOFT_CLIENT_SECRET"),
+    });
+    if (tokens.refresh_token === undefined) throw new ProviderError("missing-access", "no_refresh_token");
+    await ctx.runMutation(internal.actions.saveSendPermission, {
+      ownerId,
+      sourceId,
+      provider: "outlook-mail",
+      credential: await sealCredential({ refreshToken: tokens.refresh_token }),
+    });
+  } catch (error) {
+    if (error instanceof ProviderError || error instanceof ConvexError) {
+      return oauthResultPage(400, "Sending was not allowed. Start again from the app.");
+    }
+    throw error;
+  }
+  await ctx.runAction(internal.actions.reconcileOutstanding, { ownerId, sourceId }); // reconnect checks unknown sends
+  return oauthResultPage(200, "Outlook can now send mail you ask for. You can return to the app.");
+}
+
+// ---- Send (an explicit user instruction only; see convex/actions.ts)
+
+export type MailJob = { actionId: string; sourceId: string; to: string; body: string; externalId?: string };
+type SentCopy = { isDraft?: boolean; toRecipients?: { emailAddress?: { address?: string } }[]; body?: { content?: string } };
+
+async function sendToken(ctx: RunCtx, sourceId: string): Promise<string> {
+  const sealed = await ctx.runQuery(internal.actions.sendCredential, { sourceId });
+  if (sealed === null) throw new ProviderError("missing-access", "missing-send-permission");
+  const { refreshToken } = await openCredential(sealed);
+  const tokens = await oauthToken(`${AUTHORITY}/token`, {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken!,
+    scope: SEND_SCOPE,
+    client_id: requireEnv("MICROSOFT_CLIENT_ID"),
+    client_secret: requireEnv("MICROSOFT_CLIENT_SECRET"),
+  });
+  if (tokens.refresh_token !== undefined && tokens.refresh_token !== refreshToken) {
+    await ctx.runMutation(internal.actions.rotateSendCredential, {
+      sourceId,
+      credential: await sealCredential({ refreshToken: tokens.refresh_token }),
+    });
+  }
+  return tokens.access_token;
+}
+
+/** The message by its immutable id: no longer a draft, to the destination, with the approved text. */
+async function verifySent(token: string, job: MailJob, id: string): Promise<EffectOutcome> {
+  try {
+    const copy = (await graph(`/me/messages/${encodeURIComponent(id)}?$select=isDraft,toRecipients,body`, token, {
+      headers: SEND_PREFER,
+    })) as SentCopy;
+    if (copy.isDraft !== false) return { state: "unknown", externalId: id, reason: "not_in_sent_items_yet" };
+    const to = (copy.toRecipients ?? []).map((r) => r.emailAddress?.address?.toLowerCase());
+    return to.includes(job.to.toLowerCase()) && sameContent(copy.body?.content ?? "", job.body)
+      ? { state: "succeeded", externalId: id }
+      : { state: "unknown", externalId: id, reason: "read_back_mismatch" };
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "unknown", externalId: id, reason: error.code };
+    throw error;
+  }
+}
+
+export async function sendMail(ctx: RunCtx, job: MailJob): Promise<EffectOutcome> {
+  let token: string;
+  let id: string;
+  try {
+    token = await sendToken(ctx, job.sourceId);
+    const draft = (await graph("/me/messages", token, {
+      method: "POST",
+      headers: SEND_PREFER,
+      body: {
+        subject: mailSubject(job.body),
+        body: { contentType: "Text", content: job.body },
+        toRecipients: [{ emailAddress: { address: job.to } }],
+      },
+    })) as { id?: unknown };
+    if (typeof draft.id !== "string") return { state: "failed", reason: "no_draft_id" };
+    id = draft.id;
+  } catch (error) {
+    // Send was never called, so nothing went out (at most a stray draft).
+    if (error instanceof ProviderError) return { state: "failed", reason: error.code };
+    throw error;
+  }
+  try {
+    await graph(`/me/messages/${encodeURIComponent(id)}/send`, token, { method: "POST", headers: SEND_PREFER });
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: outcomeForFailure(error.code), externalId: id, reason: error.code };
+    throw error;
+  }
+  // 202 Accepted is not done: only the read-back of the sent copy is.
+  return verifySent(token, job, id);
+}
+
+/** Without a draft id there is no deterministic lookup, so it stays unknown. */
+export async function lookupSentMail(ctx: RunCtx, job: MailJob): Promise<EffectOutcome> {
+  if (job.externalId === undefined) return { state: "unknown", reason: "no_deterministic_lookup" };
+  try {
+    return await verifySent(await sendToken(ctx, job.sourceId), job, job.externalId);
+  } catch (error) {
+    if (error instanceof ProviderError) return { state: "unknown", externalId: job.externalId, reason: error.code };
+    throw error;
+  }
+}
 
 /** Best effort: old subscriptions that are already gone are fine. */
 async function unsubscribe(connection: Doc<"connections">, token: string): Promise<void> {
