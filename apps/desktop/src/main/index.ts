@@ -3,10 +3,12 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, protocol, safeStorage, session, shell } from "electron";
+import { watchAiContext } from "./ai-context";
 import { authConfigFromEnv, createAuth, type SecretVault } from "./auth";
 import { createIpcRouter, IPC_CHANNELS } from "./ipc";
 import { aesGcmCipher, openLocalStore, type LocalStore } from "./local-store";
+import { createLocalSources, watchSelected } from "./source-watch";
 
 const APP_SCHEME = "app";
 const APP_HOST = "companion";
@@ -107,7 +109,22 @@ async function start(): Promise<void> {
   });
   await auth.restore();
 
-  const router = createIpcRouter({ appOrigin, auth, store });
+  const sources = createLocalSources({
+    // The only way a path enters the app: the user picks it in the OS dialog.
+    async pickPath() {
+      const win = BrowserWindow.getFocusedWindow();
+      const options = { properties: ["openDirectory", "openFile"] as ("openDirectory" | "openFile")[] };
+      const picked = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
+      return picked.canceled ? null : (picked.filePaths[0] ?? null);
+    },
+    start: async (grant, emit, options) =>
+      grant.kind === "obsidian" ? watchSelected(grant, emit, options) : watchAiContext(grant, emit, options),
+    outbox: store,
+  });
+  // Events missed while the Mac slept are picked up by one reconcile on wake (an OS event, not a timer).
+  powerMonitor.on("resume", () => sources.reconcileAll());
+
+  const router = createIpcRouter({ appOrigin, auth, store, sources });
   for (const channel of IPC_CHANNELS) {
     ipcMain.handle(channel, (event, payload: unknown) =>
       router.handle(channel, { frameUrl: event.senderFrame?.url }, payload),

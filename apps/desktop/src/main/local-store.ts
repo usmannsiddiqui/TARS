@@ -1,7 +1,15 @@
-// Durable, encrypted local capture queue (SQLite). Main process only.
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+// Durable, encrypted local capture queue and evidence outbox (SQLite). Main process only.
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { CaptureInputSchema, type CaptureInput, type CaptureReceipt, type OwnerId } from "@companion/domain";
+import {
+  CaptureInputSchema,
+  EvidenceSchema,
+  type CaptureInput,
+  type CaptureReceipt,
+  type Evidence,
+  type OwnerId,
+  type SourceId,
+} from "@companion/domain";
 
 /** Encrypts payloads at rest. Injected so the store runs on plain Node in tests. */
 export type Cipher = { encrypt(plain: string): Buffer; decrypt(buf: Buffer): string };
@@ -30,6 +38,11 @@ export function aesGcmCipher(key: Buffer): Cipher {
 export type LocalStore = {
   saveCapture(input: CaptureInput, ownerId: OwnerId): Promise<CaptureReceipt>;
   loadPending(ownerId: OwnerId): Promise<CaptureInput[]>;
+  /** Buffers source evidence until the cloud accepts it. False when this source revision is already queued. */
+  enqueueEvidence(evidence: Evidence, ownerId: OwnerId): Promise<boolean>;
+  loadOutbox(ownerId: OwnerId): Promise<Evidence[]>;
+  /** Drops every unsynced record of a source (revocation). Returns how many were discarded. */
+  discardSource(ownerId: OwnerId, sourceId: SourceId): Promise<number>;
   close(): void;
 };
 
@@ -45,11 +58,27 @@ export function openLocalStore(dbPath: string, cipher: Cipher): LocalStore {
     payload BLOB NOT NULL,
     created_at TEXT NOT NULL
   ) STRICT`);
+  db.exec(`CREATE TABLE IF NOT EXISTS evidence_outbox (
+    owner_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    revision_key TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (owner_id, source_id, revision_key)
+  ) STRICT`);
 
   const insert = db.prepare("INSERT INTO captures (id, owner_id, payload, created_at) VALUES (?, ?, ?, ?)");
   const selectByOwner = db.prepare<[string], { payload: Buffer }>(
     "SELECT payload FROM captures WHERE owner_id = ? ORDER BY created_at, rowid",
   );
+
+  const insertEvidence = db.prepare(
+    "INSERT OR IGNORE INTO evidence_outbox (owner_id, source_id, revision_key, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+  );
+  const selectOutbox = db.prepare<[string], { payload: Buffer }>(
+    "SELECT payload FROM evidence_outbox WHERE owner_id = ? ORDER BY created_at, rowid",
+  );
+  const deleteSource = db.prepare("DELETE FROM evidence_outbox WHERE owner_id = ? AND source_id = ?");
 
   return {
     async saveCapture(input, ownerId) {
@@ -70,6 +99,20 @@ export function openLocalStore(dbPath: string, cipher: Cipher): LocalStore {
       return selectByOwner
         .all(ownerId)
         .map((row) => CaptureInputSchema.parse(JSON.parse(cipher.decrypt(row.payload))));
+    },
+    async enqueueEvidence(input, ownerId) {
+      const evidence = EvidenceSchema.parse(input);
+      if (evidence.ownerId !== ownerId) throw new Error("Evidence owner does not match the signed-in owner");
+      // Dedupe on externalId + version without writing note paths to disk in plaintext.
+      const revisionKey = createHash("sha256").update(JSON.stringify([evidence.externalId, evidence.version])).digest("hex");
+      const payload = cipher.encrypt(JSON.stringify(evidence));
+      return insertEvidence.run(ownerId, evidence.sourceId, revisionKey, payload, new Date().toISOString()).changes === 1;
+    },
+    async loadOutbox(ownerId) {
+      return selectOutbox.all(ownerId).map((row) => EvidenceSchema.parse(JSON.parse(cipher.decrypt(row.payload))));
+    },
+    async discardSource(ownerId, sourceId) {
+      return deleteSource.run(ownerId, sourceId).changes;
     },
     close() {
       db.close();

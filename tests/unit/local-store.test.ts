@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 import { aesGcmCipher, openLocalStore, type Cipher } from "../../apps/desktop/src/main/local-store";
-import { makeOwners } from "../fixtures";
+import { makeEvidence, makeOwners, makeProjects } from "../fixtures";
 
 // The app's real at-rest cipher with a random data key (in the app the key is wrapped by safeStorage).
 const testCipher = (): Cipher => aesGcmCipher(randomBytes(32));
@@ -86,5 +86,38 @@ describe("local capture store", () => {
     ).rejects.toBeInstanceOf(ZodError);
     expect(await store.loadPending(alice.ownerId)).toEqual([]);
     store.close();
+  });
+});
+
+describe("local evidence outbox", () => {
+  it("evidence_survives_restart_encrypted_and_deduped", async () => {
+    const { alice, bob } = makeOwners();
+    const cipher = testCipher();
+    const evidence = makeEvidence(alice.ownerId, [makeProjects(alice.ownerId).avt.id], {
+      externalId: "plans/avt.md",
+      version: "hash-1",
+      text: "secret AVT build order",
+    });
+
+    const first = openLocalStore(dbPath, cipher);
+    expect(await first.enqueueEvidence(evidence, alice.ownerId)).toBe(true);
+    // Same source + externalId + version (e.g. an atomic-save double event) is a no-op.
+    expect(await first.enqueueEvidence({ ...evidence, receivedAt: new Date().toISOString() }, alice.ownerId)).toBe(false);
+    await expect(first.enqueueEvidence(evidence, bob.ownerId)).rejects.toThrow("owner");
+    first.close();
+
+    for (const file of readdirSync(dir)) {
+      expect(readFileSync(join(dir, file)).includes("secret AVT build order")).toBe(false);
+    }
+
+    const reopened = openLocalStore(dbPath, cipher);
+    expect(await reopened.loadOutbox(alice.ownerId)).toEqual([evidence]);
+    expect(await reopened.loadOutbox(bob.ownerId)).toEqual([]);
+    expect(await reopened.enqueueEvidence({ ...evidence, version: "hash-2" }, alice.ownerId)).toBe(true);
+
+    expect(await reopened.discardSource(bob.ownerId, evidence.sourceId)).toBe(0);
+    expect(await reopened.discardSource(alice.ownerId, evidence.sourceId)).toBe(2);
+    expect(await reopened.loadOutbox(alice.ownerId)).toEqual([]);
+    reopened.close();
   });
 });

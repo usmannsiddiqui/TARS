@@ -26,8 +26,25 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
       owner = ownerAfterSignIn;
     },
   };
-  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store });
-  return { router, calls, signIns: () => signIns };
+  const sourceCalls: unknown[][] = [];
+  const record =
+    (name: string) =>
+    async (...args: unknown[]) => {
+      sourceCalls.push([name, ...args]);
+      return { name };
+    };
+  const sources = {
+    choose: record("choose"),
+    list: (...args: unknown[]) => {
+      sourceCalls.push(["list", ...args]);
+      return [];
+    },
+    pause: record("pause"),
+    resume: record("resume"),
+    revoke: record("revoke"),
+  };
+  const router = createIpcRouter({ appOrigin: APP_ORIGIN, auth, store, sources });
+  return { router, calls, sourceCalls, signIns: () => signIns };
 }
 
 describe("ipc router", () => {
@@ -89,5 +106,42 @@ describe("ipc router", () => {
     expect(signIns()).toBe(0);
     expect(await router.handle("auth:signIn", trusted, undefined)).toEqual({ signedIn: true });
     expect(signIns()).toBe(1);
+  });
+
+  it("source methods take no paths or ownerId; the main process picks the path and supplies the owner", async () => {
+    const { alice } = makeOwners();
+    const { router, sourceCalls } = setup(alice.ownerId);
+    const projectIds = ["project-avt"];
+
+    // The renderer can never hand the main process a path to watch.
+    for (const payload of [
+      { kind: "obsidian", projectIds, path: "/etc" },
+      { kind: "obsidian", projectIds, selectors: ["/Users"] },
+      { kind: "obsidian", projectIds, ownerId: "owner-bob" },
+      { kind: "slack", projectIds },
+      { kind: "obsidian", projectIds: [] },
+      "/etc/passwd",
+    ]) {
+      await expect(router.handle("sources:choose", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    for (const channel of ["sources:pause", "sources:resume", "sources:revoke"]) {
+      await expect(router.handle(channel, trusted, { sourceId: "s1", ownerId: "owner-bob" })).rejects.toBeInstanceOf(
+        IpcRejected,
+      );
+      await expect(router.handle(channel, trusted, "/tmp/vault")).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("sources:list", { frameUrl: "https://evil.example/" }, undefined)).rejects.toBeInstanceOf(
+      IpcRejected,
+    );
+    expect(sourceCalls).toEqual([]);
+
+    await router.handle("sources:choose", trusted, { kind: "claude-code", projectIds });
+    await router.handle("sources:list", trusted, undefined);
+    await router.handle("sources:revoke", trusted, { sourceId: "s1" });
+    expect(sourceCalls).toEqual([
+      ["choose", alice.ownerId, { kind: "claude-code", projectIds }],
+      ["list", alice.ownerId],
+      ["revoke", alice.ownerId, "s1"],
+    ]);
   });
 });

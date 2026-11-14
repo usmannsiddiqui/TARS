@@ -1,6 +1,6 @@
 // Allowlisted, schema-validated IPC router. Pure: Electron wiring lives in index.ts.
 import { z } from "zod";
-import { CaptureInputSchema, type CaptureInput, type CaptureReceipt, type OwnerId } from "@companion/domain";
+import { CaptureInputSchema, ProjectIdSchema, type CaptureInput, type CaptureReceipt, type OwnerId } from "@companion/domain";
 
 /** Thrown for any request the main process refuses; the message is safe to show. */
 export class IpcRejected extends Error {
@@ -21,7 +21,23 @@ export type IpcRouterDeps = {
     signIn(): Promise<void>;
   };
   store: Store;
+  /** Local file sources; paths come only from the OS dialog in the main process. */
+  sources: {
+    choose(ownerId: OwnerId, input: SourceChoice): Promise<unknown>;
+    list(ownerId: OwnerId): unknown;
+    pause(ownerId: OwnerId, sourceId: string): Promise<unknown>;
+    resume(ownerId: OwnerId, sourceId: string): Promise<unknown>;
+    revoke(ownerId: OwnerId, sourceId: string): Promise<unknown>;
+  };
 };
+
+const SourceChoiceSchema = z.strictObject({
+  kind: z.enum(["obsidian", "claude-code", "codex"]),
+  projectIds: z.array(ProjectIdSchema).min(1),
+});
+type SourceChoice = z.infer<typeof SourceChoiceSchema>;
+const SourceRefSchema = z.strictObject({ sourceId: z.string().min(1).max(100) });
+type SourceRef = z.infer<typeof SourceRefSchema>;
 
 // Payload schemas per channel. None accepts an ownerId: the main process supplies it.
 const routes = {
@@ -32,6 +48,26 @@ const routes = {
   "capture:loadPending": {
     payload: z.undefined(),
     run: (deps: IpcRouterDeps) => deps.store.loadPending(requireOwner(deps)),
+  },
+  "sources:choose": {
+    payload: SourceChoiceSchema,
+    run: (deps: IpcRouterDeps, input: SourceChoice) => deps.sources.choose(requireOwner(deps), input),
+  },
+  "sources:list": {
+    payload: z.undefined(),
+    run: async (deps: IpcRouterDeps) => deps.sources.list(requireOwner(deps)),
+  },
+  "sources:pause": {
+    payload: SourceRefSchema,
+    run: (deps: IpcRouterDeps, { sourceId }: SourceRef) => deps.sources.pause(requireOwner(deps), sourceId),
+  },
+  "sources:resume": {
+    payload: SourceRefSchema,
+    run: (deps: IpcRouterDeps, { sourceId }: SourceRef) => deps.sources.resume(requireOwner(deps), sourceId),
+  },
+  "sources:revoke": {
+    payload: SourceRefSchema,
+    run: (deps: IpcRouterDeps, { sourceId }: SourceRef) => deps.sources.revoke(requireOwner(deps), sourceId),
   },
   "auth:status": {
     payload: z.undefined(),
