@@ -41,6 +41,32 @@ export const availability = v.union(
   v.literal("needs-retry"),
 );
 
+/** PreparedWork (domain type) as stored. */
+export const preparedWorkFields = {
+  projectId: v.string(),
+  title: v.string(),
+  body: v.string(),
+  evidenceIds: v.array(v.string()),
+  gaps: v.array(v.string()),
+  nextAction: v.string(),
+  state: v.union(v.literal("partial"), v.literal("ready")),
+};
+
+export const commitmentFields = {
+  text: v.string(),
+  ownership: v.union(v.literal("user"), v.literal("other"), v.literal("unassigned")),
+  state: v.union(v.literal("open"), v.literal("waiting"), v.literal("user-reported-done"), v.literal("verified-done")),
+  dueAt: v.optional(v.string()),
+  evidenceIds: v.array(v.string()),
+};
+
+export const preparationStatus = v.union(
+  v.literal("ready"),
+  v.literal("needs-retry"), // last attempt failed; previous `work` kept
+  v.literal("invalidated"), // a fact it depended on was forgotten; `work` removed
+  v.literal("empty"), // no in-scope evidence yet
+);
+
 export default defineSchema({
   projects: defineTable({
     // The verified identity's tokenIdentifier; set only by server code, never by a client argument.
@@ -84,4 +110,50 @@ export default defineSchema({
     provider: v.string(),
     expiresAt: v.number(),
   }).index("by_state", ["state"]),
+
+  // MemoryFact. scope "global" only via an explicit user instruction; projectId absent when global.
+  memoryFacts: defineTable({
+    ownerId: v.string(),
+    projectId: v.optional(v.string()),
+    key: v.string(), // normalized
+    value: v.string(),
+    evidenceIds: v.array(v.string()),
+    scope: v.union(v.literal("project"), v.literal("global")),
+    revision: v.number(),
+  }).index("by_owner", ["ownerId"]),
+
+  // Forget tombstones: key + evidence IDs only, never the forgotten value.
+  suppressions: defineTable({
+    ownerId: v.string(),
+    projectId: v.optional(v.string()),
+    key: v.string(),
+    evidenceIds: v.array(v.string()),
+    active: v.boolean(),
+  }).index("by_owner", ["ownerId"]),
+
+  // New facts that resemble something forgotten: held for the user, not active memory.
+  memoryReview: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    key: v.string(),
+    value: v.string(),
+    evidenceIds: v.array(v.string()),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // Commitment; the row _id is the TaskId.
+  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields }).index(
+    "by_owner_project",
+    ["ownerId", "projectId"],
+  ),
+
+  // Latest PreparedWork per (owner, project). factKeys: memory keys it depended on.
+  preparedWork: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    work: v.optional(v.object(preparedWorkFields)),
+    factKeys: v.array(v.string()),
+    status: preparationStatus,
+    lastError: v.optional(v.string()), // short code only, never source or model text
+    updatedAt: v.string(),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
 });
