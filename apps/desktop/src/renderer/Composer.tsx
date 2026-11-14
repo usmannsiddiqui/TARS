@@ -75,7 +75,7 @@ export function Composer({ projectId, onSaved }: { projectId?: string; onSaved?(
       const { microphone } = await window.companion.dictation.begin();
       if (microphone === "denied") {
         setVoice({ kind: "idle" });
-        setStatus("Microphone access is off for Companion. Typing still works; you can allow it in System Settings.");
+        setStatus("Microphone access is off for TARS. Typing still works; you can allow it in System Settings.");
         return;
       }
       stopping.current = false;

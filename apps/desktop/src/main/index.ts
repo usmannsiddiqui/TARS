@@ -117,7 +117,7 @@ function isAppUrl(raw: string): boolean {
 // One renderer, three views: the full app, the pet and the compact panel (chosen by the URL hash).
 type View = "app" | "pet" | "panel";
 const SIZES = { app: { width: 1200, height: 800 }, pet: { width: 104, height: 124 }, panel: { width: 360, height: 420 } };
-const GROUND = "#141110";
+const GROUND = "#080B1A";
 
 function newWindow(view: View, options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
   const win = new BrowserWindow({
@@ -152,7 +152,7 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
 
   const openMain = () => {
     if (live(main)) return main;
-    const win = newWindow("app", { title: "Companion", minWidth: 960, minHeight: 640, backgroundColor: GROUND });
+    const win = newWindow("app", { title: "TARS", minWidth: 960, minHeight: 640, backgroundColor: GROUND });
     // Launching the app is the user's action, so its window may take focus once it has painted.
     win.once("ready-to-show", () => win.show());
     main = win;
@@ -162,7 +162,7 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
   const openPet = () => {
     const { workArea } = screen.getPrimaryDisplay();
     pet = newWindow("pet", {
-      title: "Companion pet",
+      title: "TARS pet",
       x: workArea.x + workArea.width - SIZES.pet.width - 24,
       y: workArea.y + workArea.height - SIZES.pet.height - 24,
       frame: false,
@@ -187,7 +187,7 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
   const ensurePanel = () => {
     if (live(panel) && panelReady) return { win: panel, ready: panelReady };
     const win = newWindow("panel", {
-      title: "Companion panel",
+      title: "TARS panel",
       frame: false,
       resizable: false,
       minimizable: false,
@@ -288,7 +288,10 @@ async function start(): Promise<void> {
   store = openLocalStore(join(userData, "local.db"), aesGcmCipher(dataKey));
 
   const auth = createAuth({
-    config: authConfigFromEnv(process.env),
+    config: authConfigFromEnv({
+      AUTH0_DOMAIN: import.meta.env.AUTH0_DOMAIN,
+      AUTH0_CLIENT_ID: import.meta.env.AUTH0_CLIENT_ID,
+    }),
     openExternal: (url) => shell.openExternal(url),
     vault: safeStorageFile(join(userData, "session.bin")),
   });
@@ -475,7 +478,7 @@ app
   .whenReady()
   .then(start)
   .catch((err: unknown) => {
-    dialog.showErrorBox("Companion could not start", err instanceof Error ? err.message : String(err));
+    dialog.showErrorBox("TARS could not start", err instanceof Error ? err.message : String(err));
     app.exit(1);
   });
 

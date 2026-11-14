@@ -2,10 +2,10 @@
 // apart from suggested work, one recommended start with its reason), the evening recap when it is the
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
 // stay one click away. Presentational: data and actions arrive as props.
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { Brief, CapturedIdea, HardItem, Honest, ProjectSummary, Reentry, Tradeoff, TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
-import { formatWhen, reason, SOURCE_NAME, StateNote } from "./ui";
+import { formatWhen, PetFigure, reason, SOURCE_NAME, StateNote } from "./ui";
 
 export type HomeProps = {
   dateLabel: string;
@@ -67,28 +67,24 @@ export function Home(props: HomeProps) {
       <header className="screen-head">
         <h1>Today</h1>
         <p className="screen-sub">
-          {props.dateLabel} · {focusName ? `Focus: ${focusName}` : "No project chosen yet"}
+          <span>{props.dateLabel}</span>
+          <span className="sub-sep" aria-hidden="true" />
+          <span className={focusName ? "sub-focus" : undefined}>{focusName ? `Focus: ${focusName}` : "No project chosen yet"}</span>
         </p>
       </header>
 
       <div className="home-grid">
         <div className="home-main">
           {projects === null ? (
-            <section className="block" aria-labelledby="start-h">
-              <h2 id="start-h" className="block-title">
-                Recommended start
-              </h2>
+            <Hero title="Recommended start">
               <StateNote state={props.cloud ?? { kind: "loading" }} />
-              <p className="quiet">You can still capture ideas; they wait safely on this Mac.</p>
-            </section>
+              <p>You can still capture ideas; they wait safely on this Mac.</p>
+            </Hero>
           ) : projects.length === 0 ? (
-            <section className="block" aria-labelledby="start-h">
-              <h2 id="start-h" className="block-title">
-                Start with a project
-              </h2>
-              <p>Name the first thing you are working on. You can add the others later.</p>
+            <Hero title="Start with a project">
+              <p className="start-step">Name the first thing you are working on. You can add the others later.</p>
               <NewProject onCreate={props.onCreateProject} />
-            </section>
+            </Hero>
           ) : (
             <>
               {reentry && (
@@ -99,10 +95,7 @@ export function Home(props: HomeProps) {
               )}
 
               {evening && brief ? (
-                <section className="start" aria-labelledby="start-h">
-                  <h2 id="start-h" className="block-title">
-                    Evening recap
-                  </h2>
+                <Hero title="Evening recap">
                   {brief.items.length === 0 ? (
                     <StateNote state={{ kind: "empty", detail: "Nothing finished or parked today. That is fine." }} />
                   ) : (
@@ -112,13 +105,10 @@ export function Home(props: HomeProps) {
                       ))}
                     </ul>
                   )}
-                  <p className="quiet small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
-                </section>
+                  <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
+                </Hero>
               ) : (
-                <section className="start" aria-labelledby="start-h">
-                  <h2 id="start-h" className="block-title">
-                    {reentry ? "One way back in" : "Recommended start"}
-                  </h2>
+                <Hero title={reentry ? "One way back in" : "Recommended start"} {...(recommended ? { signage: initials(recommended.name) } : {})}>
                   {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
                   {brief === undefined && !reentry ? (
                     <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
@@ -150,7 +140,7 @@ export function Home(props: HomeProps) {
                       }}
                     />
                   )}
-                </section>
+                </Hero>
               )}
 
               {props.tradeoff && <TradeoffFlag tradeoff={props.tradeoff} onResolve={props.onResolveTradeoff} />}
@@ -215,28 +205,25 @@ export function Home(props: HomeProps) {
                 )
               )}
 
-              <section className="block" aria-labelledby="others-h">
+              <section className="free" aria-labelledby="others-h">
                 <h2 id="others-h" className="block-title">
                   Other ways to start
                 </h2>
-                {others.length === 0 ? (
-                  <p className="quiet">No other projects.</p>
-                ) : (
-                  <ul className="rows" aria-labelledby="others-h">
-                    {others.map((p) => (
-                      <li key={p.id} className="row">
-                        <div className="row-main">
-                          <span className="row-title">{p.name}</span>
-                          <StateNote state={preparedNote(p)} />
-                        </div>
-                        <button type="button" className="text-button" onClick={() => props.onOpenProject(p.id)} aria-label={`Open ${p.name}`}>
-                          Open
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <NewProject onCreate={props.onCreateProject} compact />
+                <ul className="cards" aria-labelledby="others-h">
+                  {others.map((p) => (
+                    <li key={p.id} className="card">
+                      <span className="card-title">{p.name}</span>
+                      <StateNote state={preparedNote(p)} />
+                      <button type="button" className="text-button go" onClick={() => props.onOpenProject(p.id)} aria-label={`Open ${p.name}`}>
+                        Open
+                      </button>
+                    </li>
+                  ))}
+                  <li className="card card-add">
+                    {others.length === 0 && <p className="quiet">No other projects.</p>}
+                    <NewProject onCreate={props.onCreateProject} compact />
+                  </li>
+                </ul>
               </section>
 
               <details className="block backlog">
@@ -287,6 +274,31 @@ export function Home(props: HomeProps) {
     </div>
   );
 }
+
+/** The one amber slab on Today: the start, with the monolith standing in it. */
+function Hero({ title, signage, children }: { title: string; signage?: string; children: ReactNode }) {
+  return (
+    <section className="start" aria-labelledby="start-h">
+      <h2 id="start-h" className="block-title">
+        {title}
+      </h2>
+      <div className="start-body">{children}</div>
+      <div className="start-figure" aria-hidden="true">
+        {signage && <span className="signage">{signage}</span>}
+        <PetFigure state="idle" variant="hero" className="hero-pet" />
+      </div>
+    </section>
+  );
+}
+
+/** Signage letters for the hero: the project's initials, decoration only. */
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .map((w) => w[0] ?? "")
+    .join("")
+    .slice(0, 3)
+    .toUpperCase();
 
 const TRIAGE_WORD = { prioritize: "Do first", defer: "Can wait", renegotiate: "Consider renegotiating" } as const;
 

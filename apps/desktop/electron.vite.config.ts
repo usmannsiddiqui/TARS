@@ -3,7 +3,7 @@ import { defineConfig, loadEnv } from "electron-vite";
 
 export default defineConfig(({ mode }) => {
   // The Convex deployment URL is public (not a secret) and fixed at build time; the CSP allows only its origin.
-  const env = loadEnv(mode, resolve(import.meta.dirname, "../.."), "CONVEX_");
+  const env = loadEnv(mode, resolve(import.meta.dirname, "../.."), ["CONVEX_", "AUTH0_"]);
   const httpsOrigin = (name: string, example: string) => {
     const raw = env[name];
     if (!raw || !URL.canParse(raw) || new URL(raw).protocol !== "https:") {
@@ -17,7 +17,14 @@ export default defineConfig(({ mode }) => {
   const site = httpsOrigin("CONVEX_SITE_URL", "convex.site");
   return {
     main: {
-      define: { ...define, "import.meta.env.CONVEX_SITE_URL": JSON.stringify(site.origin) },
+      define: {
+        ...define,
+        "import.meta.env.CONVEX_SITE_URL": JSON.stringify(site.origin),
+        // A packaged app started from Finder has no shell environment, so the Auth0 tenant and client ID
+        // (public identifiers, not secrets) are fixed at build time too. Empty means sign-in is not configured.
+        "import.meta.env.AUTH0_DOMAIN": JSON.stringify(env["AUTH0_DOMAIN"] ?? ""),
+        "import.meta.env.AUTH0_CLIENT_ID": JSON.stringify(env["AUTH0_CLIENT_ID"] ?? ""),
+      },
       // @companion/domain ships TypeScript source, so it is bundled instead of required at runtime.
       build: { externalizeDeps: { exclude: ["@companion/domain"] } },
     },

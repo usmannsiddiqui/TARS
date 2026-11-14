@@ -25,7 +25,7 @@ test("capture survives quitting and relaunching the packaged app", async () => {
     const first = await launch();
     expect(await first.evaluate(({ app }) => app.getPath("userData"))).toBe(userData);
     const page1 = await windowFor(first, "");
-    await expect(page1.getByRole("navigation", { name: "Companion" }).getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page1.getByRole("navigation", { name: "TARS" }).getByRole("button", { name: "Sign in" })).toBeVisible();
     await seedSession(first);
     await first.close();
 

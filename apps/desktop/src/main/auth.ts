@@ -140,7 +140,7 @@ function awaitLoopbackCallback(): Promise<string> {
         return;
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'" });
-      res.end("<!doctype html><title>Companion</title><p>You can close this tab and return to Companion.</p>");
+      res.end("<!doctype html><title>TARS</title><p>You can close this tab and return to TARS.</p>");
       clearTimeout(timer);
       server.close();
       resolve(`http://127.0.0.1:${LOOPBACK_PORT}${req.url}`);

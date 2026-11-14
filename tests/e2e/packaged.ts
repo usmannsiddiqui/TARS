@@ -8,7 +8,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "@pla
 
 const repo = join(import.meta.dirname, "../..");
 const desktop = join(repo, "apps/desktop");
-export const executablePath = join(desktop, "release/mac-arm64/Companion.app/Contents/MacOS/Companion");
+export const executablePath = join(desktop, "release/mac-arm64/TARS.app/Contents/MacOS/TARS");
 /** Review screenshots (git-ignored). */
 export const SHOTS = join(repo, "research-assets/ui-shots");
 
@@ -103,8 +103,15 @@ export async function startHarness(): Promise<Harness> {
       await page.waitForLoadState("load");
       await page.emulateMedia({ colorScheme: "dark", reducedMotion: options.reducedMotion ?? "no-preference" });
       await page.locator("#root > *").first().waitFor();
-      // Entrance transitions settle before anything is asserted or photographed.
-      await page.evaluate(() => Promise.all((globalThis as unknown as { document: { getAnimations(): { finished: Promise<unknown> }[] } }).document.getAnimations().map((a) => a.finished)));
+      // Finite entrance animations settle before anything is asserted or photographed (the pet's blink loops forever).
+      await page.evaluate(() =>
+        Promise.all(
+          (globalThis as unknown as { document: { getAnimations(): { finished: Promise<unknown>; effect: { getTiming(): { iterations?: number } } | null }[] } }).document
+            .getAnimations()
+            .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+            .map((a) => a.finished),
+        ),
+      );
       return page;
     },
     async close() {

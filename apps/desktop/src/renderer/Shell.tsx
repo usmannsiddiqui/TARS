@@ -43,17 +43,17 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
         onClick={() => onNavigate(target)}
       >
         <span className="rail-name">{label}</span>
-        {note && <span className="rail-note">{note}</span>}
+        {note && <span className="rail-note" data-kind={note === "Focus" ? "focus" : "retry"}>{note}</span>}
       </button>
     </li>
   );
 
   return (
     <div className="shell">
-      <nav className="rail" aria-label="Companion">
+      <nav className="rail" aria-label="TARS">
         <div className="brand">
-          <PetFigure state="idle" size={22} />
-          <span className="wordmark">Companion</span>
+          <PetFigure state="idle" variant="mark" className="brand-mark" />
+          <span className="wordmark">TARS</span>
         </div>
         <ul className="rail-list">{item({ view: "today" }, "Today")}</ul>
         <h2 className="rail-heading" id="rail-projects">
@@ -73,6 +73,9 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
           {item({ view: "connections" }, "Connections")}
         </ul>
         <div className="rail-foot">
+          <span className="signage" aria-hidden="true">
+            T-01
+          </span>
           <button type="button" className="text-button" aria-pressed={!pet.visible} onClick={pet.onToggle}>
             {pet.visible ? "Hide pet" : "Show pet"}
           </button>
@@ -100,17 +103,21 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
   );
 }
 
-/** The calm screen after "Stop for now": nothing new starts, the place is kept. */
+/** The screen after "Stop for now": nothing new starts, the place is kept. */
 export function Stopped({ projectName, note, onResume }: { projectName?: string; note?: string; onResume(): void }) {
   return (
     <main className="stopped">
-      <PetFigure state="idle" size={64} />
-      <h1>Stopped for now.</h1>
-      <p>{projectName ? `${projectName} is where you left it.` : "Your place is kept."} Nothing new will start until you come back.</p>
-      {note && <p role="alert">{note}</p>}
-      <button type="button" className="secondary" onClick={onResume} autoFocus>
-        Come back
-      </button>
+      <section className="stopped-slab" aria-labelledby="stopped-h">
+        <div className="stopped-text">
+          <h1 id="stopped-h">Stopped for now.</h1>
+          <p>{projectName ? `${projectName} is where you left it.` : "Your place is kept."} Nothing new will start until you come back.</p>
+          {note && <p role="alert">{note}</p>}
+          <button type="button" className="secondary" onClick={onResume} autoFocus>
+            Come back
+          </button>
+        </div>
+        <PetFigure state="idle" variant="hero" className="hero-pet" />
+      </section>
     </main>
   );
 }

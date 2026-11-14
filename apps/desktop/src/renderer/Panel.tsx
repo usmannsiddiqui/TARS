@@ -47,8 +47,8 @@ export function Panel(props: PanelProps) {
   return (
     <main className="panel" aria-labelledby="panel-h">
       <header className="panel-head">
-        <PetFigure state={props.petState} size={28} />
-        <span className="wordmark">Companion</span>
+        <PetFigure state={props.petState} variant="mark" />
+        <span className="wordmark">TARS</span>
         <span className="panel-state">{PET_LABEL[props.petState]}</span>
         <button type="button" className="text-button" onClick={props.onClose}>
           Close

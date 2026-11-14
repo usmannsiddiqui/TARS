@@ -28,7 +28,7 @@
   },
   "build": {
     "appId": "dev.companion.desktop",
-    "productName": "Companion",
+    "productName": "TARS",
     "directories": {
       "output": "release"
     },
@@ -42,7 +42,7 @@
         "dir"
       ],
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Companion uses the microphone only while you are recording a dictation you started with Record. The audio is transcribed into text you can edit before saving."
+        "NSMicrophoneUsageDescription": "TARS uses the microphone only while you are recording a dictation you started with Record. The audio is transcribed into text you can edit before saving."
       }
     },
     "extraResources": [

@@ -246,7 +246,7 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
       )}
 
       {observed && row.permissionMissing && (
-        <StateNote state={{ kind: "missing-access", detail: "macOS Accessibility permission is off for Companion, so nothing is read." }}>
+        <StateNote state={{ kind: "missing-access", detail: "macOS Accessibility permission is off for TARS, so nothing is read." }}>
           <button type="button" className="text-button" disabled={busy} onClick={() => act(observation.onOpenAccessibility)}>
             Open Accessibility settings
           </button>

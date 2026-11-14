@@ -40,7 +40,7 @@ async function tabTo(page: Page, text: string | RegExp, limit = 40) {
 test("one_companion_across_projects", async () => {
   const page = await scene("today");
   // One identity: a single companion name, no roster of agents.
-  await expect(page.getByRole("navigation", { name: "Companion" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "TARS" })).toBeVisible();
   await expect(page.locator(".wordmark")).toHaveCount(1);
   // Four project contexts side by side.
   const rail = page.getByRole("list", { name: "Projects" });
@@ -99,7 +99,7 @@ test("optional_connections_start_off", async () => {
   try {
     const app = await launch(userData);
     const page = await windowFor(app, "");
-    await page.getByRole("navigation", { name: "Companion" }).getByRole("button", { name: "Connections" }).click();
+    await page.getByRole("navigation", { name: "TARS" }).getByRole("button", { name: "Connections" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Connections");
     await expect(page.getByText("All off. You can capture ideas and plan without any of them.")).toBeVisible();
     const states = await page.locator(".source-state").allTextContents();
