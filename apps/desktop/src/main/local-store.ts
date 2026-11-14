@@ -6,6 +6,8 @@ import {
   CaptureInputSchema,
   EvidenceSchema,
   SourceGrantSchema,
+  type Artifact,
+  type ArtifactId,
   type CaptureInput,
   type CaptureReceipt,
   type Evidence,
@@ -13,6 +15,7 @@ import {
   type SourceGrant,
   type SourceId,
 } from "@companion/domain";
+import { ArtifactSchema } from "@companion/domain/artifacts";
 
 /** A selected local source as persisted; mirroredVersion is the grant version the cloud last confirmed (null: never sent). */
 export type LocalGrantRecord = { grant: SourceGrant; mirroredVersion: number | null };
@@ -55,6 +58,12 @@ export type LocalStore = {
   loadGrants(ownerId: OwnerId): Promise<LocalGrantRecord[]>;
   /** Drops every unsynced record of a source (revocation). Returns how many were discarded. */
   discardSource(ownerId: OwnerId, sourceId: SourceId): Promise<number>;
+  /**
+   * Durably records the user's latest edit of an artifact, encrypted; resolves only after commit.
+   * `artifact.revision` is the cloud revision the text was edited from (see reconcileDraft).
+   */
+  saveDraft(artifact: Artifact, ownerId: OwnerId): Promise<void>;
+  loadDraft(artifactId: ArtifactId, ownerId: OwnerId): Promise<Artifact | null>;
   close(): void;
 };
 
@@ -96,6 +105,13 @@ export function openLocalStore(dbPath: string, cipher: Cipher): LocalStore {
     PRIMARY KEY (owner_id, source_id)
   ) STRICT`);
 
+  db.exec(`CREATE TABLE IF NOT EXISTS artifact_drafts (
+    owner_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (owner_id, artifact_id)
+  ) STRICT`);
+
   const insert = db.prepare("INSERT INTO captures (id, owner_id, payload, created_at) VALUES (?, ?, ?, ?)");
   const selectByOwner = db.prepare<[string], { payload: Buffer }>(
     "SELECT payload FROM captures WHERE owner_id = ? ORDER BY created_at, rowid",
@@ -118,6 +134,12 @@ export function openLocalStore(dbPath: string, cipher: Cipher): LocalStore {
     "SELECT payload FROM evidence_outbox WHERE owner_id = ? ORDER BY created_at, rowid",
   );
   const deleteSource = db.prepare("DELETE FROM evidence_outbox WHERE owner_id = ? AND source_id = ?");
+  const upsertDraft = db.prepare(
+    "INSERT INTO artifact_drafts (owner_id, artifact_id, payload) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET payload = excluded.payload",
+  );
+  const selectDraft = db.prepare<[string, string], { payload: Buffer }>(
+    "SELECT payload FROM artifact_drafts WHERE owner_id = ? AND artifact_id = ?",
+  );
 
   return {
     async saveCapture(input, ownerId) {
@@ -166,6 +188,16 @@ export function openLocalStore(dbPath: string, cipher: Cipher): LocalStore {
     },
     async discardSource(ownerId, sourceId) {
       return deleteSource.run(ownerId, sourceId).changes;
+    },
+    async saveDraft(input, ownerId) {
+      const artifact = ArtifactSchema.parse(input);
+      if (artifact.ownerId !== ownerId) throw new Error("Artifact owner does not match the signed-in owner");
+      // synchronous = FULL: the write is on disk when run() returns, so the edit is acknowledged only after that.
+      upsertDraft.run(ownerId, artifact.id, cipher.encrypt(JSON.stringify(artifact)));
+    },
+    async loadDraft(artifactId, ownerId) {
+      const row = selectDraft.get(ownerId, artifactId);
+      return row === undefined ? null : ArtifactSchema.parse(JSON.parse(cipher.decrypt(row.payload)));
     },
     close() {
       db.close();

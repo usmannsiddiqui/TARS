@@ -67,6 +67,23 @@ export const preparationStatus = v.union(
   v.literal("empty"), // no in-scope evidence yet
 );
 
+export const artifactFields = {
+  ownerId: v.string(),
+  projectId: v.string(),
+  revision: v.string(),
+  text: v.string(),
+  userEdited: v.boolean(),
+  evidenceIds: v.array(v.string()),
+};
+
+/** FocusState (domain type). */
+export const focusFields = {
+  projectId: v.optional(v.string()),
+  taskId: v.optional(v.string()),
+  artifactId: v.optional(v.string()),
+  nextStep: v.optional(v.string()),
+};
+
 export default defineSchema({
   projects: defineTable({
     // The verified identity's tokenIdentifier; set only by server code, never by a client argument.
@@ -155,5 +172,37 @@ export default defineSchema({
     status: preparationStatus,
     lastError: v.optional(v.string()), // short code only, never source or model text
     updatedAt: v.string(),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // Artifact (domain type); one per (owner, project). Changes only by compare-and-set on `revision`.
+  artifacts: defineTable(artifactFields).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // Immutable prior versions, written once when an artifact moves past them; never patched.
+  artifactVersions: defineTable({ artifactId: v.id("artifacts"), ...artifactFields }).index("by_artifact_revision", [
+    "artifactId",
+    "revision",
+  ]),
+
+  // Proposed text kept apart from the artifact: a late/conflicting revision or a source update.
+  artifactSuggestions: defineTable({
+    ownerId: v.string(),
+    artifactId: v.id("artifacts"),
+    kind: v.union(v.literal("revision"), v.literal("source")),
+    text: v.string(),
+    changeSummary: v.string(),
+    baseRevision: v.string(), // artifact revision the proposal was written against
+    evidenceIds: v.array(v.string()),
+  }).index("by_artifact", ["artifactId"]),
+
+  // The chosen FocusState, one row per owner. Written only by user-initiated functions in projects.ts.
+  focus: defineTable({ ownerId: v.string(), ...focusFields }).index("by_owner", ["ownerId"]),
+
+  // ProjectSnapshot per (owner, project): what to restore when the user returns to it.
+  projectSnapshots: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    focus: v.object(focusFields),
+    artifactRevision: v.optional(v.string()),
+    savedAt: v.string(),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 });

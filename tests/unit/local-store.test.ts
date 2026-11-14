@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
-import { ProjectIdSchema, SourceIdSchema, type OwnerId, type SourceGrant } from "@companion/domain";
+import {
+  ProjectIdSchema,
+  SourceIdSchema,
+  type Artifact,
+  type ArtifactId,
+  type OwnerId,
+  type RevisionId,
+  type SourceGrant,
+} from "@companion/domain";
 import { aesGcmCipher, openLocalStore, type Cipher } from "../../apps/desktop/src/main/local-store";
 import { makeEvidence, makeOwners, makeProjects } from "../fixtures";
 
@@ -169,5 +177,41 @@ describe("local source grants", () => {
     expect(await store.enqueueEvidence({ ...evidence, receivedAt: new Date().toISOString() }, alice.ownerId)).toBe(false);
     expect(await store.loadOutbox(alice.ownerId)).toEqual([]);
     store.close();
+  });
+});
+
+describe("local artifact drafts", () => {
+  const projectId = ProjectIdSchema.parse("project-ai-guides");
+  const draftOf = (ownerId: OwnerId, overrides: Partial<Artifact> = {}): Artifact => ({
+    id: "artifact-ai-guides" as ArtifactId,
+    ownerId,
+    projectId,
+    revision: "3" as RevisionId,
+    text: "secret offline run-through edit",
+    userEdited: true,
+    evidenceIds: [],
+    ...overrides,
+  });
+
+  it("crash_offline_preserves_acknowledged_draft", async () => {
+    const { alice, bob } = makeOwners();
+    const cipher = testCipher();
+    const crashed = openLocalStore(dbPath, cipher);
+    await crashed.saveDraft(draftOf(alice.ownerId, { text: "first edit" }), alice.ownerId);
+    await crashed.saveDraft(draftOf(alice.ownerId), alice.ownerId);
+    // No close(): the process dies with the handle open and the WAL not checkpointed.
+
+    for (const file of readdirSync(dir)) {
+      expect(readFileSync(join(dir, file)).includes("secret offline run-through edit")).toBe(false);
+    }
+    const restarted = openLocalStore(dbPath, cipher);
+    expect(await restarted.loadDraft("artifact-ai-guides" as ArtifactId, alice.ownerId)).toEqual(draftOf(alice.ownerId));
+    expect(await restarted.loadDraft("artifact-ai-guides" as ArtifactId, bob.ownerId)).toBeNull();
+    await expect(restarted.saveDraft(draftOf(alice.ownerId), bob.ownerId)).rejects.toThrow("owner");
+    await expect(restarted.saveDraft({ ...draftOf(alice.ownerId), revision: "" } as Artifact, alice.ownerId)).rejects.toBeInstanceOf(
+      ZodError,
+    );
+    restarted.close();
+    crashed.close();
   });
 });

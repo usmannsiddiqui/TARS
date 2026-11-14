@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as artifacts from "../artifacts.js";
 import type * as connections from "../connections.js";
 import type * as connectors_canvas from "../connectors/canvas.js";
 import type * as connectors_gmail from "../connectors/gmail.js";
@@ -32,6 +33,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  artifacts: typeof artifacts;
   connections: typeof connections;
   "connectors/canvas": typeof connectors_canvas;
   "connectors/gmail": typeof connectors_gmail;
