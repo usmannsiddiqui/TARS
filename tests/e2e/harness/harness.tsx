@@ -1,23 +1,21 @@
 // TEST-ONLY harness: mounts the presentational screens with ILLUSTRATIVE props for visual review
 // and for behaviour that needs cloud data no test can sign in to yet. Never part of the product
 // bundle (it lives under tests/ and is served only by the e2e spec's own Vite server).
+import { record } from "./bridge"; // first: the Composer reads the bridge when it loads
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Connections } from "../../../apps/desktop/src/renderer/Connections";
+import type { ActingActions } from "../../../apps/desktop/src/renderer/Act";
+import { Connections, type CloudActions } from "../../../apps/desktop/src/renderer/Connections";
 import { Home } from "../../../apps/desktop/src/renderer/Home";
 import { MemoryView } from "../../../apps/desktop/src/renderer/MemoryView";
-import type { Commitment, Evidence, Fact, PetState, ProjectSummary, SourceRow } from "../../../apps/desktop/src/renderer/model";
+import type { Brief, Commitment, Evidence, Fact, PetState, ProjectSummary, Receipt, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
 import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
-import { recommendStart } from "../../../apps/desktop/src/renderer/recommend";
 import { Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
 import "../../../apps/desktop/src/renderer/styles.css";
 
-// Every call a screen makes is recorded here for the spec to assert.
-const calls: unknown[][] = [];
-(window as unknown as { __calls: unknown[][] }).__calls = calls;
-const record = (...args: unknown[]) => void calls.push(args);
+// Every call a screen makes is recorded (bridge.ts) for the spec to assert.
 
 const NOW = new Date();
 const inDays = (d: number, h = 17) => new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + d, h).toISOString();
@@ -72,15 +70,83 @@ const facts: Fact[] = [
   { id: "f2", key: "audience", value: "Around 20 staff, some joining remotely.", scope: "project", evidenceIds: ["e1"] },
   { id: "f3", key: "draft_style", value: "Keep drafts short, plain and in my voice.", scope: "global", evidenceIds: [] },
 ];
-const rows: SourceRow[] = [
+const localRows: SourceRow[] = [
   { id: "src-notes", name: "Notes folder: HackUmass vault", coverage: "Markdown notes in one folder you pick: build orders, decisions, logs.", group: "mac", state: "on", cloudProcessing: false, status: { kind: "last-checked", at: inDays(0, 9) } },
   { id: "claude-code", name: "Claude Code sessions", coverage: "Relevant excerpts from Claude Code session files in a folder you pick. Not Claude Desktop projects.", group: "mac", state: "off" },
   { id: "codex", name: "Codex sessions", coverage: "Relevant excerpts from Codex session files in a folder you pick.", group: "mac", state: "off" },
-  { id: "src-outlook", name: "Outlook mail", coverage: "The threads or folders you select.", group: "cloud", state: "on", status: { kind: "missing-access", detail: "Sign-in expired. Reconnect to keep reading this thread." } },
-  { id: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom.", group: "cloud", state: "unavailable", unavailableReason: "Connecting this account from the app is not built yet." },
-  { id: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh.", group: "cloud", state: "on", status: { kind: "stale", at: inDays(-4, 12) } },
-  { id: "observation", name: "Selected apps", coverage: "Visible text from apps you choose. No screenshots.", group: "optional", state: "unavailable", unavailableReason: "Not available in this build." },
 ];
+const cloudOff: SourceRow[] = [
+  { id: "slack", provider: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom.", group: "cloud", state: "off" },
+  { id: "gmail", provider: "gmail", name: "Gmail", coverage: "Selected project labels and threads.", group: "cloud", state: "off" },
+  { id: "notion", provider: "notion", name: "Notion", coverage: "Pages you share with the app, and the outcome log you choose.", group: "cloud", state: "off" },
+  { id: "canvas", provider: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh.", group: "cloud", state: "off" },
+  { id: "outlook-mail", provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select.", group: "cloud", state: "off" },
+  { id: "outlook-calendar", provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting.", group: "cloud", state: "off" },
+];
+const observation: SourceRow = { id: "observation", name: "Selected apps", coverage: "Visible text from apps and sites you name. No screenshots, no keystrokes.", group: "optional", state: "off" };
+// "connections": two cloud accounts already connected, the rest off. "connections-fresh": every source off.
+const freshLocal: SourceRow[] = [{ id: "obsidian", name: "Notes folder", coverage: localRows[0]!.coverage, group: "mac", state: "off" }, localRows[1]!, localRows[2]!];
+const connectedRows = (fresh: boolean): SourceRow[] => [
+  ...(fresh ? freshLocal : localRows),
+  ...cloudOff.map((r): SourceRow =>
+    fresh
+      ? r
+      : r.provider === "notion"
+        ? { ...r, id: "notion-illustrative", state: "on", status: { kind: "last-checked", at: inDays(0, 8) } }
+        : r.provider === "canvas"
+          ? { ...r, id: "canvas-illustrative", state: "on", status: { kind: "stale", at: inDays(-4, 12) } }
+          : r,
+  ),
+  fresh
+    ? observation
+    : { id: "obs-illustrative", name: "Selected apps: Notes", coverage: "Visible text from com.apple.Notes while it is in front.", group: "optional", state: "on", cloudProcessing: false, permissionMissing: true },
+];
+
+// ---- Illustrative brief, re-entry and receipts (shapes of briefs.* and actions.*; not real records).
+const morning: Brief = {
+  key: "morning:2026-11-14",
+  kind: "morning",
+  preparedAt: Date.parse(inDays(0, 9)),
+  delivered: false,
+  items: [],
+  hard: [
+    { commitmentId: "m1", projectId: "avt", text: "Venue walk-through with the AV lead", dueAt: inDays(0, 15), kind: "meeting", sourceKind: "outlook-calendar", lastCheckedAt: inDays(0, 8), current: true },
+    { commitmentId: "k1", projectId: "course", text: "Reading response 4", dueAt: inDays(5), kind: "deadline", sourceKind: "canvas", lastCheckedAt: inDays(-4, 12), current: false },
+    { commitmentId: "c1", projectId: "guides", text: "Run through the AI Studio demo for the co-presentation", dueAt: inDays(6, 14), kind: "deadline", sourceKind: "outlook-mail", lastCheckedAt: inDays(0, 8), current: true },
+  ],
+  suggested: [
+    { projectId: "guides", text: "Open slides 9–18 and time the demo section against 25 minutes." },
+    { projectId: "guides", text: "Send the final slide order to the co-presenter", commitmentId: "c2" },
+    { projectId: "avt", text: "Confirm the equipment list with the venue", commitmentId: "a1" },
+  ],
+  triage: [],
+  recommendedAction: "Open slides 9–18 and time the demo section against 25 minutes.",
+  reason: "You chose this last time; nothing due sooner is backed by your sources.",
+  stale: [{ name: "Canvas", lastCheckedAt: inDays(-4, 12) }],
+};
+const evening: Brief = {
+  key: "evening:2026-11-14",
+  kind: "evening",
+  preparedAt: Date.parse(inDays(0, 19)),
+  delivered: false,
+  items: ["Done (verified): Send the final slide order to the co-presenter", "Done (you reported): Confirm the equipment list with the venue", "Parked: Run through the AI Studio demo for the co-presentation", "Parked: Reading response 4"],
+  hard: [],
+  suggested: [],
+  triage: [],
+  stale: [],
+};
+const reentry: Reentry = {
+  since: inDays(-5, 18),
+  changed: [
+    { evidenceId: "e2", text: "Slides 9–18 already exist as a first pass; I'll tidy them before we meet.", occurredAt: inDays(-2, 16) },
+    { evidenceId: "e4", text: "Canvas: Reading response 4 due date confirmed.", occurredAt: inDays(-3, 11) },
+  ],
+  changedCount: 7,
+  urgent: [{ commitmentId: "m1", projectId: "avt", text: "Venue walk-through with the AV lead", dueAt: inDays(0, 15), kind: "meeting", sourceKind: "outlook-calendar", lastCheckedAt: inDays(0, 8), current: true }],
+  recommendedAction: "Venue walk-through with the AV lead",
+  reason: "Due today at 15:00.",
+};
+const tradeoff = { commitmentId: "c9", text: '"Launch the AVT landing page this week" is due within a day of "Venue walk-through with the AV lead". Choose what goes first; nothing will be moved or sent.' };
 
 function useEditor(): { artifact: ArtifactView; editor: EditorActions } {
   const [artifact, setArtifact] = useState<ArtifactView>({
@@ -109,18 +175,58 @@ function useEditor(): { artifact: ArtifactView; editor: EditorActions } {
   };
 }
 
-function AppScene({ initial }: { initial: Route }) {
+function useActing(variant: string): { receipt: Receipt | null; acting: ActingActions } {
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  return {
+    receipt,
+    acting: {
+      execute: async (intent, saved) => {
+        record("executeIntent", { kind: intent.kind, destination: intent.destination, revision: saved.revision, ...(intent.taskId ? { taskId: intent.taskId } : {}) });
+        const next: Receipt =
+          variant === "unknown"
+            ? { id: "act-1", state: "unknown", logState: "not-due", reason: "timeout" }
+            : { id: "act-1", state: "succeeded", verifiedAt: new Date().toISOString(), externalId: "illustrative-message-1", logState: "failed" };
+        setReceipt(next);
+        return { status: "receipt", receipt: next };
+      },
+      // Illustrative: the provider still cannot say, so the receipt stays unknown.
+      reconcile: async (id) => record("reconcileAction", id),
+      retryLog: async (id) => (record("appendOutcomeLog", id), setReceipt((r) => r && { ...r, logState: "written" })),
+      setLogDestination: async (kind, target) => record("setLogDestination", kind, target),
+      notes: { sources: [{ id: "src-notes", name: "HackUmass vault", cloudProcessing: true }], designate: async (id) => (record("designateLogNote", id), { target: "note-illustrative", name: "AI Guides log.md" }) },
+      sendConsent: { blocked: "This build cannot open your browser for the provider's sign-in page yet. Nothing was sent." },
+    },
+  };
+}
+
+const cloudActions: CloudActions = {
+  onConnect: async (provider, form) => record("connect", provider, { projectId: form.projectId, selectors: form.selectors, writeTargets: form.writeTargets }),
+  onRefresh: async (row) => record("refresh", row.id),
+  onRevoke: async (row) => record("revokeCloud", row.id),
+  notionWebhookUrl: (id) => `https://illustrative-deployment.convex.site/notion/events?source=${id}`,
+  revealNotionToken: async (id) => (record("revealNotionToken", id), "secret_illustrative_verification_token"),
+};
+
+function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const [route, setRoute] = useState<Route>(initial);
+  const [session, setSession] = useState<SessionState>("idle");
+  // As the subscription would: a brief reported as shown comes back delivered.
+  const [delivered, setDelivered] = useState<string[]>([]);
+  const { receipt, acting } = useActing(variant);
   const [focus, setFocus] = useState("guides");
   const [stopped, setStopped] = useState(false);
   const [pet, setPet] = useState(true);
-  const [captured, setCaptured] = useState(ideas);
   const { artifact, editor } = useEditor();
   const pick = (id: string) => {
     if (id === focus) return; // as App.tsx: picking the current focus changes nothing
     record("switchProject", { targetProjectId: id, userInitiated: true });
     setFocus(id);
   };
+  function stop() {
+    record("session", "stop");
+    setSession("idle");
+    setStopped(true);
+  }
   if (stopped) return <Stopped projectName="AI Guides" onResume={() => setStopped(false)} />;
   const project = route.view === "project" ? projects.find((p) => p.id === route.projectId) : undefined;
   return (
@@ -130,19 +236,23 @@ function AppScene({ initial }: { initial: Route }) {
       focusProjectId={focus}
       account={{ signedIn: true, busy: false, onSignIn: () => record("signIn") }}
       pet={{ visible: pet, onToggle: () => (record("setPetVisible", !pet), setPet(!pet)) }}
+      session={{ state: session, onEvent: (e) => (record("session", e), setSession({ start: "working", resume: "working", break: "break" }[e] as SessionState)) }}
       onNavigate={setRoute}
-      onStop={() => (record("stop"), setStopped(true))}
+      onStop={stop}
     >
       {route.view === "today" && (
         <Home
           dateLabel={new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" }).format(NOW)}
           projects={projects}
           focusProjectId={focus}
-          recommendation={recommendStart(projects, focus, NOW.toISOString())}
-          signedIn
-          ideas={captured}
-          onCapture={async (text) => (record("capture", text), setCaptured([{ text }, ...captured]), text)}
-          onStart={(id, mode) => (pick(id), setRoute({ view: "project", projectId: id, mode }))}
+          brief={((b) => ({ ...b, delivered: delivered.includes(b.key) }))(variant === "evening" ? evening : morning)}
+          {...(variant === "reentry" ? { reentry } : {})}
+          {...(variant === "" ? { tradeoff } : {})}
+          onBriefShown={(key) => (record("markDelivered", key, "panel"), setDelivered((d) => [...d, key]))}
+          onResolveTradeoff={async (id, choice) => record("resolveTradeoff", id, choice)}
+          ideas={ideas}
+          onCaptured={() => undefined}
+          onStart={(id, mode) => (pick(id), session === "idle" && (record("session", "start"), setSession("working")), setRoute({ view: "project", projectId: id, mode }))}
           onOpenProject={(id) => setRoute({ view: "project", projectId: id })}
           onCreateProject={async (name) => record("createProject", name)}
         />
@@ -158,9 +268,12 @@ function AppScene({ initial }: { initial: Route }) {
           commitments={project.commitments}
           artifact={project.id === "guides" ? artifact : null}
           editor={editor}
+          receipt={receipt}
+          acting={acting}
+          onReportDone={async (taskId) => record("reportDone", taskId)}
           onMakeFocus={() => pick(project.id)}
           onPrepare={async () => record("prepare", project.id)}
-          onStop={() => setStopped(true)}
+          onStop={stop}
         />
       )}
       {route.view === "memory" && (
@@ -173,12 +286,20 @@ function AppScene({ initial }: { initial: Route }) {
           onSelectProject={(id) => record("selectProject", id)}
           onCorrect={async (fact, value) => record("remember", fact.key, value)}
           onForget={async (fact) => record("forget", fact.key)}
-          onAllowRelearning={async (key) => record("allowRelearning", key)}
+          onAccept={async (item) => record("acceptWithheld", item.id)}
+          onDismiss={async (item) => record("dismissWithheld", item.id)}
         />
       )}
       {route.view === "connections" && (
         <Connections
-          rows={rows}
+          rows={connectedRows(variant === "fresh")}
+          cloud={cloudActions}
+          observation={{
+            onStart: async (selectors, projectId) => record("observation.start", selectors, projectId),
+            onDeleteRetained: async (id) => record("observation.deleteRetained", id),
+            onOpenAccessibility: async () => record("observation.openAccessibilitySettings"),
+          }}
+          shortcut={{ status: { accelerator: "CommandOrControl+Shift+Space", registered: false, error: "another app already uses it" }, onSet: async (a) => record("shortcut.set", a) }}
           projects={projects}
           onAdd={async (kind, projectId) => record("chooseSource", kind, projectId)}
           onPause={async (id) => record("pause", id)}
@@ -194,21 +315,34 @@ function AppScene({ initial }: { initial: Route }) {
 const scene = location.hash.slice(1) || "today";
 document.documentElement.dataset["view"] = scene.startsWith("pet") ? "pet" : scene.startsWith("panel") ? "panel" : "app";
 
+// Scene names: "<route>" or "<route>-<variant>", e.g. today-reentry, project-unknown, connections-fresh.
 const routes: Record<string, Route> = {
   today: { view: "today" },
   project: { view: "project", projectId: "guides" },
   memory: { view: "memory" },
   connections: { view: "connections" },
 };
+const [routeName = "today", variant = ""] = scene.split("-");
 const guides = projects[0]!.prepared!.work!;
 const element = scene.startsWith("pet-") ? (
   <Pet state={scene.slice(4) as PetState} onOpen={() => record("openPanel")} />
 ) : scene === "panel" ? (
-  <Panel petState="idle" projectName="AI Guides" context={guides.title} nextAction={guides.nextAction} onOpenApp={() => record("openApp", "guides")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
+  <Panel petState="idle" projectName="AI Guides" context={guides.title} nextAction={guides.nextAction} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp", "guides")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
+) : scene === "panel-evening" ? (
+  <Panel
+    petState="idle"
+    projectName="AI Guides"
+    context={guides.title}
+    recap={{ key: evening.key, items: evening.items, delivered: false }}
+    onRecapShown={(key) => record("markDelivered", key, "panel")}
+    onOpenApp={() => record("openApp", "guides")}
+    onStop={() => record("session", "stop")}
+    onClose={() => record("closePanel")}
+  />
 ) : scene === "panel-done" ? (
-  <Panel petState="done" projectName="AI Guides" completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
+  <Panel petState="done" projectName="AI Guides" completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
 ) : (
-  <AppScene initial={routes[scene] ?? { view: "today" }} />
+  <AppScene initial={routes[routeName] ?? { view: "today" }} variant={variant} />
 );
 
 createRoot(document.getElementById("root")!).render(<StrictMode>{element}</StrictMode>);

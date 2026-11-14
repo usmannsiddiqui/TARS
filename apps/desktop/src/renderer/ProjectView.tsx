@@ -1,7 +1,8 @@
-// One project: prepared work with its sources and gaps, the editable run-through, and commitments
-// grouped by who holds them. Presentational: data and actions arrive as props.
+// One project: prepared work with its sources and gaps, the editable run-through with its one
+// instructed action, and commitments grouped by who holds them. Presentational: data and actions arrive as props.
 import { useEffect, useId, useRef, useState } from "react";
-import type { Commitment, Evidence, Honest, Prepared } from "./model";
+import { Act, type ActingActions, type LastIntent } from "./Act";
+import type { Commitment, Evidence, Honest, Prepared, Receipt } from "./model";
 import { formatWhen, reason, StateNote } from "./ui";
 
 export type ArtifactView = {
@@ -34,6 +35,11 @@ export type ProjectViewProps = {
   /** undefined while loading, null before a run-through exists. */
   artifact: ArtifactView | null | undefined;
   editor: EditorActions;
+  /** The project's newest action receipt: undefined while loading, null when nothing was done yet. */
+  receipt: Receipt | null | undefined;
+  acting: ActingActions;
+  /** "I did this myself": recorded as reported by you, never as verified. */
+  onReportDone(taskId: string): Promise<void>;
   onMakeFocus(): void;
   onPrepare(): Promise<void>;
   onStop(): void;
@@ -44,10 +50,29 @@ export function ProjectView(props: ProjectViewProps) {
   const work = prepared?.work;
   const [helping, setHelping] = useState(props.mode === "help");
   const [preparing, setPreparing] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  const [lastIntent, setLastIntent] = useState<LastIntent | null>(null);
+  const [chosenNext, setChosenNext] = useState<string | null>(null);
   const evidenceById = new Map(props.evidence.map((e) => [e.id, e]));
   const mine = commitments?.filter((c) => c.ownership === "user") ?? [];
   const doneMine = mine.filter((c) => c.state === "user-reported-done" || c.state === "verified-done");
   const complete = mine.length > 0 && doneMine.length === mine.length;
+  const openMine = mine.filter((c) => c.state === "open");
+  // Done for an action only right after the user acted here; an older receipt stays in its own block.
+  const verified = props.receipt?.state === "succeeded" && lastIntent !== null;
+  const lastDone = doneMine.at(-1);
+  // What is actually done: the verified action, or every task of yours (marked when you reported it).
+  const doneText = verified
+    ? `${lastIntent?.kind === "update-note" ? `Updated ${lastIntent.destination}` : lastIntent ? `Sent to ${lastIntent.destination}` : "Your instruction was carried out"}, verified.`
+    : complete && lastDone
+      ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ""}`
+      : null;
+  // One optional next step: the next open task of yours, if there is one.
+  const optionalNext = openMine[0]?.text;
+  // A verified completion appears above the run-through: bring it into view and focus once, starting nothing.
+  const doneRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (verified) doneRef.current?.focus();
+  }, [verified]);
 
   useEffect(() => setHelping(props.mode === "help"), [props.mode]);
 
@@ -93,14 +118,24 @@ export function ProjectView(props: ProjectViewProps) {
         </p>
       </header>
 
-      {complete && (
+      {doneText && (
         <section className="completion" aria-labelledby="done-h">
-          <h2 id="done-h">Done</h2>
-          <p>{doneMine.at(-1)?.text}</p>
+          <h2 id="done-h" ref={doneRef} tabIndex={-1}>
+            Done
+          </h2>
+          <p>{doneText}</p>
+          <p className="quiet small">Nothing else starts on its own.</p>
           <div className="actions equal">
-            {work?.nextAction && (
-              <button type="button" className="secondary" onClick={() => setHelping(true)}>
-                Optional next: {work.nextAction}
+            {optionalNext && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setChosenNext(optionalNext);
+                  setHelping(true);
+                }}
+              >
+                Optional next: {optionalNext}
               </button>
             )}
             <button type="button" className="secondary" onClick={props.onStop}>
@@ -168,7 +203,13 @@ export function ProjectView(props: ProjectViewProps) {
             {preparing.error && <StateNote state={{ kind: "needs-retry", detail: preparing.error }} />}
           </section>
 
-          <RunThrough artifact={props.artifact} canCreate={work !== undefined} editor={props.editor} improve={props.mode === "improve"} />
+          <RunThrough
+            artifact={props.artifact}
+            canCreate={work !== undefined}
+            editor={props.editor}
+            improve={props.mode === "improve"}
+            act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: props.receipt ?? null, lastIntent, onIntent: setLastIntent, actions: props.acting }}
+          />
         </div>
 
         <aside className="project-side">
@@ -176,9 +217,9 @@ export function ProjectView(props: ProjectViewProps) {
             <h2 id="next-h" className="block-title">
               Next step
             </h2>
-            {helping && work ? (
+            {helping && (chosenNext ?? work) ? (
               <p className="step" tabIndex={-1} ref={(el) => el?.focus()}>
-                {work.nextAction}
+                {chosenNext ?? work?.nextAction}
               </p>
             ) : (
               <p className="quiet">One small step, when you want it.</p>
@@ -188,16 +229,17 @@ export function ProjectView(props: ProjectViewProps) {
                 Help me start
               </button>
             )}
-            {helping && !work && <StateNote state={{ kind: "empty", detail: "Prepare from your sources first, then I can suggest a step." }} />}
+            {helping && !work && !chosenNext && <StateNote state={{ kind: "empty", detail: "Prepare from your sources first, then I can suggest a step." }} />}
           </section>
-          <Commitments commitments={commitments} />
+          <Commitments commitments={commitments} onReportDone={props.onReportDone} />
         </aside>
       </div>
     </div>
   );
 }
 
-function Commitments({ commitments }: { commitments: Commitment[] | null }) {
+function Commitments({ commitments, onReportDone }: { commitments: Commitment[] | null; onReportDone(taskId: string): Promise<void> }) {
+  const [state, setState] = useState<{ busy?: string; error?: string }>({});
   if (commitments === null) {
     return (
       <section className="block" aria-labelledby="commit-h">
@@ -233,21 +275,49 @@ function Commitments({ commitments }: { commitments: Commitment[] | null }) {
                   <span className="quiet">
                     {c.dueAt && ` · due ${formatWhen(c.dueAt)}`}
                     {c.state === "verified-done" && " · done, verified"}
-                    {c.state === "user-reported-done" && " · done, by you"}
+                    {c.state === "user-reported-done" && " · reported done by you, not verified"}
                   </span>
+                  {c.ownership === "user" && c.state === "open" && (
+                    <button
+                      type="button"
+                      className="text-button inline done-myself"
+                      disabled={state.busy !== undefined}
+                      aria-label={`I did this myself: ${c.text}`}
+                      onClick={async () => {
+                        setState({ busy: c.id });
+                        try {
+                          await onReportDone(c.id);
+                          setState({});
+                        } catch (err) {
+                          setState({ error: reason(err) });
+                        }
+                      }}
+                    >
+                      I did this myself
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
           )}
         </section>
       ))}
+      {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
     </section>
   );
 }
 
 type LastChange = { summary: string; revision: string; undoRevision?: string; conflict?: boolean };
 
-function RunThrough({ artifact, canCreate, editor, improve }: { artifact: ArtifactView | null | undefined; canCreate: boolean; editor: EditorActions; improve: boolean }) {
+type RunThroughProps = {
+  artifact: ArtifactView | null | undefined;
+  canCreate: boolean;
+  editor: EditorActions;
+  improve: boolean;
+  act: Omit<Parameters<typeof Act>[0], "saved" | "dirty">;
+};
+
+function RunThrough({ artifact, canCreate, editor, improve, act }: RunThroughProps) {
   const textId = useId();
   const instructionId = useId();
   const instructionRef = useRef<HTMLTextAreaElement>(null);
@@ -377,6 +447,8 @@ function RunThrough({ artifact, canCreate, editor, improve }: { artifact: Artifa
               </button>
             </div>
           </form>
+
+          <Act saved={{ artifactId: artifact.id, revision: artifact.revision, text: artifact.text }} dirty={dirty} {...act} />
         </>
       )}
       {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}

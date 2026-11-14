@@ -1,12 +1,12 @@
 // Project memory: what the companion remembers, forgetting, and source-group proposals.
 // Owner always comes from the verified token; project ownership is checked on every call.
 import { ConvexError, v } from "convex/values";
-import { normalizeKey, suppressionVerdict, visibleFacts } from "../packages/domain/src/memory";
+import { isSuppressed, normalizeKey, suppressionVerdict, visibleFacts } from "../packages/domain/src/memory";
 import { SourceGroupsOutputSchema, validateSourceGroups, type SourceGroupProposal } from "../packages/domain/src/prepare";
 import type { MemoryFact, OwnerId, ProjectId, Suppression } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { action, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
+import { action, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 import { generateStructured } from "./lib/model";
 
@@ -96,6 +96,67 @@ export const listWithheld = query({
   },
 });
 
+type FactInput = {
+  projectId?: string | undefined;
+  key: string;
+  value: string;
+  evidenceIds: string[];
+  scope: "project" | "global";
+  explicitUserInstruction: boolean;
+};
+
+/** The one path that stores a user-backed fact. `acceptingWithheld`: the user explicitly accepted a near-match. */
+async function storeFact(ctx: MutationCtx, ownerId: string, args: FactInput, acceptingWithheld = false) {
+  const key = normalizeKey(args.key);
+  const value = args.value.trim();
+  if (key === "" || key.length > MAX_KEY) throw new ConvexError("Memory key must be 1-80 characters");
+  if (value === "" || value.length > MAX_VALUE) throw new ConvexError("Memory value must be 1-500 characters");
+  if (args.scope === "global" && !args.explicitUserInstruction) {
+    throw new ConvexError("Global memory requires an explicit user instruction");
+  }
+  const projectId = args.scope === "project" ? args.projectId : undefined;
+  if (args.scope === "project") {
+    if (projectId === undefined) throw new ConvexError("Project memory needs a project");
+    await requireOwnedProject(ctx, ownerId, projectId);
+  }
+  // Cited evidence must be the caller's current evidence (and in the project, for project scope).
+  const evidenceIds = [...new Set(args.evidenceIds)];
+  if (evidenceIds.length > 0) {
+    const owned = await ctx.db
+      .query("evidence")
+      .withIndex("by_owner_current", (q) => q.eq("ownerId", ownerId).eq("isCurrent", true))
+      .collect();
+    const allowed = new Set(
+      owned.filter((row) => projectId === undefined || row.projectIds.includes(projectId)).map((row) => row.id),
+    );
+    if (!evidenceIds.every((id) => allowed.has(id))) throw new ConvexError("Evidence is not available");
+  }
+  const verdict = suppressionVerdict({ projectId: projectId as ProjectId | undefined, key, evidenceIds }, await loadSuppressions(ctx, ownerId));
+  if (verdict === "blocked" || (verdict === "withheld" && !acceptingWithheld)) {
+    throw new ConvexError("This matches something you asked me to forget; allow relearning first");
+  }
+
+  const existing = (
+    await ctx.db
+      .query("memoryFacts")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .collect()
+  ).find((row) => row.key === key && row.scope === args.scope && row.projectId === projectId);
+  if (existing === undefined) {
+    await ctx.db.insert("memoryFacts", {
+      ownerId,
+      ...(projectId === undefined ? {} : { projectId }),
+      key,
+      value,
+      evidenceIds,
+      scope: args.scope,
+      revision: 1,
+    });
+  } else {
+    await ctx.db.patch(existing._id, { value, evidenceIds, revision: existing.revision + 1 });
+  }
+}
+
 /** User-stated memory. Global scope only with an explicit user instruction, never from model output. */
 export const remember = mutation({
   args: {
@@ -108,54 +169,63 @@ export const remember = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const ownerId = await requireOwnerId(ctx);
-    const key = normalizeKey(args.key);
-    const value = args.value.trim();
-    if (key === "" || key.length > MAX_KEY) throw new ConvexError("Memory key must be 1-80 characters");
-    if (value === "" || value.length > MAX_VALUE) throw new ConvexError("Memory value must be 1-500 characters");
-    if (args.scope === "global" && !args.explicitUserInstruction) {
-      throw new ConvexError("Global memory requires an explicit user instruction");
-    }
-    const projectId = args.scope === "project" ? args.projectId : undefined;
-    if (args.scope === "project") {
-      if (projectId === undefined) throw new ConvexError("Project memory needs a project");
-      await requireOwnedProject(ctx, ownerId, projectId);
-    }
-    // Cited evidence must be the caller's current evidence (and in the project, for project scope).
-    const evidenceIds = [...new Set(args.evidenceIds)];
-    if (evidenceIds.length > 0) {
-      const owned = await ctx.db
-        .query("evidence")
-        .withIndex("by_owner_current", (q) => q.eq("ownerId", ownerId).eq("isCurrent", true))
-        .collect();
-      const allowed = new Set(
-        owned.filter((row) => projectId === undefined || row.projectIds.includes(projectId)).map((row) => row.id),
-      );
-      if (!evidenceIds.every((id) => allowed.has(id))) throw new ConvexError("Evidence is not available");
-    }
-    if (suppressionVerdict({ projectId: projectId as ProjectId | undefined, key, evidenceIds }, await loadSuppressions(ctx, ownerId)) !== "allowed") {
-      throw new ConvexError("This matches something you asked me to forget; allow relearning first");
-    }
+    await storeFact(ctx, await requireOwnerId(ctx), args);
+    return null;
+  },
+});
 
-    const existing = (
-      await ctx.db
-        .query("memoryFacts")
-        .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
-        .collect()
-    ).find((row) => row.key === key && row.scope === args.scope && row.projectId === projectId);
-    if (existing === undefined) {
-      await ctx.db.insert("memoryFacts", {
-        ownerId,
-        ...(projectId === undefined ? {} : { projectId }),
-        key,
-        value,
-        evidenceIds,
-        scope: args.scope,
-        revision: 1,
-      });
-    } else {
-      await ctx.db.patch(existing._id, { value, evidenceIds, revision: existing.revision + 1 });
+async function requireOwnedReview(ctx: MutationCtx, ownerId: string, id: string) {
+  const reviewId = ctx.db.normalizeId("memoryReview", id);
+  const row = reviewId === null ? null : await ctx.db.get(reviewId);
+  if (row === null || row.ownerId !== ownerId) throw new ConvexError("Not found");
+  return row;
+}
+
+/**
+ * The user accepts a withheld item: it is remembered through the same path as `remember`. A forget
+ * whose key would still hide it is lifted, because the user has just said this is wanted.
+ */
+export const acceptWithheld = mutation({
+  args: { id: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const ownerId = await requireOwnerId(ctx);
+    const row = await requireOwnedReview(ctx, ownerId, id);
+    const candidate: MemoryFact = {
+      id: row._id,
+      ownerId: ownerId as OwnerId,
+      projectId: row.projectId as ProjectId,
+      key: row.key,
+      value: row.value,
+      evidenceIds: row.evidenceIds as MemoryFact["evidenceIds"],
+      scope: "project",
+      revision: 1,
+    };
+    const tombstones = await ctx.db
+      .query("suppressions")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .collect();
+    for (const tombstone of tombstones) {
+      if (tombstone.active && isSuppressed(candidate, [toSuppression(tombstone)])) await ctx.db.patch(tombstone._id, { active: false });
     }
+    await storeFact(
+      ctx,
+      ownerId,
+      { projectId: row.projectId, key: row.key, value: row.value, evidenceIds: row.evidenceIds, scope: "project", explicitUserInstruction: true },
+      true,
+    );
+    await ctx.db.delete(row._id);
+    return null;
+  },
+});
+
+/** The user dismisses a withheld item: it is removed from review and stays unused. */
+export const dismissWithheld = mutation({
+  args: { id: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const row = await requireOwnedReview(ctx, await requireOwnerId(ctx), id);
+    await ctx.db.delete(row._id);
     return null;
   },
 });

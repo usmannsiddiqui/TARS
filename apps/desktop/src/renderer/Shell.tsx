@@ -1,6 +1,7 @@
 // The full app's frame: where am I (rail + title), the one next thing (each screen's single amber
 // action) and how do I stop ("Stop for now", always in the same corner).
 import type { ReactNode } from "react";
+import type { SessionEvent, SessionState } from "./model";
 import { PetFigure } from "./ui";
 
 export type Route =
@@ -15,6 +16,8 @@ export type ShellProps = {
   focusProjectId?: string;
   account: { signedIn: boolean | null; onSignIn(): void; busy: boolean };
   pet: { visible: boolean; onToggle(): void };
+  /** Explicit work-session controls; "Stop for now" (onStop) ends the session and starts nothing. */
+  session: { state: SessionState; error?: string; onEvent(event: Exclude<SessionEvent, "stop">): void };
   onNavigate(route: Route): void;
   onStop(): void;
   children: ReactNode;
@@ -23,7 +26,14 @@ export type ShellProps = {
 const isCurrent = (route: Route, target: Route) =>
   route.view === target.view && (target.view !== "project" || (route.view === "project" && route.projectId === target.projectId));
 
-export function Shell({ route, projects, focusProjectId, account, pet, onNavigate, onStop, children }: ShellProps) {
+const SESSION_BUTTON = {
+  idle: { event: "start", label: "Start working" },
+  working: { event: "break", label: "Take a break" },
+  break: { event: "resume", label: "Back from break" },
+} as const;
+
+export function Shell({ route, projects, focusProjectId, account, pet, session, onNavigate, onStop, children }: ShellProps) {
+  const next = SESSION_BUTTON[session.state];
   const item = (target: Route, label: string, note?: string) => (
     <li key={target.view === "project" ? target.projectId : target.view}>
       <button
@@ -74,7 +84,12 @@ export function Shell({ route, projects, focusProjectId, account, pet, onNavigat
         </div>
       </nav>
       <main className="canvas">
-        <div className="canvas-stop">
+        <div className="canvas-stop" role="group" aria-label="Work session">
+          {session.error && <span className="session-state" role="alert">{session.error}</span>}
+          {session.state !== "idle" && <span className="session-state">{session.state === "working" ? "Working" : "On a break"}</span>}
+          <button type="button" className="secondary" onClick={() => session.onEvent(next.event)}>
+            {next.label}
+          </button>
           <button type="button" className="secondary" onClick={onStop}>
             Stop for now
           </button>
@@ -86,12 +101,13 @@ export function Shell({ route, projects, focusProjectId, account, pet, onNavigat
 }
 
 /** The calm screen after "Stop for now": nothing new starts, the place is kept. */
-export function Stopped({ projectName, onResume }: { projectName?: string; onResume(): void }) {
+export function Stopped({ projectName, note, onResume }: { projectName?: string; note?: string; onResume(): void }) {
   return (
     <main className="stopped">
       <PetFigure state="idle" size={64} />
       <h1>Stopped for now.</h1>
       <p>{projectName ? `${projectName} is where you left it.` : "Your place is kept."} Nothing new will start until you come back.</p>
+      {note && <p role="alert">{note}</p>}
       <button type="button" className="secondary" onClick={onResume} autoFocus>
         Come back
       </button>

@@ -1,4 +1,4 @@
-// T7: one companion, the pet and its panel, progressive setup.
+// T7: one companion, the pet and its panel, progressive setup. T10/T11 UI: briefs, acting, completion.
 // Packaged-app tests drive the real app. No real sign-in exists yet, so a session is seeded and the
 // cloud never confirms it: anything needing live cloud projects runs against the TEST-ONLY harness
 // (tests/e2e/harness), which mounts the same presentational screens with illustrative props.
@@ -48,7 +48,7 @@ test("one_companion_across_projects", async () => {
   // Exactly one recommended start, with its reason, and exactly one amber action on the screen.
   const start = page.getByRole("region", { name: "Recommended start" });
   await expect(start).toContainText("AI Guides");
-  await expect(start).toContainText("Why this one: You chose AI Guides last, and prepared work is ready.");
+  await expect(start).toContainText("Why this one: You chose this last time; nothing due sooner is backed by your sources.");
   await expect(page.locator(".primary")).toHaveCount(1);
   await expect(start.getByRole("button", { name: "Help me start" })).toBeVisible();
   await expect(start.getByRole("button", { name: "Improve content first" })).toBeVisible();
@@ -62,9 +62,11 @@ test("one_companion_across_projects", async () => {
   await others.getByRole("button", { name: "Open AVT" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("AVT");
   await expect(page.getByText("Not your focus.")).toBeVisible();
-  expect(await calls(page)).toEqual([]);
+  // Showing the brief is its delivery (panel channel, never a notification); nothing else happened.
+  const shown = ["markDelivered", "morning:2026-11-14", "panel"];
+  expect(await calls(page)).toEqual([shown]);
   await page.getByRole("button", { name: "Work on this now" }).click();
-  expect(await calls(page)).toEqual([["switchProject", { targetProjectId: "avt", userInitiated: true }]]);
+  expect(await calls(page)).toEqual([shown, ["switchProject", { targetProjectId: "avt", userInitiated: true }]]);
   await expect(page.getByText("Your focus")).toBeVisible();
   await page.close();
 });
@@ -208,7 +210,13 @@ test("keyboard-only main path with visible focus", async () => {
   await page.getByRole("status").getByRole("button", { name: "Undo" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("status")).toContainText("Restored revision 3.");
-  expect((await calls(page)).map((c) => c[0])).toEqual(["revise", "undo"]);
+  // Help me start is the user's explicit session start; nothing else ran besides what they asked.
+  expect(await calls(page)).toEqual([
+    ["markDelivered", "morning:2026-11-14", "panel"],
+    ["session", "start"],
+    ["revise", "Make the demo shorter", "3"],
+    ["undo", "4", "3"],
+  ]);
   // How to stop is always one key path away.
   await page.locator("body").focus();
   await tabTo(page, "Stop for now");
@@ -231,6 +239,204 @@ test("reduced motion: nothing travels and states still read by words and shape",
   }
 });
 
+// ---- T11 (harness: the brief, re-entry and session data come from Convex, which no test can sign in to).
+
+test("morning_brief_separates_deadlines_from_suggestions", async () => {
+  const page = await scene("today");
+  const hard = page.getByRole("region", { name: "Meetings and deadlines" });
+  await expect(hard.getByRole("listitem")).toHaveCount(3);
+  await expect(hard).toContainText("Venue walk-through with the AV lead · meeting");
+  // A stale source is labelled with when it was last checked, never shown as current.
+  await expect(hard.getByRole("listitem").filter({ hasText: "Reading response 4" })).toContainText(/Stale.*last checked .*; may have changed/);
+  await expect(page.getByRole("region", { name: "Suggested work" })).toContainText("Suggestions, not deadlines.");
+  await expect(page.getByRole("region", { name: "May be out of date" })).toContainText("Canvas: last checked");
+  // One tradeoff flag; the user's choice ends it and changes nothing else.
+  const flag = page.getByRole("region", { name: "A new commitment competes" });
+  await flag.getByRole("button", { name: "Defer the new one" }).click();
+  expect((await calls(page)).at(-1)).toEqual(["resolveTradeoff", "c9", "defer"]);
+  await page.close();
+});
+
+test("evening_recap_is_panel_only", async () => {
+  // In the panel: shown because the user opened it, recorded as panel delivery, never an alert.
+  const panel = await scene("panel-evening", { size: { width: 360, height: 420 } });
+  const recap = panel.getByRole("region", { name: "Evening recap" });
+  await expect(recap.getByRole("listitem")).toHaveText([
+    "Done (verified): Send the final slide order to the co-presenter",
+    "Done (you reported): Confirm the equipment list with the venue",
+    "Parked: Run through the AI Studio demo for the co-presentation",
+    "Parked: Reading response 4",
+  ]);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  expect(await calls(panel)).toEqual([["markDelivered", "evening:2026-11-14", "panel"]]);
+  await panel.close();
+  // In the app: the recap replaces the start; no recommended work is pushed in the evening.
+  const page = await scene("today-evening");
+  await expect(page.getByRole("region", { name: "Evening recap" })).toContainText("Parked: Reading response 4");
+  await expect(page.getByRole("button", { name: "Help me start" })).toHaveCount(0);
+  expect(await calls(page)).toEqual([["markDelivered", "evening:2026-11-14", "panel"]]);
+  await page.close();
+});
+
+test("reentry_shows_one_action_and_full_backlog", async () => {
+  const page = await scene("today-reentry");
+  await expect(page.getByText(/^Welcome back\. Since .*Nothing was moved, deleted or sent while you were away\.$/)).toBeVisible();
+  const start = page.getByRole("region", { name: "One way back in" });
+  await expect(start.locator(".start-step")).toHaveText("Venue walk-through with the AV lead");
+  await expect(start).toContainText("Why this one: Due today at 15:00.");
+  // Exactly one manageable action.
+  await expect(page.getByRole("button", { name: "Help me start" })).toHaveCount(1);
+  await expect(page.locator(".primary")).toHaveCount(1);
+  await expect(page.getByRole("region", { name: /What changed/ })).toContainText("and 5 more in your sources");
+  await expect(page.getByRole("region", { name: "Genuinely urgent" })).toContainText("Venue walk-through with the AV lead");
+  // The full backlog stays reachable: every open item in every project.
+  await page.getByText("All open work").click();
+  await expect(page.locator(".backlog summary .count")).toHaveText("6");
+  for (const name of ["AI Guides", "AVT", "Coursework"]) await expect(page.getByRole("region", { name: `Open work in ${name}` })).toBeVisible();
+  // Coming back starts nothing and does not mark the morning brief as seen.
+  expect(await calls(page)).toEqual([]);
+  await page.close();
+});
+
+test("stop_for_now_starts_nothing", async () => {
+  const page = await scene("today");
+  const session = page.getByRole("group", { name: "Work session" });
+  await session.getByRole("button", { name: "Start working" }).click();
+  await expect(session).toContainText("Working");
+  await session.getByRole("button", { name: "Take a break" }).click();
+  await session.getByRole("button", { name: "Back from break" }).click();
+  const before = (await calls(page)).length;
+  await session.getByRole("button", { name: "Stop for now" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Stopped for now.");
+  expect((await calls(page)).slice(before)).toEqual([["session", "stop"]]);
+  // Coming back shows your place; it starts no session and no work.
+  await page.getByRole("button", { name: "Come back" }).click();
+  await expect(page.getByRole("group", { name: "Work session" }).getByRole("button", { name: "Start working" })).toBeVisible();
+  expect((await calls(page)).slice(before)).toEqual([["session", "stop"]]);
+  await page.close();
+});
+
+// ---- T10 (harness: executeIntent and receipts are Convex actions; no test triggers a real send).
+
+async function send(page: Page) {
+  const act = page.getByRole("region", { name: "Send or update" });
+  await act.getByLabel("Recipient email address").fill("copresenter@example.com");
+  // The destination and revision are on the button before the click; the click is the approval.
+  await act.getByRole("button", { name: "Send revision 3 to copresenter@example.com" }).click();
+  return act;
+}
+
+test("completion_shows_done_next_and_stop_equally", async () => {
+  const page = await scene("project");
+  let dialogs = 0;
+  page.on("dialog", () => void dialogs++);
+  const act = await send(page);
+  const receipt = act.getByRole("status", { name: "What happened" });
+  await expect(receipt).toContainText("Sent to copresenter@example.com, verified");
+  // The win above is brought into view by focus; Tab then reaches its two equal choices.
+  // (activeElement, not toBeFocused: several harness windows are open, so this one may not hold OS focus.)
+  await expect.poll(() => page.evaluate(() => (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id)).toBe("done-h");
+  await expect(receipt).toContainText("found in your sent mail with the same recipient and text");
+  // The log is its own state; retrying it never sends again.
+  await expect(receipt).toContainText("Outcome log not written");
+  await receipt.getByRole("button", { name: "Retry log" }).click();
+  await expect(receipt).toContainText("Outcome logged.");
+
+  const done = page.getByRole("region", { name: "Done" });
+  await expect(done).toContainText("Sent to copresenter@example.com, verified.");
+  const buttons = done.getByRole("button");
+  await expect(buttons).toHaveText(["Optional next: Run through the AI Studio demo for the co-presentation", "Stop for now"]);
+  const [next, stop] = [await buttons.nth(0).boundingBox(), await buttons.nth(1).boundingBox()];
+  expect(Math.abs(next!.width - stop!.width)).toBeLessThan(1);
+  expect(Math.abs(next!.height - stop!.height)).toBeLessThan(1);
+  expect(await buttons.nth(0).getAttribute("class")).toBe(await buttons.nth(1).getAttribute("class"));
+  expect(dialogs).toBe(0);
+  // Nothing started on its own.
+  expect((await calls(page)).map((c) => c[0])).toEqual(["executeIntent", "appendOutcomeLog"]);
+  await buttons.nth(1).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Stopped for now.");
+  expect((await calls(page)).at(-1)).toEqual(["session", "stop"]);
+  await page.close();
+});
+
+test("unknown_send_offers_check_not_resend", async () => {
+  const page = await scene("project-unknown");
+  const act = await send(page);
+  const receipt = act.getByRole("status", { name: "What happened" });
+  await expect(receipt).toContainText("We could not confirm this was sent. Nothing has been resent.");
+  await expect(receipt.getByRole("button")).toHaveText(["Check again"]);
+  await expect(act.getByRole("button", { name: /^Send revision/ })).toBeDisabled();
+  await expect(act).toContainText("Check the last one first. Sending again could deliver it twice.");
+  await receipt.getByRole("button", { name: "Check again" }).click();
+  const names = (await calls(page)).map((c) => c[0]);
+  expect(names).toEqual(["executeIntent", "reconcileAction"]);
+  await page.close();
+});
+
+test("cloud_connections_start_off_and_need_consent", async () => {
+  const page = await scene("connections-fresh");
+  const source = (name: string) => page.locator(".source").filter({ has: page.locator(".source-name", { hasText: new RegExp(`^${name}$`) }) });
+  expect(new Set(await page.locator(".source-state").allTextContents())).toEqual(new Set(["Off"]));
+  // Slack: the consent wording comes with the form, before anything is recorded.
+  await source("Slack").getByRole("button", { name: "Connect Slack" }).click();
+  const form = page.getByRole("form", { name: "Connect Slack" });
+  await expect(form).toContainText("Only the items you select from Slack are read.");
+  await expect(form).not.toContainText("Delete");
+  expect(await calls(page)).toEqual([]);
+  await form.getByLabel("Bot token from your Slack app").fill("illustrative-not-a-token");
+  await form.getByLabel("Channel IDs to read, separated by commas").fill("C0123, C0456");
+  await form.getByRole("button", { name: "Connect Slack" }).click();
+  expect(await calls(page)).toEqual([["connect", "slack", { projectId: "guides", selectors: ["C0123", "C0456"], writeTargets: [] }]]);
+  // Gmail: no token here; Google's own page opens in the browser after the same consent wording.
+  await source("Gmail").getByRole("button", { name: "Connect Gmail" }).click();
+  const gmail = page.getByRole("form", { name: "Connect Gmail" });
+  await expect(gmail).toContainText("Only the items you select from Gmail are read.");
+  await expect(gmail).toContainText("Google's sign-in page opens in your browser. Reading only; sending is a separate permission");
+  await expect(gmail.getByRole("textbox")).toHaveCount(1);
+  await gmail.getByLabel("Gmail label IDs to read, separated by commas").fill("Label_42");
+  await gmail.getByRole("button", { name: "Continue to Google sign-in" }).click();
+  expect((await calls(page)).at(-1)).toEqual(["connect", "gmail", { projectId: "guides", selectors: ["Label_42"], writeTargets: [] }]);
+  await expect(source("Gmail")).toContainText("Finish in your browser. Gmail turns on here when Google confirms it.");
+  await expect(source("Gmail").locator(".source-state")).toHaveText("Off");
+  // Canvas asks for its address too.
+  await source("Canvas").getByRole("button", { name: "Connect Canvas" }).click();
+  await expect(page.getByRole("form", { name: "Connect Canvas" }).getByLabel("Your Canvas address (https://…)")).toBeVisible();
+  // Selected-app reading: off, named apps only, consent first.
+  const before = (await calls(page)).length;
+  await source("Selected apps").getByRole("button", { name: "Turn on Selected apps" }).click();
+  const observe = page.getByRole("form", { name: "Turn on Selected apps" });
+  await expect(observe).toContainText("No screenshots and no keystrokes.");
+  expect((await calls(page)).length).toBe(before);
+  await observe.getByLabel("Apps and sites to read, separated by commas").fill("com.apple.Notes");
+  await observe.getByRole("button", { name: "Start reading these" }).click();
+  expect((await calls(page)).at(-1)).toEqual(["observation.start", ["com.apple.Notes"], "guides"]);
+  await page.close();
+});
+
+test("connected_sources_show_status_refresh_and_notion_webhook", async () => {
+  const page = await scene("connections");
+  const canvas = page.locator(".source").filter({ has: page.locator(".source-name", { hasText: /^Canvas$/ }) });
+  await expect(canvas).toContainText(/Stale.*last good/);
+  await canvas.getByRole("button", { name: "Refresh Canvas" }).click();
+  await expect(canvas.getByRole("button", { name: "Pause" })).toBeDisabled();
+  const notion = page.getByRole("group", { name: "Notion updates" });
+  await expect(notion).toContainText("https://illustrative-deployment.convex.site/notion/events?source=notion-illustrative");
+  await notion.getByRole("button", { name: "Show verification token" }).click();
+  await expect(notion).toContainText("secret_illustrative_verification_token");
+  // Accessibility permission missing: said plainly; System Settings opens only on the user's click.
+  const observed = page.locator(".source").filter({ has: page.locator(".source-name", { hasText: /^Selected apps: Notes$/ }) });
+  await expect(observed).toContainText("Missing access");
+  await observed.getByRole("button", { name: "Open Accessibility settings" }).click();
+  // The shortcut's conflict is reported with a way out.
+  await expect(page.getByRole("region", { name: "Capture shortcut" })).toContainText("is not working: another app already uses it. Choose another.");
+  expect(await calls(page)).toEqual([
+    ["refresh", "canvas-illustrative"],
+    ["revealNotionToken", "notion-illustrative"],
+    ["observation.openAccessibilitySettings"],
+  ]);
+  await page.close();
+});
+
 test("ui_shots", async () => {
   mkdirSync(SHOTS, { recursive: true });
   // Harness renders (ILLUSTRATIVE props), at the real window sizes.
@@ -242,6 +448,42 @@ test("ui_shots", async () => {
   for (const name of ["panel", "panel-done"]) {
     const page = await scene(name, { size: { width: 360, height: 420 } });
     await page.screenshot({ path: join(SHOTS, `harness-${name}-360x420.png`) });
+    await page.close();
+  }
+  {
+    const page = await scene("panel-evening", { size: { width: 360, height: 420 } });
+    await page.screenshot({ path: join(SHOTS, "harness-panel-evening-360x420.png") });
+    await page.close();
+  }
+  // T10/T11 states.
+  for (const [name, file] of [
+    ["today", "morning-brief"],
+    ["today-reentry", "reentry"],
+  ] as const) {
+    const page = await scene(name, { size: { width: 1200, height: 1300 } });
+    await page.screenshot({ path: join(SHOTS, `harness-${file}-1200x1300.png`) });
+    await page.close();
+  }
+  {
+    const page = await scene("project");
+    const act = await send(page);
+    await expect(act.getByRole("status", { name: "What happened" })).toContainText("verified");
+    await page.screenshot({ path: join(SHOTS, "harness-completion-1200x800.png") });
+    await act.scrollIntoViewIfNeeded();
+    await act.screenshot({ path: join(SHOTS, "harness-action-verified.png") });
+    await page.close();
+  }
+  {
+    const page = await scene("project-unknown");
+    const act = await send(page);
+    await expect(act.getByRole("status", { name: "What happened" })).toContainText("could not confirm");
+    await act.screenshot({ path: join(SHOTS, "harness-action-unknown.png") });
+    await page.close();
+  }
+  {
+    const page = await scene("connections", { size: { width: 1200, height: 1700 } });
+    await page.locator(".source").filter({ has: page.locator(".source-name", { hasText: /^Slack$/ }) }).getByRole("button", { name: "Connect Slack" }).click();
+    await page.screenshot({ path: join(SHOTS, "harness-connections-forms-1200x1700.png") });
     await page.close();
   }
   for (const state of ["idle", "working", "done"]) {

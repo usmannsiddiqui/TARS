@@ -3,14 +3,17 @@
 import { useAction, useConvex, useConvexConnectionState, useMutation, useQueries, useQuery } from "convex/react";
 import { Component, createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
-import { Connections, type LocalKind } from "./Connections";
+import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
-import type { Commitment, Evidence, Honest, PetState, Prepared, ProjectSummary, SourceRow } from "./model";
+import type { Brief, CloudProvider, Commitment, Evidence, Honest, PetState, Prepared, ProjectSummary, Reentry, SessionEvent, SessionState, SourceRow, Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
+import { contentHash } from "../../../../packages/domain/src/actions";
+import type { ActingActions } from "./Act";
 import { ProjectView, type EditorActions, type RevisionOutcome } from "./ProjectView";
-import { reason, StateNote } from "./ui";
+import { reason, SOURCE_NAME, StateNote } from "./ui";
 
 // ---- Cloud session: one per window.
 
@@ -139,7 +142,113 @@ export function completionOf(commitments: Commitment[] | undefined): string | nu
   return mine.length > 0 && done.length === mine.length ? (done.at(-1)?.text ?? null) : null;
 }
 
+// ---- Today: the brief service, re-entry and the explicit session.
+
+type Connection = { sourceId: string; provider: string; lastCheckedAt?: string };
+type BriefRow = {
+  key: string;
+  kind: "morning" | "evening";
+  preparedAt: number;
+  delivered: boolean;
+  brief: Omit<Brief, "key" | "kind" | "preparedAt" | "delivered" | "stale"> & { staleSourceIds: string[] };
+  tradeoffs: Tradeoff[];
+};
+
+const toBrief = (row: BriefRow, connections: Connection[] | undefined): Brief => {
+  const { staleSourceIds, ...brief } = row.brief;
+  const stale = new Map<string, Brief["stale"][number]>();
+  for (const id of staleSourceIds) {
+    const c = connections?.find((x) => x.sourceId === id);
+    // Local sources have no cloud connection row; their own freshness shows in Connections.
+    const entry = c ? { name: SOURCE_NAME[c.provider] ?? c.provider, ...(c.lastCheckedAt ? { lastCheckedAt: c.lastCheckedAt } : {}) } : { name: "A source on this Mac" };
+    stale.set(entry.name, entry);
+  }
+  return { ...brief, key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: row.delivered, stale: [...stale.values()] };
+};
+
+// shortcut: "days away" is a fixed two days since the previous visit; tune from use.
+const AWAY_MS = 2 * 24 * 60 * 60 * 1000;
+// One recorded return per window load, even under StrictMode's double effects.
+let returnRecorded = false;
+let settingsRequested = false;
+
+/** Today's brief (the evening recap when it is the newer one), re-entry after days away, and the one open tradeoff. */
+export function useToday({ recordReturn }: { recordReturn: boolean }) {
+  const cloud = useCloud();
+  const args = cloud.ready ? {} : "skip";
+  const morning = useQuery(api.briefs.getPendingBrief, cloud.ready ? { kind: "morning" } : "skip");
+  const evening = useQuery(api.briefs.getPendingBrief, cloud.ready ? { kind: "evening" } : "skip");
+  const reentryRow = useQuery(api.briefs.getReentry, args);
+  const connections = useQuery(api.connections.listConnections, args);
+  const setSettings = useMutation(api.briefs.setAttentionSettings);
+  const handleReturn = useMutation(api.briefs.handleReturn);
+  const markDelivered = useMutation(api.briefs.markDelivered);
+  const resolveTradeoff = useMutation(api.briefs.resolveTradeoff);
+  const [returned, setReturned] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // No settings yet (getReentry answers null): briefs need the Mac's timezone, once. Then record this visit.
+  useEffect(() => {
+    if (!recordReturn || !cloud.ready || reentryRow === undefined) return;
+    if (reentryRow === null) {
+      if (settingsRequested) return;
+      settingsRequested = true;
+      setSettings({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }).catch((err: unknown) => setError(reason(err)));
+      return;
+    }
+    if (returnRecorded) return setReturned(true);
+    returnRecorded = true;
+    handleReturn({ panelOpen: false }).then(
+      () => setReturned(true),
+      (err: unknown) => setError(reason(err)),
+    );
+  }, [recordReturn, cloud.ready, reentryRow, setSettings, handleReturn]);
+
+  const rows = morning === undefined || evening === undefined ? undefined : [morning, evening].filter((r) => r !== null);
+  const newest = rows?.sort((a, b) => b.preparedAt - a.preparedAt)[0];
+  const brief: Brief | null | undefined = rows === undefined ? undefined : newest ? toBrief(newest as BriefRow, connections) : null;
+  const away = returned && reentryRow?.since && Date.now() - Date.parse(reentryRow.since) >= AWAY_MS;
+  const reentry: Reentry | undefined =
+    away && reentryRow?.since
+      ? {
+          since: reentryRow.since,
+          changed: reentryRow.changed,
+          changedCount: reentryRow.changedCount,
+          urgent: reentryRow.urgent,
+          ...(reentryRow.recommendedAction ? { recommendedAction: reentryRow.recommendedAction } : {}),
+          ...(reentryRow.reason ? { reason: reentryRow.reason } : {}),
+        }
+      : undefined;
+  const tradeoff = (morning?.tradeoffs ?? evening?.tradeoffs)?.[0];
+  const onBriefShown = useCallback((key: string) => void markDelivered({ key, channel: "panel" }).catch((err: unknown) => setError(reason(err))), [markDelivered]);
+  return {
+    brief,
+    reentry,
+    tradeoff,
+    error,
+    onBriefShown,
+    onResolveTradeoff: async (commitmentId: string, choice: "keep" | "defer" | "renegotiate") =>
+      void (await resolveTradeoff({ commitmentId: commitmentId as Id<"commitments">, choice })),
+  };
+}
+
+/** Start / Break / Back are explicit and recorded; Stop records a stop and starts nothing. */
+export function useSession() {
+  const record = useMutation(api.briefs.recordSessionEvent);
+  const [state, setState] = useState<SessionState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const after: Record<SessionEvent, SessionState> = { start: "working", resume: "working", break: "break", stop: "idle" };
+  const onEvent = (event: SessionEvent) => {
+    setError(null);
+    setState(after[event]); // the user's click wins on screen; a failed record is said, not hidden
+    record({ kind: event }).catch((err: unknown) => setError(`Not recorded: ${reason(err)}`));
+  };
+  return { state, error, onEvent };
+}
+
 // ---- Project.
+
+const MAILBOXES = ["gmail", "outlook-mail"];
 
 const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; undoRevision?: string; artifact: { revision: string } }): RevisionOutcome => ({
   status: r.status,
@@ -161,6 +270,64 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const undo = useMutation(api.artifacts.undoRevision);
   const apply = useMutation(api.artifacts.applySuggestion);
   const dismiss = useMutation(api.artifacts.dismissSuggestion);
+  const receipts = useQuery(api.actions.listReceipts, { projectId });
+  const executeIntent = useAction(api.actions.executeIntent);
+  const reconcile = useAction(api.actions.reconcileAction);
+  const appendLog = useAction(api.actions.appendOutcomeLog);
+  const setLog = useMutation(api.actions.setLogDestination);
+  const reportDone = useMutation(api.actions.reportDone);
+  const connections = useQuery(api.connections.listConnections, {});
+  const gmailSendConsent = useMutation(api.connectors.gmail.startSendConsent);
+  const outlookSendConsent = useMutation(api.connectors.outlook.startSendConsent);
+  const mailboxes = (connections ?? []).filter((c) => MAILBOXES.includes(c.provider));
+  // Notes folders on this Mac, read once: a log note is picked inside one of them.
+  const [notes, setNotes] = useState<{ id: string; name: string; cloudProcessing: boolean }[]>([]);
+  useEffect(() => {
+    window.companion.listSources().then(
+      (rows) => setNotes(rows.filter((r) => r.kind === "obsidian" && r.state === "active").map((r) => ({ id: r.id, name: r.name, cloudProcessing: r.cloudProcessing }))),
+      () => setNotes([]),
+    );
+  }, []);
+
+  const acting: ActingActions = {
+    execute: async (intent, saved) => {
+      try {
+        const result = await executeIntent({
+          projectId,
+          ...intent,
+          artifactId: saved.artifactId,
+          revision: saved.revision,
+          contentHash: await contentHash(saved.text),
+        });
+        return "status" in result ? result : { status: "receipt", receipt: result };
+      } catch (err) {
+        // The backend refuses a send without the mailbox's separate send consent; that is a step, not a failure.
+        if (reason(err) === "missing-send-permission") return { status: "missing-send-permission" };
+        throw err;
+      }
+    },
+    reconcile: async (actionId) => void (await reconcile({ actionId })),
+    retryLog: async (actionId) => void (await appendLog({ actionId })),
+    setLogDestination: async (kind, target) => void (await setLog({ projectId, kind, target })),
+    notes: {
+      sources: notes,
+      designate: async (sourceId) => {
+        const picked = await window.companion.designateLogNote(sourceId);
+        return picked && { target: picked.target, name: picked.name };
+      },
+    },
+    // Send consent is its own provider page, for exactly the mailbox that will send; it opens in the browser.
+    sendConsent:
+      mailboxes.length === 0
+        ? { blocked: "Connect Gmail or Outlook mail in Connections first. Nothing was sent." }
+        : {
+            mailboxes: mailboxes.map((c) => ({
+              name: SOURCE_NAME[c.provider] ?? c.provider,
+              start: async () =>
+                window.companion.openExternalAuth(await (c.provider === "gmail" ? gmailSendConsent : outlookSendConsent)({ sourceId: c.sourceId })),
+            })),
+          },
+  };
 
   const editor: EditorActions = {
     create: async () => void (await create({ projectId })),
@@ -183,6 +350,9 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
       commitments={commitments ?? null}
       artifact={artifact === undefined ? undefined : artifact && { id: artifact.id, revision: artifact.revision, text: artifact.text, userEdited: artifact.userEdited, suggestions: artifact.suggestions }}
       editor={editor}
+      receipt={receipts === undefined ? undefined : (receipts.at(-1) ?? null)}
+      acting={acting}
+      onReportDone={async (taskId) => void (await reportDone({ taskId }))}
       onMakeFocus={props.onMakeFocus}
       onPrepare={async () => void (await prepare({ projectId }))}
       onStop={props.onStop}
@@ -199,7 +369,8 @@ export function MemoryLive({ projects, projectId, onSelectProject }: { projects:
   const evidence = useQuery(api.evidence.listCurrentEvidence, args);
   const remember = useMutation(api.memory.remember);
   const forget = useMutation(api.memory.forget);
-  const allow = useMutation(api.memory.allowRelearning);
+  const accept = useMutation(api.memory.acceptWithheld);
+  const dismissWithheld = useMutation(api.memory.dismissWithheld);
   const scoped = (scope: "project" | "global") => (scope === "project" && projectId ? { projectId } : {});
 
   return (
@@ -215,7 +386,8 @@ export function MemoryLive({ projects, projectId, onSelectProject }: { projects:
         void (await remember({ ...scoped(fact.scope), key: fact.key, value, evidenceIds: fact.evidenceIds, scope: fact.scope, explicitUserInstruction: true }))
       }
       onForget={async (fact) => void (await forget({ ...scoped(fact.scope), key: fact.key }))}
-      onAllowRelearning={async (key) => void (await allow({ ...(projectId ? { projectId } : {}), key }))}
+      onAccept={async (item) => void (await accept({ id: item.id }))}
+      onDismiss={async (item) => void (await dismissWithheld({ id: item.id }))}
     />
   );
 }
@@ -227,7 +399,7 @@ const LOCAL: { kind: LocalKind; name: string; coverage: string }[] = [
   { kind: "claude-code", name: "Claude Code sessions", coverage: "Relevant excerpts from Claude Code session files in a folder you pick. Not Claude Desktop projects." },
   { kind: "codex", name: "Codex sessions", coverage: "Relevant excerpts from Codex session files in a folder you pick." },
 ];
-const CLOUD: { provider: string; name: string; coverage: string }[] = [
+const CLOUD: { provider: CloudProvider; name: string; coverage: string }[] = [
   { provider: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom." },
   { provider: "gmail", name: "Gmail", coverage: "Selected project labels and threads." },
   { provider: "notion", name: "Notion", coverage: "Pages you share with the app, and the outcome log you choose." },
@@ -235,12 +407,47 @@ const CLOUD: { provider: string; name: string; coverage: string }[] = [
   { provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select." },
   { provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting." },
 ];
-const NOT_BUILT = "Connecting this account from the app is not built yet.";
+// The Convex HTTP actions (provider webhooks) are served from the deployment's .site origin.
+const SITE_URL = import.meta.env.CONVEX_URL.replace(/\.convex\.cloud$/, ".convex.site");
 
 export function ConnectionsLive({ projects }: { projects: { id: string; name: string }[] | null }) {
   const cloud = useCloud();
   const connections = useQuery(api.connections.listConnections, cloud.ready ? {} : "skip");
+  const setGrant = useMutation(api.evidence.setGrant);
+  const connectSlack = useAction(api.connectors.slack.connect);
+  const connectNotion = useAction(api.connectors.notion.connect);
+  const connectCanvas = useAction(api.connectors.canvas.connect);
+  const revealNotion = useAction(api.connectors.notion.revealVerificationToken);
+  const refreshCanvas = useAction(api.connectors.canvas.refreshByUser);
+  const refreshGmail = useAction(api.connectors.gmail.refresh);
+  const refreshOutlook = useAction(api.connectors.outlook.refresh);
+  const startGmail = useMutation(api.connectors.gmail.startConnect);
+  const startOutlook = useMutation(api.connectors.outlook.startConnect);
+  // shortcut: listConnections does not carry grant state, so a disconnect made here is remembered only
+  // for this window; upgrade when the backend exposes the grant's state with each connection.
+  const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [local, setLocal] = useState<LocalSourceView[] | null>(null);
+  const [permissionMissing, setPermissionMissing] = useState<Set<string>>(new Set());
+  const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
+  useEffect(() => {
+    window.companion.shortcut.status().then(setShortcut, (err: unknown) => setShortcut({ accelerator: "The shortcut", registered: false, error: reason(err) }));
+  }, []);
+  // Observation status is pushed by the main process (status words only, never observed text).
+  // The event carries the helper's `state` at runtime, although the preload types it as a source status.
+  useEffect(
+    () =>
+      window.companion.observation.onStatus((event) => {
+        const state = (event as unknown as { state?: string }).state;
+        if (state === undefined) return;
+        setPermissionMissing((current) => {
+          const next = new Set(current);
+          if (state === "permission-missing") next.add(event.sourceId);
+          else next.delete(event.sourceId);
+          return next;
+        });
+      }),
+    [],
+  );
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Read once, then again after each change this screen makes: an event, not a timer.
@@ -274,15 +481,17 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
     if (added.length === 0) rows.push({ id: def.kind, name: def.name, coverage: def.coverage, group: "mac", state: "off" });
   }
   for (const def of CLOUD) {
-    const c = connections?.find((x) => x.provider === def.provider);
+    const c = connections?.find((x) => x.provider === def.provider && !revoked.has(x.sourceId));
     if (!c) {
+      const wasRevoked = connections?.some((x) => x.provider === def.provider && revoked.has(x.sourceId));
       rows.push({
         id: def.provider,
+        provider: def.provider,
         name: def.name,
         coverage: def.coverage,
         group: "cloud",
-        state: "unavailable",
-        unavailableReason: cloud.honest ? (cloud.honest.kind === "not-signed-in" ? "Sign in first." : "Waiting for the cloud.") : NOT_BUILT,
+        state: "off",
+        ...(wasRevoked ? { unavailableReason: "Disconnected. New reads stopped." } : {}),
       });
       continue;
     }
@@ -296,16 +505,24 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
           : c.availability === "missing-access"
             ? { kind: "missing-access", ...(c.lastError ? { detail: c.lastError } : {}) }
             : { kind: "needs-retry", ...(c.lastError ? { detail: c.lastError } : {}) };
-    rows.push({ id: c.sourceId, name: def.name, coverage: def.coverage, group: "cloud", state: "on", status });
+    rows.push({ id: c.sourceId, provider: def.provider, name: def.name, coverage: def.coverage, group: "cloud", state: "on", status });
   }
-  rows.push({
-    id: "observation",
-    name: "Selected apps",
-    coverage: "Visible text from apps you choose. No screenshots.",
-    group: "optional",
-    state: "unavailable",
-    unavailableReason: "Not available in this build.",
-  });
+  const observed = (local ?? []).filter((s) => s.kind === "observation" && s.state !== "revoked");
+  for (const s of observed) {
+    rows.push({
+      id: s.id,
+      name: `Selected apps: ${s.name}`,
+      coverage: s.coverage,
+      group: "optional",
+      state: s.state === "paused" ? "paused" : "on",
+      cloudProcessing: s.cloudProcessing,
+      ...(permissionMissing.has(s.id) ? { permissionMissing: true } : {}),
+      ...(s.freshness === "stale" ? { status: { kind: "stale", detail: s.reason ?? "Not reading right now" } as Honest } : {}),
+    });
+  }
+  if (observed.length === 0) {
+    rows.push({ id: "observation", name: "Selected apps", coverage: "Visible text from apps and sites you name. No screenshots, no keystrokes.", group: "optional", state: "off" });
+  }
 
   const addBlocked = !cloud.signedIn
     ? "Sign in first."
@@ -317,9 +534,65 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
           ? "Add a project on Today first, so the source can belong to it."
           : undefined;
 
+  const cloudBlocked = !cloud.ready
+    ? cloud.honest?.kind === "not-signed-in"
+      ? "Sign in first."
+      : "Waiting for the cloud."
+    : projects === null || projects.length === 0
+      ? "Add a project on Today first, so the account can belong to it."
+      : undefined;
+  const cloudActions: CloudActions = {
+    ...(cloudBlocked ? { blocked: cloudBlocked } : {}),
+    onConnect: async (provider, form) => {
+      const grant = {
+        id: `${provider}-${crypto.randomUUID()}`,
+        kind: provider,
+        selectors: form.selectors,
+        projectIds: [form.projectId],
+        read: true,
+        writeTargets: form.writeTargets,
+        cloudProcessing: true,
+        version: Date.now(),
+        state: "active",
+      };
+      await setGrant(grant);
+      try {
+        const credential = form.credential ?? "";
+        if (provider === "slack") await connectSlack({ sourceId: grant.id, botToken: credential });
+        else if (provider === "notion") await connectNotion({ sourceId: grant.id, token: credential });
+        else if (provider === "canvas") await connectCanvas({ sourceId: grant.id, baseUrl: form.baseUrl ?? "", token: credential });
+        // OAuth: the provider's page opens in the system browser; the connection appears when its callback lands.
+        else await window.companion.openExternalAuth(await (provider === "gmail" ? startGmail : startOutlook)({ sourceId: grant.id }));
+      } catch (err) {
+        // Never leave an active grant behind a failed connect; the original error is the one to show.
+        await setGrant({ ...grant, selectors: [], writeTargets: [], read: false, version: grant.version + 1, state: "revoked" }).catch(() => undefined);
+        throw err;
+      }
+    },
+    onRefresh: async (row) => {
+      if (row.provider === "canvas") await refreshCanvas({ sourceId: row.id });
+      else if (row.provider === "gmail") await refreshGmail({ sourceId: row.id });
+      else if (row.provider === "outlook-mail" || row.provider === "outlook-calendar") await refreshOutlook({ sourceId: row.id, kind: row.provider });
+    },
+    onRevoke: async (row) => {
+      // shortcut: grant versions are timestamps because the renderer cannot read the stored version.
+      await setGrant({ id: row.id, kind: row.provider ?? "", selectors: [], projectIds: [], read: false, writeTargets: [], cloudProcessing: false, version: Date.now(), state: "revoked" });
+      setRevoked((r) => new Set(r).add(row.id));
+    },
+    notionWebhookUrl: (sourceId) => `${SITE_URL}/notion/events?source=${encodeURIComponent(sourceId)}`,
+    revealNotionToken: (sourceId) => revealNotion({ sourceId }),
+  };
+
   return (
     <Connections
       rows={rows}
+      cloud={cloudActions}
+      observation={{
+        onStart: (selectors, projectId) => after(window.companion.observation.start(selectors, [projectId])),
+        onDeleteRetained: (id) => window.companion.observation.deleteRetained(id),
+        onOpenAccessibility: () => window.companion.observation.openAccessibilitySettings(),
+      }}
+      shortcut={{ status: shortcut, onSet: async (accelerator) => setShortcut(await window.companion.shortcut.set(accelerator)) }}
       projects={projects ?? []}
       {...(addBlocked ? { addBlocked } : {})}
       onAdd={(kind, projectId) => after(window.companion.chooseSource(kind, [projectId]))}
@@ -342,9 +615,12 @@ function useCompanionContext(projectIdOverride: string | null) {
   const args = cloud.ready && projectId ? { projectId } : "skip";
   const prepared = useQuery(api.prepare.getPreparedWork, args);
   const commitments = useQuery(api.prepare.listCommitments, args);
+  const receipt = useQuery(api.actions.listReceipts, args)?.at(-1);
   const done = completionOf(commitments as Commitment[] | undefined);
-  const petState: PetState = done ? "done" : "idle";
-  return { cloud, projectId, name: projects?.find((p) => p.id === projectId)?.name, prepared: toPrepared(prepared), done, petState };
+  // Working is real: an instructed action of the focus project is in flight right now.
+  const working = receipt?.state === "pending" || receipt?.state === "running";
+  const petState: PetState = working ? "working" : done ? "done" : "idle";
+  return { cloud, projectId, name: projects?.find((p) => p.id === projectId)?.name, prepared: toPrepared(prepared), done, receipt, petState };
 }
 
 export function PetLive() {
@@ -357,6 +633,12 @@ export function PanelLive() {
   useEffect(() => window.companion.onPanelShow((projectId) => setShown({ projectId, at: Date.now() })), []);
   const ctx = useCompanionContext(shown.projectId);
   const work = ctx.prepared?.work;
+  // Only the app window records a return; opening the panel must not move "since you were last here".
+  const today = useToday({ recordReturn: false });
+  const [note, setNote] = useState<string | null>(null);
+  const record = useMutation(api.briefs.recordSessionEvent);
+  // The evening recap is panel-only: it shows here when the user opens the panel, never as an alert.
+  const recap = today.brief?.kind === "evening" ? today.brief : undefined;
   const state: Honest | undefined =
     ctx.cloud.honest ??
     (!ctx.projectId
@@ -371,13 +653,22 @@ export function PanelLive() {
     <Panel
       key={shown.at}
       petState={ctx.petState}
+      {...(ctx.projectId ? { projectId: ctx.projectId } : {})}
       {...(ctx.name ? { projectName: ctx.name } : {})}
       {...(work?.title ? { context: work.title } : {})}
       {...(work?.nextAction ? { nextAction: work.nextAction } : {})}
       {...(state ? { state } : {})}
       {...(ctx.done ? { completion: { done: ctx.done, ...(work?.nextAction ? { next: work.nextAction } : {}) } } : {})}
+      {...(recap ? { recap: { key: recap.key, items: recap.items, delivered: recap.delivered } } : {})}
+      onRecapShown={today.onBriefShown}
+      {...(ctx.receipt ? { receipt: ctx.receipt } : {})}
+      {...(note ? { note } : {})}
       onOpenApp={() => void window.companion.openApp(ctx.projectId ?? undefined)}
-      onStop={close}
+      onStop={() => {
+        // Stop records a stop and starts nothing; the panel closes either way.
+        if (!ctx.cloud.ready) return close(); // signed out: there is no session to record
+        record({ kind: "stop" }).then(close, (err: unknown) => setNote(`Stop was not recorded: ${reason(err)}. Nothing was started.`));
+      }}
       onClose={close}
     />
   );

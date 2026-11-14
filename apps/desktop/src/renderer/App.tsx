@@ -5,8 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
 import { Home } from "./Home";
-import { Boundary, ConnectionsLive, MemoryLive, ProjectLive, useCloud, useProjectSummaries } from "./live";
-import { recommendStart } from "./recommend";
+import { Boundary, ConnectionsLive, MemoryLive, ProjectLive, useCloud, useProjectSummaries, useSession, useToday } from "./live";
 import { Shell, Stopped, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
@@ -16,6 +15,10 @@ export function App() {
   const [route, setRoute] = useState<Route>({ view: "today" });
   const [stopped, setStopped] = useState(false);
   const [petVisible, setPetVisible] = useState(true);
+  // The persisted hide-pet choice, read once from the main process.
+  useEffect(() => {
+    window.companion.petVisible().then(setPetVisible, () => undefined);
+  }, []);
   const [ideas, setIdeas] = useState<CaptureInput[]>([]);
 
   const projects = useQuery(api.projects.listProjects, cloud.ready ? {} : "skip");
@@ -23,6 +26,12 @@ export function App() {
   const summaries = useProjectSummaries(projects);
   const switchProject = useMutation(api.projects.switchProject);
   const createProject = useMutation(api.projects.createProject);
+  const today = useToday({ recordReturn: true });
+  const session = useSession();
+  const stop = () => {
+    session.onEvent("stop");
+    setStopped(true);
+  };
 
   const loadIdeas = useCallback(() => window.companion.loadPending().then(setIdeas), []);
   useEffect(() => {
@@ -45,7 +54,7 @@ export function App() {
   };
   const nameOf = (id?: string) => projects?.find((p) => p.id === id)?.name;
 
-  if (stopped) return <Stopped {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} onResume={() => setStopped(false)} />;
+  if (stopped) return <Stopped {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} {...(session.error ? { note: session.error } : {})} onResume={() => setStopped(false)} />;
 
   let screen;
   if (route.view === "project") {
@@ -58,7 +67,7 @@ export function App() {
         isFocus={route.projectId === focusId}
         {...(route.mode ? { mode: route.mode } : {})}
         onMakeFocus={() => pick(route.projectId)}
-        onStop={() => setStopped(true)}
+        onStop={stop}
       />
     ) : null;
   } else if (route.view === "memory") {
@@ -73,16 +82,17 @@ export function App() {
         projects={summaries}
         {...(cloud.honest ? { cloud: cloud.honest } : {})}
         {...(focusId ? { focusProjectId: focusId } : {})}
-        recommendation={summaries ? recommendStart(summaries, focusId, new Date().toISOString()) : null}
-        signedIn={cloud.signedIn === true}
+        brief={today.brief}
+        {...(today.reentry ? { reentry: today.reentry } : {})}
+        {...(today.tradeoff ? { tradeoff: today.tradeoff } : {})}
+        {...(today.error ? { briefError: today.error } : {})}
+        onBriefShown={today.onBriefShown}
+        onResolveTradeoff={today.onResolveTradeoff}
         ideas={ideas}
-        onCapture={async (text) => {
-          const receipt = await window.companion.saveCapture({ text, origin: "typed" });
-          await loadIdeas();
-          return receipt.summary;
-        }}
+        onCaptured={() => void loadIdeas()}
         onStart={(projectId, mode) => {
           pick(projectId); // accepting the recommended start is the user's pick
+          if (session.state === "idle") session.onEvent("start"); // and their explicit start
           setRoute({ view: "project", projectId, mode });
         }}
         onOpenProject={(projectId) => setRoute({ view: "project", projectId })}
@@ -104,8 +114,9 @@ export function App() {
           setPetVisible(!petVisible);
         },
       }}
+      session={{ state: session.state, ...(session.error ? { error: session.error } : {}), onEvent: session.onEvent }}
       onNavigate={setRoute}
-      onStop={() => setStopped(true)}
+      onStop={stop}
     >
       <Boundary key={JSON.stringify(route)}>{screen}</Boundary>
     </Shell>

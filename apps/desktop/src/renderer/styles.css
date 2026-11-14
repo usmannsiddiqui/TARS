@@ -230,11 +230,13 @@ label {
   font-weight: 600;
 }
 .state-note[data-kind="needs-retry"],
-.state-note[data-kind="missing-access"] {
+.state-note[data-kind="missing-access"],
+.state-note[data-kind="unknown"] {
   color: var(--attention);
 }
 .state-note[data-kind="needs-retry"] .state-detail,
-.state-note[data-kind="missing-access"] .state-detail {
+.state-note[data-kind="missing-access"] .state-detail,
+.state-note[data-kind="unknown"] .state-detail {
   color: var(--text);
 }
 .state-note[data-kind="done"] {
@@ -334,6 +336,13 @@ label {
   position: absolute;
   top: 40px;
   right: 56px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-state {
+  font-size: var(--fs-label);
+  color: var(--muted);
 }
 
 .screen {
@@ -345,7 +354,7 @@ label {
 }
 .screen-head {
   margin-bottom: 36px;
-  padding-right: 160px;
+  padding-right: 330px;
 }
 .screen-head h1 {
   font-family: var(--serif);
@@ -609,6 +618,108 @@ ul.plain li[data-done] {
   margin-bottom: 6px;
 }
 
+/* ---- Brief, re-entry and tradeoff. */
+
+.reentry-lead {
+  font-size: 16px;
+  max-width: 62ch;
+  margin-bottom: 18px;
+}
+.recap li + li {
+  margin-top: 4px;
+}
+.tradeoff {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.tradeoff .actions {
+  margin: 14px 0 10px;
+}
+
+/* ---- Acting on the run-through. */
+
+.act {
+  margin-top: 28px;
+  padding: 18px 20px 20px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.act .group-title {
+  margin-top: 0;
+}
+.choice {
+  display: flex;
+  gap: 18px;
+  border: none;
+  margin: 8px 0 12px;
+  padding: 0;
+}
+.choice input {
+  width: auto;
+  min-height: 0;
+  accent-color: var(--text);
+}
+.act-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--fs-label);
+  color: var(--muted);
+}
+.act > .secondary {
+  margin-top: 10px;
+}
+.question {
+  margin-top: 12px;
+}
+.receipt {
+  margin-top: 14px;
+}
+.log-destination {
+  margin-top: 16px;
+}
+.log-destination summary {
+  cursor: pointer;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--muted);
+}
+.log-destination .act-fields {
+  margin-top: 10px;
+}
+.done-myself {
+  margin-left: 8px;
+  font-size: var(--fs-label);
+}
+.copyable {
+  display: block;
+  flex: 1 0 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--rail);
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.connect-form .field {
+  flex: 1 0 100%;
+}
+.panel-recap,
+.panel .capture {
+  margin-top: 16px;
+}
+.shortcut-field {
+  max-width: 520px;
+  margin-top: 10px;
+}
+
 /* ---- Memory and connections. */
 
 .field-row {
@@ -817,6 +928,8 @@ html[data-view="pet"] body {
 }
 .panel-body {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   transition: opacity 180ms ease, transform 180ms var(--ease-out);

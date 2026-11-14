@@ -15,12 +15,26 @@ export const reason = (err: unknown) => {
   return err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (\w+: )?/, "") : String(err);
 };
 
+/** Plain names for source kinds, as the user sees them in Connections. */
+export const SOURCE_NAME: Record<string, string> = {
+  slack: "Slack",
+  gmail: "Gmail",
+  notion: "Notion",
+  canvas: "Canvas",
+  "outlook-mail": "Outlook mail",
+  "outlook-calendar": "Outlook calendar",
+  obsidian: "Notes folder",
+  "claude-code": "Claude Code sessions",
+  codex: "Codex sessions",
+};
+
 const HONEST_LABEL: Record<Honest["kind"], string> = {
   "not-signed-in": "Not signed in",
   "missing-access": "Missing access",
   "last-checked": "Last checked",
   partial: "Partial",
   "needs-retry": "Needs retry",
+  unknown: "Not confirmed",
   stale: "Stale",
   loading: "Loading",
   empty: "Nothing yet",
@@ -39,6 +53,7 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
       );
     case "needs-retry":
     case "missing-access":
+    case "unknown":
       return (
         <svg {...common}>
           <path d="M6 1.5 11 10.5H1Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />

@@ -1,8 +1,11 @@
-// Today across every project: one recommended start with its reason, the other ways in, quick
-// capture and the full backlog one click away. Presentational: data and actions arrive as props.
-import { useId, useState, type FormEvent } from "react";
-import type { CapturedIdea, Honest, ProjectSummary, Recommendation } from "./model";
-import { reason, StateNote } from "./ui";
+// Today across every project, from the brief service: the morning brief (meetings and real deadlines
+// apart from suggested work, one recommended start with its reason), the evening recap when it is the
+// newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
+// stay one click away. Presentational: data and actions arrive as props.
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import type { Brief, CapturedIdea, HardItem, Honest, ProjectSummary, Reentry, Tradeoff, TradeoffChoice } from "./model";
+import { Composer } from "./Composer";
+import { formatWhen, reason, SOURCE_NAME, StateNote } from "./ui";
 
 export type HomeProps = {
   dateLabel: string;
@@ -10,13 +13,23 @@ export type HomeProps = {
   projects: ProjectSummary[] | null;
   cloud?: Honest;
   focusProjectId?: string;
-  recommendation: Recommendation | null;
-  signedIn: boolean;
+  /** The brief to show: undefined while loading, null when none is prepared yet. */
+  brief: Brief | null | undefined;
+  /** Only after days away: what changed and one way back in. */
+  reentry?: Reentry;
+  /** One open tradeoff for a new commitment; the user's choice ends it. */
+  tradeoff?: Tradeoff;
+  /** The brief service could not be set up or reached. */
+  briefError?: string;
   ideas: CapturedIdea[];
-  onCapture(text: string): Promise<string>;
+  /** A capture was saved on this Mac: reload the list of ideas. */
+  onCaptured(): void;
   onStart(projectId: string, mode: "help" | "improve"): void;
   onOpenProject(projectId: string): void;
   onCreateProject(name: string): Promise<void>;
+  /** The brief was actually shown here, so it is never offered as news again. */
+  onBriefShown(key: string): void;
+  onResolveTradeoff(commitmentId: string, choice: TradeoffChoice): Promise<void>;
 };
 
 const preparedNote = (p: ProjectSummary): Honest => {
@@ -28,12 +41,26 @@ const preparedNote = (p: ProjectSummary): Honest => {
 };
 
 export function Home(props: HomeProps) {
-  const { projects, recommendation, focusProjectId } = props;
-  const recommended = projects?.find((p) => p.id === recommendation?.projectId);
+  const { projects, brief, reentry, onBriefShown } = props;
+  const evening = brief?.kind === "evening";
+  const action = reentry ? reentry.recommendedAction : evening ? undefined : brief?.recommendedAction;
+  const why = reentry ? reentry.reason : brief?.reason;
+  // The brief names the project of each item; the recommended start is one of them.
+  const projectId = action === undefined ? undefined : [...(reentry?.urgent ?? []), ...(brief?.hard ?? []), ...(brief?.suggested ?? [])].find((i) => i.text === action)?.projectId;
+  const recommended = projects?.find((p) => p.id === projectId);
   const others = projects?.filter((p) => p.id !== recommended?.id) ?? [];
-  const focusName = projects?.find((p) => p.id === focusProjectId)?.name;
+  const focusName = projects?.find((p) => p.id === props.focusProjectId)?.name;
   const backlog = (projects ?? []).map((p) => ({ p, open: p.commitments.filter((c) => c.state === "open" || c.state === "waiting") })).filter((g) => g.open.length > 0);
   const backlogCount = backlog.reduce((n, g) => n + g.open.length, 0);
+  const nameOf = (id: string) => projects?.find((p) => p.id === id)?.name;
+  const shownKey = !reentry && brief && !brief.delivered ? brief.key : undefined;
+
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!shownKey || reported.current === shownKey) return; // one report per showing
+    reported.current = shownKey;
+    onBriefShown(shownKey);
+  }, [shownKey, onBriefShown]);
 
   return (
     <div className="screen">
@@ -64,30 +91,129 @@ export function Home(props: HomeProps) {
             </section>
           ) : (
             <>
-              <section className="start" aria-labelledby="start-h">
-                <h2 id="start-h" className="block-title">
-                  Recommended start
-                </h2>
-                {recommended && recommendation ? (
+              {reentry && (
+                <p className="reentry-lead">
+                  Welcome back. Since {formatWhen(reentry.since)}: what changed, what is genuinely urgent, and one manageable way back in. Nothing was moved,
+                  deleted or sent while you were away.
+                </p>
+              )}
+
+              {evening && brief ? (
+                <section className="start" aria-labelledby="start-h">
+                  <h2 id="start-h" className="block-title">
+                    Evening recap
+                  </h2>
+                  {brief.items.length === 0 ? (
+                    <StateNote state={{ kind: "empty", detail: "Nothing finished or parked today. That is fine." }} />
+                  ) : (
+                    <ul className="plain recap">
+                      {brief.items.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="quiet small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
+                </section>
+              ) : (
+                <section className="start" aria-labelledby="start-h">
+                  <h2 id="start-h" className="block-title">
+                    {reentry ? "One way back in" : "Recommended start"}
+                  </h2>
+                  {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
+                  {brief === undefined && !reentry ? (
+                    <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
+                  ) : action ? (
+                    <>
+                      {recommended && <p className="start-project">{recommended.name}</p>}
+                      <p className="start-step">{action}</p>
+                      {why && (
+                        <p className="start-reason">
+                          <span className="why">Why this one:</span> {why}
+                        </p>
+                      )}
+                      {recommended && (
+                        <div className="actions">
+                          <button type="button" className="primary" onClick={() => props.onStart(recommended.id, "help")}>
+                            Help me start
+                          </button>
+                          <button type="button" className="secondary" onClick={() => props.onStart(recommended.id, "improve")}>
+                            Improve content first
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <StateNote
+                      state={{
+                        kind: "empty",
+                        detail: brief === null && !reentry ? "Your first brief is prepared at 9:00. Pick any project below, or capture what is on your mind." : "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind.",
+                      }}
+                    />
+                  )}
+                </section>
+              )}
+
+              {props.tradeoff && <TradeoffFlag tradeoff={props.tradeoff} onResolve={props.onResolveTradeoff} />}
+
+              {reentry ? (
+                <>
+                  <section className="block" aria-labelledby="changed-h">
+                    <h2 id="changed-h" className="block-title">
+                      What changed <span className="count num">{reentry.changedCount}</span>
+                    </h2>
+                    {reentry.changed.length === 0 ? (
+                      <StateNote state={{ kind: "empty", detail: "Nothing new arrived from your sources." }} />
+                    ) : (
+                      <ul className="plain">
+                        {reentry.changed.map((c) => (
+                          <li key={c.evidenceId}>
+                            {c.text}
+                            <span className="quiet"> · {formatWhen(c.occurredAt)}</span>
+                          </li>
+                        ))}
+                        {reentry.changedCount > reentry.changed.length && <li className="quiet">and {reentry.changedCount - reentry.changed.length} more in your sources</li>}
+                      </ul>
+                    )}
+                  </section>
+                  <HardList title="Genuinely urgent" id="urgent-h" items={reentry.urgent} empty="Nothing is due in the next two days." nameOf={nameOf} />
+                </>
+              ) : (
+                brief &&
+                !evening && (
                   <>
-                    <p className="start-project">{recommended.name}</p>
-                    <p className="start-step">{recommended.prepared?.work?.nextAction ?? recommended.prepared?.work?.title ?? "Your place is saved here."}</p>
-                    <p className="start-reason">
-                      <span className="why">Why this one:</span> {recommendation.reason}
-                    </p>
-                    <div className="actions">
-                      <button type="button" className="primary" onClick={() => props.onStart(recommended.id, "help")}>
-                        Help me start
-                      </button>
-                      <button type="button" className="secondary" onClick={() => props.onStart(recommended.id, "improve")}>
-                        Improve content first
-                      </button>
-                    </div>
+                    <HardList title="Meetings and deadlines" id="hard-h" items={brief.hard} triage={brief.triage} empty="No meetings or due dates in your sources." nameOf={nameOf} />
+                    <section className="block" aria-labelledby="suggested-h">
+                      <h2 id="suggested-h" className="block-title">
+                        Suggested work
+                      </h2>
+                      <p className="quiet small">Suggestions, not deadlines. Nothing here is scheduled for you.</p>
+                      {brief.suggested.length === 0 ? (
+                        <StateNote state={{ kind: "empty", detail: "Nothing suggested yet." }} />
+                      ) : (
+                        <ul className="plain">
+                          {brief.suggested.map((s) => (
+                            <li key={`${s.projectId}:${s.text}`}>
+                              {s.text}
+                              <span className="quiet"> · {nameOf(s.projectId) ?? "a project"}</span>
+                              {s.commitmentId && <TriageNote triage={brief.triage} id={s.commitmentId} />}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                    {brief.stale.length > 0 && (
+                      <section className="block" aria-labelledby="stale-h">
+                        <h2 id="stale-h" className="block-title">
+                          May be out of date
+                        </h2>
+                        {brief.stale.map((s) => (
+                          <StateNote key={s.name} state={{ kind: "stale", detail: `${s.name}: ${s.lastCheckedAt ? `last checked ${formatWhen(s.lastCheckedAt)}` : "never checked"}` }} />
+                        ))}
+                      </section>
+                    )}
                   </>
-                ) : (
-                  <StateNote state={{ kind: "empty", detail: "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind." }} />
-                )}
-              </section>
+                )
+              )}
 
               <section className="block" aria-labelledby="others-h">
                 <h2 id="others-h" className="block-title">
@@ -140,7 +266,7 @@ export function Home(props: HomeProps) {
         </div>
 
         <aside className="home-side">
-          <Capture signedIn={props.signedIn} onCapture={props.onCapture} />
+          <Composer {...(props.focusProjectId ? { projectId: props.focusProjectId } : {})} onSaved={props.onCaptured} />
           <section className="block" aria-labelledby="ideas-h">
             <h2 id="ideas-h" className="block-title">
               Captured ideas
@@ -162,57 +288,80 @@ export function Home(props: HomeProps) {
   );
 }
 
-function Capture({ signedIn, onCapture }: { signedIn: boolean; onCapture(text: string): Promise<string> }) {
-  const id = useId();
-  const [text, setText] = useState("");
-  const [status, setStatus] = useState<{ kind: "idle" | "busy" } | { kind: "saved"; summary: string } | { kind: "error"; message: string }>({ kind: "idle" });
+const TRIAGE_WORD = { prioritize: "Do first", defer: "Can wait", renegotiate: "Consider renegotiating" } as const;
 
-  async function submit(event?: FormEvent) {
-    event?.preventDefault();
-    if (text.trim() === "" || status.kind === "busy") return;
-    setStatus({ kind: "busy" });
-    try {
-      const summary = await onCapture(text);
-      setText("");
-      setStatus({ kind: "saved", summary });
-    } catch (err) {
-      setStatus({ kind: "error", message: reason(err) });
-    }
-  }
+function TriageNote({ triage, id }: { triage: Brief["triage"] | undefined; id: string }) {
+  const t = triage?.find((x) => x.commitmentId === id);
+  return t ? (
+    <span className="quiet">
+      {" "}
+      · <span className="why">{TRIAGE_WORD[t.action]}:</span> {t.reason}
+    </span>
+  ) : null;
+}
 
+/** Meetings and real due dates, each with its source and, when it is not current, when it was last checked. */
+function HardList({ title, id, items, triage, empty, nameOf }: { title: string; id: string; items: HardItem[]; triage?: Brief["triage"] | undefined; empty: string; nameOf(id: string): string | undefined }) {
   return (
-    <form className="capture" onSubmit={submit} aria-label="Quick capture">
-      <label htmlFor={id} className="block-title">
-        Capture an idea
-      </label>
-      {signedIn ? (
-        <>
-          <textarea
-            id={id}
-            value={text}
-            rows={3}
-            placeholder="Whatever is on your mind. It will not start anything."
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
-            }}
-          />
-          <div className="capture-foot">
-            <span className="hint">⌘ Return saves</span>
-            <button type="submit" className="secondary" disabled={status.kind === "busy" || text.trim() === ""}>
-              Save
-            </button>
-          </div>
-        </>
+    <section className="block" aria-labelledby={id}>
+      <h2 id={id} className="block-title">
+        {title}
+      </h2>
+      {items.length === 0 ? (
+        <StateNote state={{ kind: "empty", detail: empty }} />
       ) : (
-        <StateNote state={{ kind: "not-signed-in", detail: "Sign in to keep captures on this Mac." }} />
+        <ul className="plain">
+          {items.map((item) => (
+            <li key={item.commitmentId}>
+              {item.text}
+              <span className="quiet">
+                {" "}
+                · {item.kind === "meeting" ? "meeting" : "due"} {formatWhen(item.dueAt)} · {nameOf(item.projectId) ?? "a project"}
+                {item.sourceKind ? ` · from ${SOURCE_NAME[item.sourceKind] ?? item.sourceKind}` : " · no linked source"}
+              </span>
+              <TriageNote triage={triage} id={item.commitmentId} />
+              {item.sourceKind && !item.current && (
+                <StateNote state={{ kind: "stale", detail: `${item.lastCheckedAt ? `last checked ${formatWhen(item.lastCheckedAt)}` : "never checked"}; may have changed` }} />
+              )}
+            </li>
+          ))}
+        </ul>
       )}
-      <p role="status" aria-live="polite" className="capture-status">
-        {status.kind === "busy" && "Saving…"}
-        {status.kind === "saved" && `Saved on this Mac: ${status.summary}`}
-        {status.kind === "error" && `Not saved: ${status.message}`}
-      </p>
-    </form>
+    </section>
+  );
+}
+
+function TradeoffFlag({ tradeoff, onResolve }: { tradeoff: Tradeoff; onResolve(commitmentId: string, choice: TradeoffChoice): Promise<void> }) {
+  const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  const choose = async (choice: TradeoffChoice) => {
+    setState({ busy: true });
+    try {
+      await onResolve(tradeoff.commitmentId, choice);
+      setState({ busy: false });
+    } catch (err) {
+      setState({ busy: false, error: reason(err) });
+    }
+  };
+  return (
+    <section className="block tradeoff" aria-labelledby="tradeoff-h">
+      <h2 id="tradeoff-h" className="block-title">
+        A new commitment competes
+      </h2>
+      <p>{tradeoff.text}</p>
+      <div className="actions">
+        <button type="button" className="secondary" disabled={state.busy} onClick={() => choose("keep")}>
+          Keep both
+        </button>
+        <button type="button" className="secondary" disabled={state.busy} onClick={() => choose("defer")}>
+          Defer the new one
+        </button>
+        <button type="button" className="secondary" disabled={state.busy} onClick={() => choose("renegotiate")}>
+          Renegotiate a deadline
+        </button>
+      </div>
+      <p className="quiet small">Your choice is recorded once. Nothing is moved, rescheduled or sent.</p>
+      {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
+    </section>
   );
 }
 

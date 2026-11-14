@@ -1,7 +1,7 @@
-// Connections, added progressively. Every source starts off; turning cloud processing on shows
-// the consent wording first. Presentational: rows and actions arrive as props.
-import { useId, useState } from "react";
-import type { SourceRow } from "./model";
+// Connections, added progressively. Every source starts off. Turning cloud processing on, and
+// connecting a cloud account, both show the consent wording first. Presentational: rows and actions arrive as props.
+import { useId, useState, type FormEvent } from "react";
+import type { CloudProvider, SourceRow } from "./model";
 import { reason, StateNote } from "./ui";
 
 export type LocalKind = "obsidian" | "claude-code" | "codex";
@@ -16,11 +16,44 @@ export type ConnectionsProps = {
   onResume(id: string): Promise<void>;
   onRevoke(id: string): Promise<void>;
   onSetCloud(id: string, enabled: boolean): Promise<void>;
+  cloud: CloudActions;
+  observation: ObservationActions;
+  shortcut: { status: ShortcutStatus | null; onSet(accelerator: string): Promise<void> };
 };
+
+export type ShortcutStatus = { accelerator: string; registered: boolean; error?: string };
+
+export type ObservationActions = {
+  /** Selectors: app bundle ids ("com.apple.Notes") or browser sites ("com.google.Chrome|https://docs.google.com"). */
+  onStart(selectors: string[], projectId: string): Promise<void>;
+  onDeleteRetained(id: string): Promise<void>;
+  /** Only from the user's click: opens System Settings > Accessibility; nothing is requested. */
+  onOpenAccessibility(): Promise<void>;
+};
+
+/** Observation consent: what is read, what is not, and where it goes. */
+export const observationConsent =
+  "Only visible text from the apps and sites you name is read, while they are in front. No screenshots and no keystrokes. The text stays on this Mac until you turn on cloud processing for it. Pausing stops reading; it does not erase what was kept, which Delete kept text does.";
+
+export type ConnectForm = { projectId: string; credential?: string; baseUrl?: string; selectors: string[]; writeTargets: string[] };
+
+export type CloudActions = {
+  /** Why cloud accounts cannot be connected right now (signed out, no projects yet). */
+  blocked?: string;
+  /** Records the grant for exactly this selection, then connects with the credential or opens the provider's sign-in in the browser. */
+  onConnect(provider: CloudProvider, form: ConnectForm): Promise<void>;
+  onRefresh(row: SourceRow): Promise<void>;
+  onRevoke(row: SourceRow): Promise<void>;
+  notionWebhookUrl(sourceId: string): string;
+  revealNotionToken(sourceId: string): Promise<string>;
+};
+
+const REFRESHABLE: CloudProvider[] = ["canvas", "gmail", "outlook-mail", "outlook-calendar"];
+const PAUSE_BLOCKED = "Pausing a cloud account needs its current selection from the cloud, which this build cannot read yet. Disconnect stops new reads now.";
 
 /** The approved runtime-consent wording (validation/access-and-readiness.md). */
 export const consentText = (source: string) =>
-  `Only the items you select from ${source} are read. Excerpts are sent to our cloud and to OpenAI to prepare your work, and are stored until you delete them. Disconnecting stops new reads; it does not erase stored excerpts — use Delete for that.`;
+  `Only the items you select from ${source} are read. Excerpts are sent to our cloud and to OpenAI to prepare your work, and are kept in our cloud. Disconnecting stops new reads; excerpts already stored stay stored.`;
 
 const GROUPS: { group: SourceRow["group"]; title: string; note: string }[] = [
   { group: "mac", title: "On this Mac", note: "Read on this Mac. Nothing leaves it until you turn on cloud processing for that source." },
@@ -56,20 +89,70 @@ export function Connections(props: ConnectionsProps) {
             </section>
           );
         })}
+        <ShortcutSetting {...props.shortcut} />
       </div>
     </div>
   );
 }
 
+function ShortcutSetting({ status, onSet }: ConnectionsProps["shortcut"]) {
+  const id = useId();
+  const [value, setValue] = useState("");
+  const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  return (
+    <section className="block" aria-labelledby="shortcut-h">
+      <h2 id="shortcut-h" className="block-title">
+        Capture shortcut
+      </h2>
+      {status === null ? (
+        <StateNote state={{ kind: "loading" }} />
+      ) : status.registered ? (
+        <StateNote state={{ kind: "done", detail: `${status.accelerator} opens capture. It never starts recording.` }} />
+      ) : (
+        <StateNote state={{ kind: "needs-retry", detail: `${status.accelerator} is not working: ${status.error ?? "another app already uses it"}. Choose another.` }} />
+      )}
+      <form
+        className="inline-field shortcut-field"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setState({ busy: true });
+          try {
+            await onSet(value.trim());
+            setState({ busy: false });
+          } catch (err) {
+            setState({ busy: false, error: reason(err) });
+          }
+        }}
+      >
+        <label htmlFor={id} className="sr-only">
+          New shortcut
+        </label>
+        <input id={id} value={value} placeholder="For example CommandOrControl+Shift+K" maxLength={64} onChange={(e) => setValue(e.target.value)} />
+        <button type="submit" className="secondary" disabled={state.busy || value.trim() === ""}>
+          Use this shortcut
+        </button>
+      </form>
+      {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
+    </section>
+  );
+}
+
 const stateWord = (row: SourceRow) => ({ off: "Off", on: "On", paused: "Paused", unavailable: "Off" })[row.state];
 
-function SourceItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevoke, onSetCloud }: { row: SourceRow } & ConnectionsProps) {
+function SourceItem(props: { row: SourceRow } & ConnectionsProps) {
+  if (props.row.provider) return <CloudItem {...props} provider={props.row.provider} />;
+  if (props.row.group === "optional" && props.row.state === "off") return <ObservationStart {...props} />;
+  return <LocalItem {...props} />;
+}
+
+function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevoke, onSetCloud, observation }: { row: SourceRow } & ConnectionsProps) {
   const projectField = useId();
-  const [step, setStep] = useState<"idle" | "choose" | "consent" | "revoke">("idle");
+  const [step, setStep] = useState<"idle" | "choose" | "consent" | "revoke" | "delete">("idle");
+  const observed = row.group === "optional";
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const local = row.group === "mac";
+  const local = row.group === "mac" || observed;
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -154,6 +237,31 @@ function SourceItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRev
           <button type="button" className="text-button" onClick={() => setStep("revoke")}>
             Disconnect…
           </button>
+          {observed && (
+            <button type="button" className="text-button" onClick={() => setStep("delete")}>
+              Delete kept text…
+            </button>
+          )}
+        </div>
+      )}
+
+      {observed && row.permissionMissing && (
+        <StateNote state={{ kind: "missing-access", detail: "macOS Accessibility permission is off for Companion, so nothing is read." }}>
+          <button type="button" className="text-button" disabled={busy} onClick={() => act(observation.onOpenAccessibility)}>
+            Open Accessibility settings
+          </button>
+        </StateNote>
+      )}
+
+      {step === "delete" && (
+        <div className="confirm" role="group" aria-label={`Delete kept text from ${row.name}`}>
+          <p>Delete the text kept from {row.name}? This cannot be undone. Reading continues unless you pause or disconnect.</p>
+          <button type="button" className="secondary" disabled={busy} onClick={() => act(() => observation.onDeleteRetained(row.id))}>
+            Delete kept text
+          </button>
+          <button type="button" className="text-button" onClick={() => setStep("idle")} autoFocus>
+            Keep it
+          </button>
         </div>
       )}
 
@@ -181,6 +289,300 @@ function SourceItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRev
         </div>
       )}
       {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
+    </li>
+  );
+}
+
+type Fields = { credential?: string; selectors: string; writeTargets?: string; baseUrl?: string; /** OAuth: whose sign-in page opens. */ signIn?: string };
+const FIELDS: Record<CloudProvider, Fields> = {
+  slack: { credential: "Bot token from your Slack app", selectors: "Channel IDs to read, separated by commas" },
+  notion: {
+    credential: "Internal integration token",
+    selectors: "Page IDs to read, separated by commas",
+    writeTargets: "Page IDs TARS may write to, separated by commas (optional, for updates and the outcome log)",
+  },
+  canvas: { baseUrl: "Your Canvas address (https://…)", credential: "Canvas access token", selectors: "Course IDs to read, separated by commas" },
+  gmail: { selectors: "Gmail label IDs to read, separated by commas", signIn: "Google" },
+  "outlook-mail": { selectors: "Mail folder IDs to read, separated by commas", signIn: "Microsoft" },
+  "outlook-calendar": { selectors: "Calendar IDs to read, separated by commas", signIn: "Microsoft" },
+};
+const list = (text: string) => text.split(",").map((s) => s.trim()).filter((s) => s !== "");
+
+function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provider: CloudProvider } & ConnectionsProps) {
+  const [step, setStep] = useState<"idle" | "connect" | "revoke">("idle");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
+  const fields = FIELDS[provider];
+  const blocked = cloud.blocked;
+
+  async function act(name: string, action: () => Promise<void>) {
+    setBusy(name);
+    setError(null);
+    try {
+      await action();
+      setStep("idle");
+    } catch (err) {
+      setError(reason(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <li className="source" data-state={row.state}>
+      <div className="source-head">
+        <span className="source-name">{row.name}</span>
+        <span className="source-state" data-state={row.state}>
+          {stateWord(row)}
+        </span>
+      </div>
+      <p className="quiet">{row.coverage}</p>
+      {row.status ? <StateNote state={row.status} /> : row.state === "off" && <p className="quiet small">Availability: not connected. Last checked: never.</p>}
+
+      {row.state === "off" && step === "idle" && (
+        <>
+          <button type="button" className="secondary" disabled={blocked !== undefined} onClick={() => setStep("connect")} aria-label={`Connect ${row.name}`}>
+            Connect…
+          </button>
+          {blocked && <p className="quiet small">{blocked}</p>}
+          {row.unavailableReason && <p className="quiet small">{row.unavailableReason}</p>}
+        </>
+      )}
+
+      {row.state === "off" && started && step === "idle" && (
+        <p className="quiet small" role="status">
+          Finish in your browser. {row.name} turns on here when {fields.signIn} confirms it.
+        </p>
+      )}
+
+      {step === "connect" && (
+        <CloudConnectForm
+          name={row.name}
+          fields={fields}
+          projects={projects}
+          busy={busy !== null}
+          onCancel={() => setStep("idle")}
+          onSubmit={(form) =>
+            act("connect", async () => {
+              await cloud.onConnect(provider, form);
+              if (fields.signIn) setStarted(true);
+            })
+          }
+        />
+      )}
+
+      {row.state === "on" && step === "idle" && (
+        <>
+          {provider === "notion" && <NotionWebhook sourceId={row.id} url={cloud.notionWebhookUrl(row.id)} reveal={cloud.revealNotionToken} />}
+          <div className="row-actions">
+            {REFRESHABLE.includes(provider) && (
+              <button type="button" className="text-button" disabled={busy !== null} onClick={() => act("refresh", () => cloud.onRefresh(row))} aria-label={`Refresh ${row.name}`}>
+                {busy === "refresh" ? "Refreshing…" : "Refresh"}
+              </button>
+            )}
+            <button type="button" className="text-button" disabled aria-describedby={`pause-${row.id}`}>
+              Pause
+            </button>
+            <button type="button" className="text-button" onClick={() => setStep("revoke")}>
+              Disconnect…
+            </button>
+          </div>
+          <p id={`pause-${row.id}`} className="quiet small">
+            {PAUSE_BLOCKED}
+          </p>
+        </>
+      )}
+
+      {step === "revoke" && (
+        <div className="confirm" role="group" aria-label={`Disconnect ${row.name}`}>
+          <p>Stop reading {row.name}? New reads stop now. Excerpts already sent to the cloud stay stored.</p>
+          <button type="button" className="secondary" disabled={busy !== null} onClick={() => act("revoke", () => cloud.onRevoke(row))}>
+            Disconnect
+          </button>
+          <button type="button" className="text-button" onClick={() => setStep("idle")} autoFocus>
+            Keep it
+          </button>
+        </div>
+      )}
+      {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
+    </li>
+  );
+}
+
+function CloudConnectForm(props: {
+  name: string;
+  fields: Fields;
+  projects: { id: string; name: string }[];
+  busy: boolean;
+  onCancel(): void;
+  onSubmit(form: ConnectForm): void;
+}) {
+  const ids = { project: useId(), base: useId(), credential: useId(), selectors: useId(), write: useId() };
+  const [projectId, setProjectId] = useState(props.projects[0]?.id ?? "");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [credential, setCredential] = useState("");
+  const [selectors, setSelectors] = useState("");
+  const [writeTargets, setWriteTargets] = useState("");
+  const ready = projectId !== "" && (!props.fields.credential || credential.trim() !== "") && list(selectors).length > 0 && (!props.fields.baseUrl || baseUrl.trim() !== "");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!ready) return;
+    props.onSubmit({
+      projectId,
+      selectors: list(selectors),
+      writeTargets: list(writeTargets),
+      ...(props.fields.credential ? { credential: credential.trim() } : {}),
+      ...(props.fields.baseUrl ? { baseUrl: baseUrl.trim() } : {}),
+    });
+  };
+  return (
+    <form className="confirm consent connect-form" aria-label={`Connect ${props.name}`} onSubmit={submit}>
+      <div className="field">
+        <label htmlFor={ids.project}>For project</label>
+        <select id={ids.project} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          {props.projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {props.fields.baseUrl && (
+        <div className="field">
+          <label htmlFor={ids.base}>{props.fields.baseUrl}</label>
+          <input id={ids.base} type="url" value={baseUrl} autoComplete="off" onChange={(e) => setBaseUrl(e.target.value)} />
+        </div>
+      )}
+      {props.fields.credential && (
+        <div className="field">
+          <label htmlFor={ids.credential}>{props.fields.credential}</label>
+          <input id={ids.credential} type="password" value={credential} autoComplete="off" spellCheck={false} onChange={(e) => setCredential(e.target.value)} />
+        </div>
+      )}
+      <div className="field">
+        <label htmlFor={ids.selectors}>{props.fields.selectors}</label>
+        <input id={ids.selectors} value={selectors} autoComplete="off" spellCheck={false} onChange={(e) => setSelectors(e.target.value)} />
+      </div>
+      {props.fields.writeTargets && (
+        <div className="field">
+          <label htmlFor={ids.write}>{props.fields.writeTargets}</label>
+          <input id={ids.write} value={writeTargets} autoComplete="off" spellCheck={false} onChange={(e) => setWriteTargets(e.target.value)} />
+        </div>
+      )}
+      <p>{consentText(props.name)}</p>
+      <p className="quiet small">
+        {props.fields.signIn
+          ? `${props.fields.signIn}'s sign-in page opens in your browser. Reading only; sending is a separate permission asked for later.`
+          : "The token is sent once to the cloud, sealed there, and never kept on this Mac."}
+      </p>
+      <button type="submit" className="secondary" disabled={!ready || props.busy}>
+        {props.busy ? "Connecting…" : props.fields.signIn ? `Continue to ${props.fields.signIn} sign-in` : `Connect ${props.name}`}
+      </button>
+      <button type="button" className="text-button" onClick={props.onCancel}>
+        Cancel
+      </button>
+    </form>
+  );
+}
+
+/** Notion delivers changes by webhook: the user adds this URL in Notion, then pastes the token Notion sends into its Verify dialog. */
+function NotionWebhook({ sourceId, url, reveal }: { sourceId: string; url: string; reveal(sourceId: string): Promise<string> }) {
+  const [token, setToken] = useState<{ busy: boolean; value?: string; error?: string }>({ busy: false });
+  return (
+    <div className="confirm webhook" role="group" aria-label="Notion updates">
+      <p>
+        So changes arrive without checking on a timer: in your Notion integration, add a webhook subscription with this URL. Notion then sends a verification
+        token; show it here and paste it into Notion's Verify dialog.
+      </p>
+      <code className="copyable">{url}</code>
+      <button
+        type="button"
+        className="text-button"
+        disabled={token.busy}
+        onClick={async () => {
+          setToken({ busy: true });
+          try {
+            setToken({ busy: false, value: await reveal(sourceId) });
+          } catch (err) {
+            setToken({ busy: false, error: reason(err) });
+          }
+        }}
+      >
+        Show verification token
+      </button>
+      {token.value && <code className="copyable">{token.value}</code>}
+      {token.error && <StateNote state={{ kind: "partial", detail: token.error }} />}
+    </div>
+  );
+}
+
+/** Off by default: the user names the apps and sites, after the consent wording. */
+function ObservationStart({ row, projects, addBlocked, observation }: { row: SourceRow } & ConnectionsProps) {
+  const ids = { project: useId(), apps: useId() };
+  const [open, setOpen] = useState(false);
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [apps, setApps] = useState("");
+  const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  return (
+    <li className="source" data-state={row.state}>
+      <div className="source-head">
+        <span className="source-name">{row.name}</span>
+        <span className="source-state" data-state={row.state}>
+          Off
+        </span>
+      </div>
+      <p className="quiet">{row.coverage}</p>
+      {!open ? (
+        <>
+          <button type="button" className="secondary" disabled={addBlocked !== undefined} onClick={() => setOpen(true)} aria-label={`Turn on ${row.name}`}>
+            Turn on…
+          </button>
+          {addBlocked && <p className="quiet small">{addBlocked}</p>}
+        </>
+      ) : (
+        <form
+          className="confirm consent connect-form"
+          aria-label={`Turn on ${row.name}`}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setState({ busy: true });
+            try {
+              await observation.onStart(list(apps), projectId);
+              setOpen(false);
+              setState({ busy: false });
+            } catch (err) {
+              setState({ busy: false, error: reason(err) });
+            }
+          }}
+        >
+          <div className="field">
+            <label htmlFor={ids.project}>For project</label>
+            <select id={ids.project} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor={ids.apps}>Apps and sites to read, separated by commas</label>
+            <input id={ids.apps} value={apps} autoComplete="off" spellCheck={false} aria-describedby={`${ids.apps}-hint`} onChange={(e) => setApps(e.target.value)} />
+            <p id={`${ids.apps}-hint`} className="quiet small">
+              An app by its bundle ID, such as com.apple.Notes. A browser site as bundle ID, a bar, then the site: com.google.Chrome|https://docs.google.com
+            </p>
+          </div>
+          <p>{observationConsent}</p>
+          <button type="submit" className="secondary" disabled={state.busy || projectId === "" || list(apps).length === 0}>
+            Start reading these
+          </button>
+          <button type="button" className="text-button" onClick={() => setOpen(false)}>
+            Cancel
+          </button>
+          {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
+        </form>
+      )}
     </li>
   );
 }

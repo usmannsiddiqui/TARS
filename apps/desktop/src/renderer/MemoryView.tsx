@@ -14,7 +14,10 @@ export type MemoryViewProps = {
   onSelectProject(projectId: string): void;
   onCorrect(fact: Fact, value: string): Promise<void>;
   onForget(fact: Fact): Promise<void>;
-  onAllowRelearning(key: string): Promise<void>;
+  /** Use a withheld item: remembered, and the forget it resembles is lifted. */
+  onAccept(item: Withheld): Promise<void>;
+  /** Drop a withheld item from review; it stays unused. */
+  onDismiss(item: Withheld): Promise<void>;
 };
 
 const humanKey = (key: string) => key.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
@@ -76,7 +79,7 @@ export function MemoryView(props: MemoryViewProps) {
           ) : (
             <ul className="facts">
               {props.withheld.map((w) => (
-                <WithheldRow key={w.id} item={w} onAllow={props.onAllowRelearning} />
+                <WithheldRow key={w.id} item={w} onAccept={props.onAccept} onDismiss={props.onDismiss} />
               ))}
             </ul>
           )}
@@ -171,33 +174,30 @@ function FactRow({ fact, sources, onCorrect, onForget }: { fact: Fact; sources: 
   );
 }
 
-function WithheldRow({ item, onAllow }: { item: Withheld; onAllow(key: string): Promise<void> }) {
-  const [state, setState] = useState<{ busy: boolean; done?: boolean; error?: string }>({ busy: false });
+function WithheldRow({ item, onAccept, onDismiss }: { item: Withheld } & Pick<MemoryViewProps, "onAccept" | "onDismiss">) {
+  const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  const act = async (action: (item: Withheld) => Promise<void>) => {
+    setState({ busy: true });
+    try {
+      await action(item); // the row leaves the list when the subscription updates
+      setState({ busy: false });
+    } catch (err) {
+      setState({ busy: false, error: reason(err) });
+    }
+  };
   return (
     <li className="fact">
       <span className="fact-key">{humanKey(item.key)}</span>
       <p className="fact-value">{item.value}</p>
-      {state.done ? (
-        <p className="quiet small">Allowed. I may learn it again the next time I prepare this project.</p>
-      ) : (
-        <button
-          type="button"
-          className="text-button"
-          disabled={state.busy}
-          aria-label={`Allow relearning ${humanKey(item.key)}`}
-          onClick={async () => {
-            setState({ busy: true });
-            try {
-              await onAllow(item.key);
-              setState({ busy: false, done: true });
-            } catch (err) {
-              setState({ busy: false, error: reason(err) });
-            }
-          }}
-        >
-          Allow relearning
+      <p className="quiet small">Using it also lifts the forget it resembles, so that may be learned again.</p>
+      <div className="row-actions">
+        <button type="button" className="text-button" disabled={state.busy} aria-label={`Use ${humanKey(item.key)}`} onClick={() => act(onAccept)}>
+          Use this
         </button>
-      )}
+        <button type="button" className="text-button" disabled={state.busy} aria-label={`Dismiss ${humanKey(item.key)}`} onClick={() => act(onDismiss)}>
+          Dismiss
+        </button>
+      </div>
       {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
     </li>
   );

@@ -27,6 +27,7 @@ import type * as localEvidence from "../localEvidence.js";
 import type * as memory from "../memory.js";
 import type * as prepare from "../prepare.js";
 import type * as projects from "../projects.js";
+import type * as transcription from "../transcription.js";
 
 import type {
   ApiFromModules,
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   memory: typeof memory;
   prepare: typeof prepare;
   projects: typeof projects;
+  transcription: typeof transcription;
 }>;
 
 /**
