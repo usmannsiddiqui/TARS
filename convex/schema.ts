@@ -261,6 +261,8 @@ export default defineSchema({
     // updatedAt of the last preparation the user started; keys the "Ready when you are" invitation,
     // so automatic runs never raise a new one or undo a dismissal.
     invitedAt: v.optional(v.string()),
+    // Last stored run: 1 when the newest message started no commitment (a request the model may have dropped).
+    uncitedNewest: v.optional(v.number()),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // Artifact (domain type); one per (owner, project). Changes only by compare-and-set on `revision`.
