@@ -41,7 +41,9 @@ function setup() {
       projectIds: [projectId],
       read: true,
       writeTargets: [],
-      cloudProcessing: true,
+      // Briefs read retained evidence only; without consent no automatic preparation is scheduled
+      // (that path is covered in auto-draft.test.ts), so every job here is a brief deadline.
+      cloudProcessing: false,
       version: 1,
       state: "active",
     });

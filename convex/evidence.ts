@@ -5,7 +5,7 @@ import { EvidenceSchema, SourceGrantSchema, type SourceGrant } from "../packages
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
-import { requireOwnerId } from "./lib/auth";
+import { requireOwnerId, verifiedUser } from "./lib/auth";
 import { evidenceFields, grantInputFields } from "./schema";
 
 const GrantInputSchema = SourceGrantSchema.omit({ ownerId: true });
@@ -22,6 +22,7 @@ export const setGrant = mutation({
     if (!parsed.success) {
       throw new ConvexError(`Invalid grant: ${z.prettifyError(parsed.error)}`);
     }
+    await saveProfile(ctx, ownerId);
     const existing = await ctx.db
       .query("grants")
       .withIndex("by_source", (q) => q.eq("id", args.id))
@@ -57,6 +58,18 @@ export const setGrantState = mutation({
     return null;
   },
 });
+
+/** Remember who the user is (verified token only) for preparations that run without a caller. */
+async function saveProfile(ctx: MutationCtx, ownerId: string) {
+  const { name, email } = await verifiedUser(ctx);
+  const profile = { ownerId, ...(name === null ? {} : { name }), ...(email === null ? {} : { email }) };
+  const row = await ctx.db
+    .query("ownerProfiles")
+    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+    .unique();
+  if (row === null) await ctx.db.insert("ownerProfiles", profile);
+  else await ctx.db.replace(row._id, profile);
+}
 
 const WATCHED_KINDS = new Set(["gmail", "outlook-mail", "outlook-calendar"]);
 
@@ -115,7 +128,31 @@ export async function intakeRecord(
     }
   }
   await ctx.db.insert("evidence", { ...record, isCurrent: decision.becomesCurrent });
+  // grant is non-null here: decideIntake denies without one. Owner and consent come from the stored grant.
+  if (decision.becomesCurrent && grant!.cloudProcessing) {
+    for (const projectId of record.projectIds) await requestAutomaticPreparation(ctx, grant!.ownerId, projectId);
+  }
   return "accepted";
+}
+
+/**
+ * Coalesced: at most one pending or running automatic preparation per project. Evidence that lands
+ * while one is pending is read by it; while one is running, it earns exactly one follow-up run.
+ */
+async function requestAutomaticPreparation(ctx: MutationCtx, ownerId: string, projectId: string) {
+  const id = ctx.db.normalizeId("projects", projectId);
+  const project = id === null ? null : await ctx.db.get(id);
+  if (project === null || project.ownerId !== ownerId) return; // only the owner's confirmed projects
+  const run = await ctx.db
+    .query("preparationRuns")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+  if (run === null) {
+    await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "pending", followUp: false });
+    await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
+  } else if (run.state === "running" && !run.followUp) {
+    await ctx.db.patch(run._id, { followUp: true });
+  }
 }
 
 const evidenceRecord = v.object(evidenceFields);

@@ -163,6 +163,36 @@ export default defineSchema({
     ["ownerId", "projectId"],
   ),
 
+  // Who the user is, from the verified sign-in when they connected a source. Lets an automatic
+  // preparation (no caller token) tell the model whose commitments are whose.
+  ownerProfiles: defineTable({
+    ownerId: v.string(),
+    name: v.optional(v.string()),
+    email: v.optional(v.string()),
+  }).index("by_owner", ["ownerId"]),
+
+  // At most one automatic preparation per (owner, project): pending (scheduled) or running.
+  // followUp: evidence landed during the run, so exactly one more run follows it.
+  preparationRuns: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    state: v.union(v.literal("pending"), v.literal("running")),
+    followUp: v.boolean(),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // Gentle nudges for one of the user's commitments with a due time (key = commitmentKey, stable
+  // across re-preparation). dueJob: the one due-1h reminder. offer: what is showing now, if anything.
+  nudges: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    key: v.string(),
+    dueAt: v.string(),
+    dueJob: v.optional(v.id("_scheduled_functions")),
+    lastNudgedAt: v.optional(v.number()),
+    offer: v.optional(v.object({ key: v.string(), startedForYou: v.boolean() })),
+  })
+    .index("by_owner_key", ["ownerId", "key"]),
+
   // Latest PreparedWork per (owner, project). factKeys: memory keys it depended on.
   preparedWork: defineTable({
     ownerId: v.string(),

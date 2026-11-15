@@ -9,8 +9,11 @@ import {
   assertTimezone,
   commitmentKey,
   decideAttention,
+  decideNudge,
   detectTradeoff,
+  dueSoonAt,
   invitationKey,
+  nudgeCopy,
   isQuietTime,
   localDate,
   nextLocalTime,
@@ -35,6 +38,7 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { createDraftFromPrepared } from "./artifacts";
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
@@ -216,6 +220,15 @@ async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"atten
     }
   }
 
+  for (const { offer, text } of await liveOffers(ctx, ownerId, nowMs)) {
+    if (await hasReceipt(ctx, ownerId, offer.key)) continue;
+    return {
+      input: { ...base, kind: "task-return", alreadyDelivered: false, hasPreparedWork: true },
+      key: offer.key,
+      ...nudgeCopy({ text, startedForYou: offer.startedForYou }),
+    };
+  }
+
   const focus = await loadFocus(ctx, ownerId);
   if (focus.projectId !== undefined) {
     const projectId = focus.projectId;
@@ -250,6 +263,121 @@ async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"atten
     };
   }
   return null;
+}
+
+// ---- Gentle nudges for the user's own due commitments.
+
+async function ownerNudges(ctx: Ctx, ownerId: string) {
+  const rows = await ctx.db
+    .query("nudges")
+    .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId))
+    .collect();
+  return rows.sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
+}
+
+/** The user's commitment a nudge row stands for (rows outlive re-preparation; the key is stable). */
+async function nudgeCommitment(ctx: Ctx, nudge: Doc<"nudges">) {
+  const rows = await ctx.db
+    .query("commitments")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", nudge.ownerId).eq("projectId", nudge.projectId))
+    .collect();
+  return rows.find((c) => c.ownership === "user" && commitmentKey({ projectId: c.projectId as ProjectId, text: c.text }) === nudge.key) ?? null;
+}
+
+/** Offers showing now whose commitment is still open and not yet due. */
+async function liveOffers(ctx: Ctx, ownerId: string, nowMs: number) {
+  const out: { nudge: Doc<"nudges">; offer: NonNullable<Doc<"nudges">["offer"]>; text: string }[] = [];
+  for (const nudge of await ownerNudges(ctx, ownerId)) {
+    if (nudge.offer === undefined) continue;
+    const commitment = await nudgeCommitment(ctx, nudge);
+    if (commitment?.state !== "open" || commitment.dueAt === undefined || Date.parse(commitment.dueAt) <= nowMs) continue;
+    out.push({ nudge, offer: nudge.offer, text: commitment.text });
+  }
+  return out;
+}
+
+async function contactState(ctx: Ctx, ownerId: string, settings: Doc<"attentionSettings">, nowMs: number) {
+  const events = await ctx.db
+    .query("sessionEvents")
+    .withIndex("by_owner_at", (q) => q.eq("ownerId", ownerId))
+    .collect();
+  const { working, meeting } = sessionState(events, nowMs, settings.timezone);
+  return { working, meeting, quiet: isQuietTime(nowMs, settings.timezone, settings.quietHours) };
+}
+
+async function openOffer(ctx: MutationCtx, nudge: Doc<"nudges">, nowMs: number, startedForYou: boolean) {
+  await ctx.db.patch(nudge._id, { offer: { key: `nudge:${nudge._id}@${nowMs}`, startedForYou }, lastNudgedAt: nowMs });
+}
+
+/**
+ * After a preparation stored commitments: one nudge row and one due-1h reminder per user-owned open
+ * commitment with a future due time. `automatic`: the project gets a draft if it has none, and that
+ * commitment gets the one "started for you" offer. Never touches focus, never creates an action.
+ */
+export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, projectId: string, automatic: boolean) {
+  const now = Date.now();
+  const rows = await ctx.db
+    .query("commitments")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .collect();
+  for (const commitment of rows) {
+    if (commitment.ownership !== "user" || commitment.state !== "open" || commitment.dueAt === undefined) continue;
+    const dueAt = commitment.dueAt;
+    if (Date.parse(dueAt) <= now) continue;
+    const key = commitmentKey({ projectId: projectId as ProjectId, text: commitment.text });
+    const existing = await ctx.db
+      .query("nudges")
+      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
+      .unique();
+    if (existing?.dueAt === dueAt) continue;
+    if (existing?.dueJob !== undefined && (await ctx.db.system.get(existing.dueJob))?.state.kind === "pending") {
+      await ctx.scheduler.cancel(existing.dueJob);
+    }
+    const remindAt = dueSoonAt(Date.parse(dueAt));
+    const dueJob = remindAt > now ? await ctx.scheduler.runAt(remindAt, internal.briefs.nudgeDueSoon, { ownerId, key, dueAt }) : undefined;
+    if (existing !== null) {
+      await ctx.db.patch(existing._id, { dueAt, dueJob });
+      continue;
+    }
+    const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
+    if (automatic && (await createDraftFromPrepared(ctx, ownerId, projectId)).created) {
+      await openOffer(ctx, (await ctx.db.get(id))!, now, true);
+    }
+  }
+}
+
+/** The one due-1h reminder. Stale (due time changed) or done: nothing. */
+export const nudgeDueSoon = internalMutation({
+  args: { ownerId: v.string(), key: v.string(), dueAt: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, key, dueAt }) => {
+    const nudge = await ctx.db
+      .query("nudges")
+      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
+      .unique();
+    const settings = await loadSettings(ctx, ownerId);
+    if (nudge === null || nudge.dueAt !== dueAt || settings === null) return null;
+    const commitment = await nudgeCommitment(ctx, nudge);
+    const now = Date.now();
+    if (commitment === null) return null;
+    const state = await contactState(ctx, ownerId, settings, now);
+    if (decideNudge({ trigger: "due-soon", nowMs: now, commitment, ...state })) await openOffer(ctx, nudge, now, false);
+    return null;
+  },
+});
+
+/** A return may open one nudge (only when none is showing), under the shared policy. */
+async function nudgeOnReturn(ctx: MutationCtx, ownerId: string, settings: Doc<"attentionSettings">, nowMs: number) {
+  if ((await liveOffers(ctx, ownerId, nowMs)).length > 0) return;
+  const state = await contactState(ctx, ownerId, settings, nowMs);
+  for (const nudge of await ownerNudges(ctx, ownerId)) {
+    const commitment = await nudgeCommitment(ctx, nudge);
+    if (commitment === null) continue;
+    const lastNudgedAt = nudge.lastNudgedAt;
+    if (decideNudge({ trigger: "return", nowMs, commitment, ...(lastNudgedAt === undefined ? {} : { lastNudgedAt }), ...state })) {
+      return await openOffer(ctx, nudge, nowMs, false);
+    }
+  }
 }
 
 /** Evaluate each commitment once, against the obligations evaluated before it. */
@@ -381,13 +509,14 @@ export const handleReturn = mutation({
     if (settings === null) throw new ConvexError("Set your timezone first");
     const now = Date.now();
     await ctx.db.insert("sessionEvents", { ownerId, kind: "return", at: now });
+    await nudgeOnReturn(ctx, ownerId, settings, now);
     const item = await nextAttentionItem(ctx, ownerId, settings, now);
     if (item === null) return { decision: "suppress" };
     return { decision: decideAttention({ ...item.input, panelOpen }), key: item.key };
   },
 });
 
-const validKey = (key: string) => key.length <= MAX_KEY_LENGTH && /^((morning|evening):\d{4}-\d{2}-\d{2}|task:.+)$/.test(key);
+const validKey = (key: string) => key.length <= MAX_KEY_LENGTH && /^((morning|evening):\d{4}-\d{2}-\d{2}|(task|nudge):.+)$/.test(key);
 
 /** A brief or invitation was shown (OS notification or panel): it is never delivered again. */
 export const markDelivered = mutation({
@@ -413,6 +542,19 @@ export const dismissInvitation = mutation({
       .first();
     if (existing === null) await ctx.db.insert("dismissedInvitations", { ownerId, key, at: Date.now() });
     return null;
+  },
+});
+
+/** "Finish it together" or "Not now": the offer closes; either way the next nudge waits for its window. */
+export const respondToNudge = mutation({
+  args: { nudgeId: v.id("nudges"), choice: v.union(v.literal("finish"), v.literal("not-now")) },
+  returns: v.object({ projectId: v.string() }),
+  handler: async (ctx, { nudgeId }) => {
+    const ownerId = await requireOwnerId(ctx);
+    const nudge = await ctx.db.get(nudgeId);
+    if (nudge === null || nudge.ownerId !== ownerId) throw new ConvexError("Nudge not found");
+    await ctx.db.patch(nudge._id, { offer: undefined, lastNudgedAt: Date.now() });
+    return { projectId: nudge.projectId };
   },
 });
 
@@ -468,6 +610,37 @@ export const getPendingBrief = query({
       return commitmentId === null || flag.text === undefined ? [] : [{ commitmentId, text: flag.text }];
     });
     return { key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: await hasReceipt(ctx, ownerId, row.key), brief: row.brief, tradeoffs };
+  },
+});
+
+/** Nudge offers showing now, for Today and the panel. */
+export const listNudgeOffers = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      nudgeId: v.id("nudges"),
+      projectId: v.string(),
+      key: v.string(),
+      title: v.string(),
+      body: v.string(),
+      startedForYou: v.boolean(),
+      delivered: v.boolean(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const ownerId = await requireOwnerId(ctx);
+    const out = [];
+    for (const { nudge, offer, text } of await liveOffers(ctx, ownerId, Date.now())) {
+      out.push({
+        nudgeId: nudge._id,
+        projectId: nudge.projectId,
+        key: offer.key,
+        ...nudgeCopy({ text, startedForYou: offer.startedForYou }),
+        startedForYou: offer.startedForYou,
+        delivered: await hasReceipt(ctx, ownerId, offer.key),
+      });
+    }
+    return out;
   },
 });
 

@@ -37,6 +37,10 @@ beforeEach(() => {
   vi.stubEnv("SLACK_SIGNING_SECRET", SLACK_SECRET);
   vi.stubEnv("GOOGLE_CLIENT_ID", "illustrative-google-client-id");
   vi.stubEnv("GOOGLE_CLIENT_SECRET", "illustrative-google-client-secret");
+  // Until a test stubs the outside world, nothing (an automatic preparation included) reaches it.
+  vi.stubGlobal("fetch", async () => {
+    throw new Error("unexpected fetch");
+  });
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -100,9 +104,9 @@ async function setup() {
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice" });
   const projectId = ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name: "AVT" }));
   /** A cloud source with one ingested record, through the provider-webhook intake path. */
-  const cloudEvidence = async (text: string, kind: SourceKind = "slack"): Promise<Evidence> => {
+  const cloudEvidence = async (text: string, kind: SourceKind = "slack", grant: Record<string, unknown> = {}): Promise<Evidence> => {
     const record = makeEvidence(alice.ownerId, [projectId], { text });
-    await asAlice.mutation(api.evidence.setGrant, grantFor(record.sourceId, kind, projectId));
+    await asAlice.mutation(api.evidence.setGrant, grantFor(record.sourceId, kind, projectId, grant));
     expect(await t.mutation(internal.evidence.ingest, { ownerId: alice.ownerId, sourceId: record.sourceId, record })).toBe("accepted");
     return record;
   };
@@ -130,6 +134,8 @@ describe("revoke", () => {
     expect(await s.asAlice.mutation(api.localEvidence.submit, { record: local })).toBe("accepted");
     // A second, untouched source in the same project.
     const kept = await s.cloudEvidence("Illustrative Slack note: the AVT pitch is on Tuesday.");
+    // The automatic preparation the new evidence scheduled runs now (and fails: no model yet), not mid-scenario.
+    await s.t.finishAllScheduledFunctions(() => {});
 
     const output = prepared({
       body: "Alice will email the AVT budget to Dana by Friday; the pitch is Tuesday.",
@@ -426,7 +432,8 @@ describe("recovery", () => {
 
   test("model_failure_keeps_previous_prepared_work_and_reports_honestly", async () => {
     const s = await setup();
-    const note = await s.cloudEvidence("Illustrative note: Alice, you will run the AVT demo.");
+    // No cloud-processing consent: nothing is prepared automatically, so every job here would be a retry.
+    const note = await s.cloudEvidence("Illustrative note: Alice, you will run the AVT demo.", "slack", { cloudProcessing: false });
     stubFetch({
       [RESPONSES_URL]: () =>
         completed(
