@@ -60,6 +60,9 @@ export const commitmentFields = {
   evidenceIds: v.array(v.string()),
 };
 
+/** SortKind (packages/domain/src/sort.ts). */
+export const captureKind = v.union(v.literal("todo"), v.literal("waiting"), v.literal("parked"), v.literal("idea"));
+
 export const preparationStatus = v.union(
   v.literal("ready"),
   v.literal("needs-retry"), // last attempt failed; previous `work` kept
@@ -169,10 +172,27 @@ export default defineSchema({
 
   // Commitment; the row _id is the TaskId.
   // doneAt: when the user marked it done ("I did it"), for the closing recap.
-  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields, doneAt: v.optional(v.number()) }).index(
-    "by_owner_project",
-    ["ownerId", "projectId"],
-  ),
+  // origin "capture": filed from the user's own brain dump (captureItems); preparation never replaces it.
+  commitments: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    ...commitmentFields,
+    doneAt: v.optional(v.number()),
+    origin: v.optional(v.literal("capture")),
+  }).index("by_owner_project", ["ownerId", "projectId"]),
+
+  // One line of a sorted brain dump. captureId: the capture's id on the Mac (the full text stays there).
+  // Only todo/waiting lines with a project have a commitment (commitmentId); parked and idea lines never do.
+  captureItems: defineTable({
+    ownerId: v.string(),
+    captureId: v.string(),
+    projectId: v.optional(v.string()),
+    kind: captureKind,
+    text: v.string(),
+    dueAt: v.optional(v.string()),
+    createdAt: v.number(),
+    commitmentId: v.optional(v.id("commitments")),
+  }).index("by_owner_capture", ["ownerId", "captureId"]),
 
   // Who the user is, from the verified sign-in when they connected a source. Lets an automatic
   // preparation (no caller token) tell the model whose commitments are whose.
