@@ -3,13 +3,17 @@
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
 // stay one click away; adding a project lives on the project index. Presentational: data and actions arrive as props.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { preparedNote, type Brief, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
+import { preparedNote, type Brief, type HelperRun, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
+import { HelperCards, type HelperActions } from "./Helpers";
 import { SourceChip } from "./logos";
 import { formatWhen, NewProject, NudgeCard, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
+  /** TARS's helpers: preparations running (or failed) right now, one card each. */
+  helpers: HelperRun[];
+  helperActions: HelperActions;
   dateLabel: string;
   /** null while projects are unavailable; `cloud` then says why. */
   projects: ProjectSummary[] | null;
@@ -197,6 +201,7 @@ export function Home(props: HomeProps) {
         <div className="home-main">
           {projects !== null && projects.length > 0 && (
             <>
+              <HelperCards runs={props.helpers} actions={props.helperActions} />
               {props.nudge && <NudgeCard offer={props.nudge} className="block tradeoff" onRespond={props.onNudge} onShown={onBriefShown} />}
               {props.tradeoff && <TradeoffFlag tradeoff={props.tradeoff} onResolve={props.onResolveTradeoff} />}
 

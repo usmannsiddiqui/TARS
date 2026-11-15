@@ -2,13 +2,14 @@
 // and for behaviour that needs cloud data no test can sign in to yet. Never part of the product
 // bundle (it lives under tests/ and is served only by the e2e spec's own Vite server).
 import { record } from "./bridge"; // first: the Composer reads the bridge when it loads
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ActingActions } from "../../../apps/desktop/src/renderer/Act";
 import { Connections, type CloudActions } from "../../../apps/desktop/src/renderer/Connections";
 import { Home } from "../../../apps/desktop/src/renderer/Home";
+import { HelperCards, type HelperActions } from "../../../apps/desktop/src/renderer/Helpers";
 import { MemoryView } from "../../../apps/desktop/src/renderer/MemoryView";
-import type { Brief, Commitment, Evidence, Fact, PetState, ProjectSummary, Receipt, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
+import type { Brief, Commitment, Evidence, Fact, HelperRun, PetState, ProjectSummary, Receipt, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
 import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
@@ -216,7 +217,63 @@ const cloudActions: CloudActions = {
   revealNotionToken: async (id) => (record("revealNotionToken", id), "secret_illustrative_verification_token"),
 };
 
+// ---- TARS's helpers: every state a run row can be in (illustrative projects and counts).
+const run = (projectName: string, over: Partial<HelperRun>): HelperRun => ({ projectId: projectName, projectName, state: "running", sources: [], ...over });
+const helperStates: Record<string, HelperRun[]> = {
+  starting: [run("AI Guides", { state: "pending" })],
+  reading: [run("AI Guides", { stage: "reading" })],
+  "one-source": [run("AI Guides", { stage: "drafting", sources: [{ kind: "gmail", count: 3 }] })],
+  "several-sources": [run("AI Guides", { stage: "drafting", sources: [{ kind: "gmail", count: 4 }, { kind: "slack", count: 2 }, { kind: "notion", count: 1 }] })],
+  saving: [run("AI Guides", { stage: "saving", sources: [{ kind: "gmail", count: 4 }, { kind: "slack", count: 2 }] })],
+  failed: [run("AI Guides", { state: "failed" })],
+  "two-projects": [
+    run("AI Guides", { stage: "drafting", sources: [{ kind: "outlook-mail", count: 5 }, { kind: "obsidian", count: 2 }] }),
+    run("AVT", { stage: "reading" }),
+  ],
+  "long-name": [run("AVT pitch for the regional accelerator, second round, with the revised budget appendix", { stage: "drafting", sources: [{ kind: "canvas", count: 12 }, { kind: "teams", count: 1 }] })],
+};
+// The real sequence with realistic timings: start, read, draft (the model call), save, then the card leaves.
+const helperPlay: [ms: number, runs: HelperRun[]][] = [
+  [0, []],
+  [600, helperStates["starting"]!],
+  [900, helperStates["reading"]!],
+  [1700, helperStates["several-sources"]!],
+  [7700, helperStates["saving"]!],
+  [8400, []],
+];
+const helperActions: HelperActions = {
+  onRetry: async (id) => record("prepareProject", id),
+  onDismiss: async (id) => record("dismissFailedRun", id),
+};
+function usePlayed(on: boolean) {
+  const [runs, setRuns] = useState<HelperRun[]>(on ? [] : helperStates["two-projects"]!);
+  useEffect(() => {
+    if (!on) return;
+    const timers = helperPlay.map(([ms, next]) => setTimeout(() => setRuns(next), ms));
+    return () => timers.forEach(clearTimeout);
+  }, [on]);
+  return runs;
+}
+
+function HelperGrid({ only }: { only?: string | undefined }) {
+  const names = only ? [only] : Object.keys(helperStates);
+  return (
+    <main className="helper-harness">
+      {/* Harness chrome only: plain grey labels, a scrolling page, a fixed card width per cell. */}
+      <style>{`.helper-harness{height:100%;overflow:auto;padding:24px clamp(16px,3vw,32px);display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:20px 24px;align-content:start}
+.helper-harness figure{margin:0}.helper-harness figcaption{font:12px var(--mono);color:var(--ink-3);margin-bottom:6px}`}</style>
+      {names.map((name) => (
+        <figure key={name}>
+          {!only && <figcaption>{name}</figcaption>}
+          <HelperCards runs={helperStates[name] ?? []} actions={helperActions} />
+        </figure>
+      ))}
+    </main>
+  );
+}
+
 function AppScene({ initial, variant }: { initial: Route; variant: string }) {
+  const played = usePlayed(variant === "play");
   const [route, setRoute] = useState<Route>(initial);
   const [session, setSession] = useState<SessionState>("idle");
   // As the subscription would: a brief reported as shown comes back delivered.
@@ -253,6 +310,8 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
         <Home
           dateLabel={new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" }).format(NOW)}
           projects={projects}
+          helpers={variant === "helpers" || variant === "play" ? played : []}
+          helperActions={helperActions}
           focusProjectId={focus}
           brief={((b) => ({ ...b, delivered: delivered.includes(b.key) }))(variant === "evening" ? evening : morning)}
           {...(variant === "reentry" ? { reentry } : {})}
@@ -388,9 +447,26 @@ const element = scene.startsWith("pet-") ? (
     onHover={(over) => record("hover", over)}
     onCompose={() => record("compose")}
   />
+) : scene === "helpers" || scene.startsWith("helpers-") ? (
+  <HelperGrid only={scene.slice("helpers-".length) || undefined} />
+) : scene === "panel-helpers" ? (
+  <Panel
+    petState="working"
+    helpers={helperStates["two-projects"]!}
+    helperActions={helperActions}
+    now={NOW.getTime()}
+    leftOff={{ project: "AI Guides", artifact: guides.title, step: guides.nextAction, at: inDays(-1, 18) }}
+    today={{ hard: panelToday, start: "Send the final slide order to the co-presenter" }}
+    onRecapShown={(key) => record("markDelivered", key, "panel")}
+    onOpenApp={() => record("openApp", "guides")}
+    onStop={() => record("closePanel")}
+    onClose={() => record("closePanel")}
+  />
 ) : scene === "panel-transcript" ? (
   <Panel
     petState="idle"
+    helpers={[]}
+    helperActions={helperActions}
     now={NOW.getTime()}
     leftOff={{ project: "AI Guides", artifact: guides.title }}
     capture
@@ -403,6 +479,8 @@ const element = scene.startsWith("pet-") ? (
 ) : scene === "panel" ? (
   <Panel
     petState="idle"
+    helpers={[]}
+    helperActions={helperActions}
     now={NOW.getTime()}
     leftOff={{ project: "AI Guides", artifact: guides.title, step: guides.nextAction, at: inDays(-1, 18) }}
     today={{ hard: panelToday, start: "Send the final slide order to the co-presenter" }}
@@ -412,10 +490,12 @@ const element = scene.startsWith("pet-") ? (
     onClose={() => record("closePanel")}
   />
 ) : scene === "panel-empty" ? (
-  <Panel petState="idle" now={NOW.getTime()} nextBriefAt={new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + 1, 9).getTime()} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
+  <Panel petState="idle" helpers={[]} helperActions={helperActions} now={NOW.getTime()} nextBriefAt={new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + 1, 9).getTime()} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
 ) : scene === "panel-evening" ? (
   <Panel
     petState="idle"
+    helpers={[]}
+    helperActions={helperActions}
     now={NOW.getTime()}
     leftOff={{ project: "AI Guides", artifact: guides.title }}
     recap={{ key: evening.key, items: evening.items, delivered: false }}
@@ -425,7 +505,7 @@ const element = scene.startsWith("pet-") ? (
     onClose={() => record("closePanel")}
   />
 ) : scene === "panel-done" ? (
-  <Panel petState="done" now={NOW.getTime()} completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
+  <Panel petState="done" helpers={[]} helperActions={helperActions} now={NOW.getTime()} completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
 ) : (
   <AppScene initial={projectVariant ? { view: "project", projectId: projectVariant } : (routes[routeName] ?? { view: "today" })} variant={variant} />
 );

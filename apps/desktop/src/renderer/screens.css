@@ -746,3 +746,212 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- Helpers: one small card per preparation in progress ---------- */
+
+/* Built from TARS's own parts: the frosted .block card (an .inner surface inside the panel's glass), the
+   17px project title, the glyph-and-word state tag, the source chips. The stage track is three square
+   marks in the pet's dot-matrix language: done is filled, now is filled and blinks like the typing cursor,
+   next is hollow, so the stage reads by shape as well as by its words. */
+.helper-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  align-items: start;
+  gap: 12px;
+  list-style: none;
+  padding: 0;
+}
+
+.helpers.compact .helper-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+/* A card opens its own space as it arrives and closes it as it leaves, so nothing below jumps. */
+.helper-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+  animation: helper-open 260ms var(--ease-out);
+}
+
+.helper-slot > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.helper-slot[data-leaving] {
+  animation: helper-close 180ms var(--ease-in-out) forwards;
+  pointer-events: none;
+}
+
+@keyframes helper-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes helper-close {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.helper.block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 18px 16px;
+}
+
+.helper.block > * + * {
+  margin-top: 0;
+}
+
+.helper.inner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+}
+
+.helper-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.helper-project {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.helpers.compact .helper-project {
+  font-size: 15px;
+}
+
+.helper-head .state-tag {
+  flex: none;
+}
+
+/* A failed helper's word sits on the black problem plate, as every problem state in TARS does. */
+.helper[data-state="failed"] .state-tag {
+  padding: 0 6px;
+  border-radius: var(--r-tag);
+  background: var(--black);
+  color: var(--on-black);
+  opacity: 1;
+}
+
+.helper-doing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.helpers.compact .helper-doing {
+  font-size: 14px;
+}
+
+.helper-words {
+  min-width: 0;
+  animation: helper-swap 200ms var(--ease-out);
+}
+
+@keyframes helper-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/* Centred on the first line, so a stage that wraps keeps its track beside its first words. */
+.helper-track {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+  align-self: flex-start;
+  margin-top: calc((1.45em - 8px) / 2);
+}
+
+.helper-step {
+  width: 8px;
+  height: 8px;
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+
+.helper-step[data-step="done"] {
+  background: var(--ink);
+  box-shadow: none;
+}
+
+.helper-step[data-step="now"] {
+  background: var(--ink);
+  box-shadow: none;
+  animation: helper-blink 1s steps(1) infinite;
+}
+
+/* The typing cursor's rhythm: 500 ms lit, 500 ms hollow. */
+@keyframes helper-blink {
+  50% {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--ink);
+  }
+}
+
+/* The chips arrive when drafting starts (the first moment the sources are known) and open their row. */
+.helper-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  overflow: hidden;
+  animation: helper-chips 260ms var(--ease-out);
+}
+
+@keyframes helper-chips {
+  from {
+    max-height: 0;
+    opacity: 0;
+  }
+  to {
+    max-height: 120px;
+  }
+}
+
+.helpers.compact .source-chip {
+  padding: 1px 10px 1px 6px;
+  font-size: 13px;
+}
+
+.helper .actions {
+  margin-top: 4px;
+}
+
+.helper .actions .secondary {
+  min-height: 34px;
+  padding: 6px 16px;
+  font-size: 14px;
+}
+
+/* Reduced motion: nothing blinks, so "now" is a heavy ring, apart from filled (done) and thin (next). */
+@media (prefers-reduced-motion: reduce) {
+  .helper-step[data-step="now"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 2.5px var(--ink);
+  }
+}

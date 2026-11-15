@@ -13,6 +13,8 @@ export type Honest =
   | { kind: "unknown"; detail?: string }
   | { kind: "stale"; at?: string; detail?: string }
   | { kind: "loading"; detail?: string }
+  /** One of TARS's helpers is preparing work right now. */
+  | { kind: "working"; detail?: string }
   | { kind: "empty"; detail: string }
   | { kind: "done"; detail?: string }
   /** Something TARS will really do at a set time (a scheduled brief deadline). */
@@ -227,6 +229,29 @@ export function kindFromUrl(url: string | undefined): string | undefined {
   if (u?.protocol !== "https:") return undefined;
   const kind = HOST_KIND.find(([host]) => u.hostname === host || u.hostname.endsWith(`.${host}`))?.[1];
   return kind === "outlook" ? (u.pathname.startsWith("/calendar") ? "outlook-calendar" : "outlook-mail") : kind;
+}
+
+/** One of TARS's helpers: a preparation that is waiting, running or failed (listActiveRuns). */
+export type HelperRun = {
+  projectId: string;
+  projectName: string;
+  state: "pending" | "running" | "failed";
+  stage?: "reading" | "drafting" | "saving";
+  sources: { kind: string; count: number }[];
+};
+
+const STAGE_WORDS = {
+  reading: "Reading this project's sources",
+  saving: "Checking it against your sources, then saving",
+} as const;
+
+/** A helper card's words, only from the stage the run is really in: no percentage, no timer. */
+export function helperWords(run: HelperRun): { state: Honest; doing: string } {
+  if (run.state === "failed") return { state: { kind: "needs-retry" }, doing: "The last preparation failed; the earlier version is kept." };
+  if (run.state === "pending" || run.stage === undefined) return { state: { kind: "working" }, doing: "Starting" };
+  if (run.stage !== "drafting") return { state: { kind: "working" }, doing: STAGE_WORDS[run.stage] };
+  const items = run.sources.reduce((n, s) => n + s.count, 0);
+  return { state: { kind: "working" }, doing: `Drafting from ${items} ${items === 1 ? "item" : "items"}` };
 }
 
 /** A project's preparation as one honest state, for the rail, Today and the project index. */
