@@ -120,6 +120,11 @@ export default defineSchema({
     availability,
     lastCheckedAt: v.optional(v.string()),
     lastError: v.optional(v.string()), // short code only, never source content
+    // How the last successful check happened: Composio pushed an event, or TARS asked on an app event.
+    checkedVia: v.optional(v.union(v.literal("pushed"), v.literal("opened"))),
+    // Composio Gmail: which trigger config Composio accepted. Absent: made before the one-minute interval.
+    triggerUpgrade: v.optional(v.union(v.literal("polling_interval_1"), v.literal("default_interval"))),
+    mailCheckStartedAt: v.optional(v.number()), // the last on-event mail check, for its 20-second debounce
   })
     .index("by_source", ["sourceId"])
     .index("by_account", ["provider", "accountKey"])

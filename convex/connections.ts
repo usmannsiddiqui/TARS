@@ -13,7 +13,7 @@ import { availability } from "./schema";
 export type SourceContext = { grant: SourceGrant | null; connection: Doc<"connections"> | null };
 type RunCtx = Pick<ActionCtx, "runQuery" | "runMutation">;
 
-async function loadContext(ctx: QueryCtx, sourceId: string): Promise<SourceContext> {
+export async function loadContext(ctx: QueryCtx, sourceId: string): Promise<SourceContext> {
   const grantRow = await ctx.db
     .query("grants")
     .withIndex("by_source", (q) => q.eq("id", sourceId))
@@ -38,6 +38,7 @@ export const listConnections = query({
       broker: v.optional(v.literal("composio")),
       availability,
       lastCheckedAt: v.optional(v.string()),
+      checkedVia: v.optional(v.union(v.literal("pushed"), v.literal("opened"))),
       lastError: v.optional(v.string()),
       subscriptionExpiresAt: v.optional(v.number()),
       state: v.string(),
@@ -62,6 +63,7 @@ export const listConnections = query({
         ...(row.broker === undefined ? {} : { broker: row.broker }),
         availability: row.availability,
         ...(row.lastCheckedAt === undefined ? {} : { lastCheckedAt: row.lastCheckedAt }),
+        ...(row.checkedVia === undefined ? {} : { checkedVia: row.checkedVia }),
         ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
         ...(row.subscriptionExpiresAt === undefined ? {} : { subscriptionExpiresAt: row.subscriptionExpiresAt }),
         state: grant.state,
@@ -142,17 +144,18 @@ export const setStatus = internalMutation({
     availability,
     lastError: v.optional(v.string()),
     checkedAt: v.optional(v.string()),
+    checkedVia: v.optional(v.union(v.literal("pushed"), v.literal("opened"))),
     cursor: v.optional(v.string()),
     subscriptionExpiresAt: v.optional(v.number()),
   },
   returns: v.null(),
-  handler: async (ctx, { sourceId, checkedAt, ...status }) => {
+  handler: async (ctx, { sourceId, checkedAt, checkedVia, ...status }) => {
     const { connection } = await loadContext(ctx, sourceId);
     if (connection === null) return null;
     await ctx.db.patch(connection._id, {
       ...status,
       lastError: status.lastError,
-      ...(checkedAt === undefined ? {} : { lastCheckedAt: checkedAt }),
+      ...(checkedAt === undefined ? {} : { lastCheckedAt: checkedAt, checkedVia }),
     });
     return null;
   },
@@ -221,13 +224,14 @@ export async function ingestItems(ctx: RunCtx, grant: SourceGrant, items: Provid
   return stored;
 }
 
-/** Record a successful read: connected, checked now. */
-export async function markChecked(ctx: RunCtx, sourceId: string, cursor?: string): Promise<void> {
+/** Record a successful read: connected, checked now (and, for Composio, how). */
+export async function markChecked(ctx: RunCtx, sourceId: string, cursor?: string, via?: "pushed" | "opened"): Promise<void> {
   await ctx.runMutation(internal.connections.setStatus, {
     sourceId,
     availability: "connected",
     checkedAt: new Date().toISOString(),
     ...(cursor === undefined ? {} : { cursor }),
+    ...(via === undefined ? {} : { checkedVia: via }),
   });
 }
 

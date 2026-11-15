@@ -520,6 +520,11 @@ export const handleReturn = mutation({
     if (settings === null) throw new ConvexError("Set your timezone first");
     const now = Date.now();
     await ctx.db.insert("sessionEvents", { ownerId, kind: "return", at: now });
+    // The return is the event: an owner with Composio Gmail gets one mail check now (debounced there), never a timer.
+    const owned = await ctx.db.query("connections").withIndex("by_owner", (q) => q.eq("ownerId", ownerId)).collect();
+    if (owned.some((c) => c.provider === "gmail" && c.broker === "composio")) {
+      await ctx.scheduler.runAfter(0, internal.connectors.composio.checkMailFor, { ownerId });
+    }
     await nudgeOnReturn(ctx, ownerId, settings, now);
     const item = await nextAttentionItem(ctx, ownerId, settings, now);
     if (item === null) return { decision: "suppress" };

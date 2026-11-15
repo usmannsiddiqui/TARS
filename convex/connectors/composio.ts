@@ -11,7 +11,7 @@ import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
 import { action, type ActionCtx, httpAction, internalAction, internalMutation } from "../_generated/server";
-import { ingestItems, markChecked, markFailed, requireOwnedSource, type ProviderItem } from "../connections";
+import { ingestItems, loadContext, markChecked, markFailed, requireOwnedSource, type ProviderItem } from "../connections";
 import { requireOwnerId } from "../lib/auth";
 import {
   issueOAuthState,
@@ -34,6 +34,8 @@ const STATE_PREFIX = "composio:";
 const TOLERANCE_SECONDS = 300; // the SDK's default webhook tolerance
 const MAX_SIGNATURES = 5;
 const MAX_TEXT = 4000;
+const MAX_FETCH = 10; // messages per on-event mail check
+const CHECK_DEBOUNCE_MS = 20_000;
 // shortcut: "latest" follows Composio's newest tool schema; pin a dated version once proven live.
 const TOOL_VERSION = "latest";
 
@@ -52,10 +54,10 @@ const AUTH_CONFIG_ENV: Record<Kind, string> = {
 };
 /**
  * The triggers per kind, one instance of each per selected item. Slack, Outlook and GitHub are
- * realtime (webhooks); Gmail's is polled by Composio on its side (nothing here runs on a timer).
- * Teams has no message trigger, so a Teams connection receives nothing yet.
+ * realtime (webhooks); Gmail's may be polled by Composio on its side (nothing here runs on a timer), so
+ * it asks for a one-minute interval. Teams has no message trigger, so a Teams connection receives nothing yet.
  */
-type Trigger = { slug: string; config(selector: string): Record<string, unknown> };
+type Trigger = { slug: string; config(selector: string): Record<string, unknown>; pollingInterval?: number };
 const ownerRepo = (repository: string) => {
   const [owner, repo] = repository.split("/");
   return { owner, repo };
@@ -63,7 +65,7 @@ const ownerRepo = (repository: string) => {
 const TRIGGERS: Partial<Record<Kind, Trigger[]>> = {
   slack: [{ slug: "SLACK_CHANNEL_MESSAGE_RECEIVED", config: (channel) => ({ channel_id: channel }) }],
   // shortcut: labelIds' type (string vs list) is not documented; one label per instance as a string.
-  gmail: [{ slug: "GMAIL_NEW_GMAIL_MESSAGE", config: (label) => ({ labelIds: label }) }],
+  gmail: [{ slug: "GMAIL_NEW_GMAIL_MESSAGE", config: (label) => ({ labelIds: label }), pollingInterval: 1 }],
   "outlook-mail": [{ slug: "OUTLOOK_MESSAGE_TRIGGER", config: (folder) => ({ folder_id: folder }) }],
   // GitHub's comment triggers each watch one issue or PR (and are polled), so a repository is read through these two.
   github: [
@@ -219,7 +221,7 @@ export const oauthCallback = httpAction(async (ctx, request) => {
     throw error;
   }
   try {
-    await subscribe(grant, kind, account);
+    await subscribe(ctx, grant, kind, account);
     await markChecked(ctx, sourceId);
   } catch (error) {
     await markFailed(ctx, sourceId, error);
@@ -228,17 +230,43 @@ export const oauthCallback = httpAction(async (ctx, request) => {
   return oauthResultPage(200, `${NAME[kind]} is connected through Composio. You can return to the app.`);
 });
 
-/** One trigger instance per selected channel, label or folder, pinned to this connected account. */
-async function subscribe(grant: SourceGrant, kind: Kind, account: Account): Promise<void> {
+/**
+ * One trigger instance per selected channel, label or folder, pinned to this connected account. A
+ * polled trigger asks for its interval (an instance field, not trigger_config); if Composio rejects
+ * that, it is made without one and the connection records that it polls at Composio's default.
+ */
+async function subscribe(ctx: RunCtx, grant: SourceGrant, kind: Kind, account: Account): Promise<void> {
+  let upgrade: "polling_interval_1" | "default_interval" | undefined;
   for (const selector of grant.selectors) {
     for (const trigger of TRIGGERS[kind] ?? []) {
-      await composio(`/trigger_instances/${trigger.slug}/upsert`, {
-        method: "POST",
-        body: { user_id: account.userId, connected_account_id: account.connectedAccountId, trigger_config: trigger.config(selector) },
-      });
+      const path = `/trigger_instances/${trigger.slug}/upsert`;
+      const body = { user_id: account.userId, connected_account_id: account.connectedAccountId, trigger_config: trigger.config(selector) };
+      if (trigger.pollingInterval === undefined) {
+        await composio(path, { method: "POST", body });
+        continue;
+      }
+      try {
+        await composio(path, { method: "POST", body: { ...body, polling_interval: trigger.pollingInterval } });
+        upgrade ??= "polling_interval_1";
+      } catch (error) {
+        if (!(error instanceof ProviderError) || !(error.code === "http_400" || error.code === "http_422")) throw error;
+        await composio(path, { method: "POST", body });
+        upgrade = "default_interval";
+      }
     }
   }
+  if (upgrade !== undefined) await ctx.runMutation(internal.connectors.composio.setTriggerUpgrade, { sourceId: grant.id, triggerUpgrade: upgrade });
 }
+
+export const setTriggerUpgrade = internalMutation({
+  args: { sourceId: v.string(), triggerUpgrade: v.union(v.literal("polling_interval_1"), v.literal("default_interval")) },
+  returns: v.null(),
+  handler: async (ctx, { sourceId, triggerUpgrade }) => {
+    const { connection } = await loadContext(ctx, sourceId);
+    if (connection !== null) await ctx.db.patch(connection._id, { triggerUpgrade });
+    return null;
+  },
+});
 
 /** Separate consent to send or post from this account. Composio already holds the token; this is TARS's permission. */
 export const allowSend = action({
@@ -321,6 +349,7 @@ export const handleEvent = httpAction(async (ctx, request) => {
   try {
     const item = await itemOf(kind, grant, await accountOf(connection), envelope);
     if (item !== null) await ingestItems(ctx, grant, [item]);
+    await markChecked(ctx, grant.id, undefined, "pushed");
   } catch (error) {
     await markFailed(ctx, grant.id, error);
   }
@@ -360,14 +389,7 @@ async function itemOf(kind: Kind, grant: SourceGrant, account: Account, envelope
   }
   if (kind === "gmail") {
     const event = GmailEvent.safeParse(envelope.data);
-    if (!event.success || !event.data.label_ids.some((label) => grant.selectors.includes(label))) return null;
-    const { message_id, sender, subject, message_text, message_timestamp } = event.data;
-    return {
-      externalId: message_id, // the Gmail message id, as the direct connector stores it
-      version: message_id, // Gmail message content is immutable: one version per message
-      text: `From: ${sender ?? ""}\nSubject: ${subject ?? ""}\n\n${(message_text ?? "").trim()}`.slice(0, MAX_TEXT),
-      occurredAt: isoTime(message_timestamp, envelope.timestamp),
-    };
+    return event.success ? gmailItem(grant, event.data, envelope.timestamp) : null;
   }
   if (kind === "github") return githubItem(grant, envelope);
   // Outlook's trigger carries only the message id: read it, then keep it only in a selected folder.
@@ -375,6 +397,18 @@ async function itemOf(kind: Kind, grant: SourceGrant, account: Account, envelope
   if (!event.success) return null;
   const message = parse(OutlookMessage, await readTool("OUTLOOK_GET_MESSAGE", account, { message_id: event.data.id }));
   return grant.selectors.includes(message.parentFolderId ?? "") ? mailItem(message as GraphMessage) : null;
+}
+
+/** A Gmail message in a selected label, pushed or fetched: the one mapping both paths use. */
+function gmailItem(grant: SourceGrant, message: z.infer<typeof GmailEvent>, fallbackTime: string): ProviderItem | null {
+  if (!message.label_ids.some((label) => grant.selectors.includes(label))) return null;
+  const { message_id, sender, subject, message_text, message_timestamp } = message;
+  return {
+    externalId: message_id, // the Gmail message id, as the direct connector stores it
+    version: message_id, // Gmail message content is immutable: one version per message
+    text: `From: ${sender ?? ""}\nSubject: ${subject ?? ""}\n\n${(message_text ?? "").trim()}`.slice(0, MAX_TEXT),
+    occurredAt: isoTime(message_timestamp, fallbackTime),
+  };
 }
 
 /** One issue or PR in a selected repository. Each distinct action, title and body is its own version. */
@@ -402,6 +436,104 @@ function isoTime(value: string | undefined, fallback: string): string {
   const time = value !== undefined && /^\d+$/.test(value) ? Number(value) * (value.length <= 10 ? 1000 : 1) : Date.parse(value ?? "");
   return new Date(Number.isNaN(time) ? fallback : time).toISOString();
 }
+
+// ---- Mail check on an app event (window focus, return to the Mac): never on a timer.
+
+// shortcut: GMAIL_FETCH_EMAILS's processed fields (camelCase, like GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID's) are assumed, not documented; recheck on a live read.
+const FetchedMail = z.object({
+  messages: z.array(
+    z.object({
+      messageId: z.string().min(1),
+      labelIds: z.array(z.string()),
+      sender: z.string().optional(),
+      subject: z.string().optional(),
+      messageText: z.string().optional(),
+      messageTimestamp: z.string().optional(),
+    }),
+  ),
+});
+
+/** The owner's active Composio Gmail grants, claimed for a check unless one started under 20 seconds ago. */
+export const claimMailCheck = internalMutation({
+  args: { ownerId: v.string() },
+  handler: async (ctx, { ownerId }): Promise<{ grant: SourceGrant; connection: Doc<"connections">; newestAt?: number }[]> => {
+    const now = Date.now();
+    const rows = (await ctx.db.query("connections").withIndex("by_owner", (q) => q.eq("ownerId", ownerId)).collect()).filter(
+      (row) => row.provider === "gmail" && row.broker === "composio",
+    );
+    if (rows.some((row) => (row.mailCheckStartedAt ?? 0) > now - CHECK_DEBOUNCE_MS)) return [];
+    const claimed = [];
+    for (const connection of rows) {
+      const { grant } = await loadContext(ctx, connection.sourceId);
+      if (grant === null || grant.ownerId !== ownerId || grant.state !== "active" || !grant.read) continue;
+      await ctx.db.patch(connection._id, { mailCheckStartedAt: now });
+      // shortcut: reads every stored revision of this source to find the newest; add an occurredAt index if sources grow large.
+      const stored = await ctx.db.query("evidence").withIndex("by_item", (q) => q.eq("ownerId", ownerId).eq("sourceId", grant.id)).collect();
+      const newestAt = stored.reduce((max, row) => Math.max(max, Date.parse(row.occurredAt)), 0);
+      claimed.push({ grant, connection, ...(newestAt > 0 ? { newestAt } : {}) });
+    }
+    return claimed;
+  },
+});
+
+/**
+ * Look for mail newer than the newest stored, in each selected label, and pass it through the webhook's
+ * intake (duplicates dropped by id + version; automatic preparation as for a pushed message). A
+ * connection made before the one-minute interval gets its triggers re-upserted once, here.
+ */
+async function checkOwnerMail(ctx: RunCtx, ownerId: string): Promise<void> {
+  const claimed = await ctx.runMutation(internal.connectors.composio.claimMailCheck, { ownerId });
+  for (const { grant, connection, newestAt } of claimed) {
+    const account = await accountOf(connection);
+    if (connection.triggerUpgrade === undefined) {
+      try {
+        await subscribe(ctx, grant, "gmail", account);
+      } catch (error) {
+        if (!(error instanceof ProviderError)) throw error; // no marker stored: tried again on the next event
+      }
+    }
+    try {
+      const items: ProviderItem[] = [];
+      for (const label of grant.selectors) {
+        const args = { label_ids: [label], max_results: MAX_FETCH, verbose: true, ...(newestAt === undefined ? {} : { query: `after:${Math.floor(newestAt / 1000)}` }) };
+        const { messages } = parse(FetchedMail, await readTool("GMAIL_FETCH_EMAILS", account, args));
+        const fetchedAt = new Date().toISOString();
+        for (const m of messages) {
+          const item = gmailItem(
+            grant,
+            { message_id: m.messageId, label_ids: m.labelIds, sender: m.sender, subject: m.subject, message_text: m.messageText, message_timestamp: m.messageTimestamp },
+            fetchedAt,
+          );
+          if (item !== null) items.push(item);
+        }
+      }
+      await ingestItems(ctx, grant, items.slice(0, MAX_FETCH));
+      await markChecked(ctx, grant.id, undefined, "opened");
+    } catch (error) {
+      await markFailed(ctx, grant.id, error);
+    }
+  }
+}
+
+/** The app window gained focus or became visible: check the caller's Composio Gmail now. */
+export const checkMail = action({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx): Promise<null> => {
+    await checkOwnerMail(ctx, await requireOwnerId(ctx));
+    return null;
+  },
+});
+
+/** Scheduled once by briefs.handleReturn (OS resume or unlock), for the owner that mutation verified. */
+export const checkMailFor = internalAction({
+  args: { ownerId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId }): Promise<null> => {
+    await checkOwnerMail(ctx, ownerId);
+    return null;
+  },
+});
 
 // ---- Writes: called only by actions.ts for a reserved, running action.
 
