@@ -62,6 +62,8 @@ const ADDRESSED_TO_ASSISTANT =
   /ignore (all |any )?(the )?(previous|prior|above|earlier) instructions|disregard (all |any )?(the )?(previous|prior|above|earlier)|system prompt|you are now|\b(assistant|ai|agent|bot)\s*:|\btars\s*[,:]/i;
 const VAGUE_OWNERSHIP = /\b(someone|somebody|anyone|anybody|we should|we need to|it would be good)\b/i;
 const MAX_NEXT_ACTION = 200;
+const DAY_MS = 86_400_000;
+const MAX_DUE_AHEAD_MS = 2 * 365 * DAY_MS;
 const MAX_KEY = 80;
 const MAX_VALUE = 500;
 
@@ -116,7 +118,7 @@ export function assemblePreparation(
         : clear && item.holder === "other" && (item.holderName ?? "").trim() !== ""
           ? "other"
           : "unassigned";
-    const dueAt = item.dueAt !== null && z.iso.datetime().safeParse(item.dueAt).success ? item.dueAt : undefined;
+    const dueAt = dueInstant(item.dueAt, ids.map((id) => Date.parse(byId.get(id)!.occurredAt)));
     commitments.push({
       text,
       ownership,
@@ -141,6 +143,45 @@ export function assemblePreparation(
     work: { projectId, title, body, evidenceIds, gaps, nextAction, state: gaps.length > 0 ? "partial" : "ready" },
     commitments,
     facts,
+  };
+}
+
+/**
+ * A model-given due time as a UTC "Z" instant, or undefined when it is not an ISO datetime (Z or
+ * offset) or is absurd: more than two years after, or more than a day before, the evidence it cites.
+ */
+function dueInstant(dueAt: string | null, writtenAt: readonly number[]): string | undefined {
+  if (dueAt === null || !z.iso.datetime({ offset: true }).safeParse(dueAt).success) return undefined;
+  const due = Date.parse(dueAt);
+  if (due < Math.min(...writtenAt) - DAY_MS || due > Math.max(...writtenAt) + MAX_DUE_AHEAD_MS) return undefined;
+  return new Date(due).toISOString();
+}
+
+export type PreparationClock =
+  | { utc: string; timezone: string; localDate: string; localWeekday: string; localTime: string }
+  | { utc: string; timezone: null; note: string };
+
+/** The trusted "now" the model resolves relative deadlines with. No zone: it must not guess one. */
+export function preparationClock(nowMs: number, timezone: string | null): PreparationClock {
+  const utc = new Date(nowMs).toISOString();
+  if (timezone === null) return { utc, timezone, note: "The user's time zone is not known: set every dueAt to null." };
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hourCycle: "h23",
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(nowMs);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)!.value;
+  return {
+    utc,
+    timezone,
+    localDate: `${get("year")}-${get("month")}-${get("day")}`,
+    localWeekday: get("weekday"),
+    localTime: `${get("hour")}:${get("minute")}`,
   };
 }
 
