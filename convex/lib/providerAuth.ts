@@ -21,23 +21,26 @@ export async function openCredential(sealed: string): Promise<Record<string, str
 /** Constant-time check of a hex HMAC-SHA256 (subtle.verify does not leak timing). */
 export async function verifyHmacSha256Hex(secret: string, message: string, hex: string): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/i.test(hex)) return false;
+  return verifyHmac(secret, message, Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16)));
+}
+
+/** The same check for a base64 HMAC-SHA256 (Standard Webhooks style signatures). */
+export async function verifyHmacSha256Base64(secret: string, message: string, base64: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(base64)) return false;
+  return verifyHmac(secret, message, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+}
+
+async function verifyHmac(secret: string, message: string, signature: Uint8Array<ArrayBuffer>): Promise<boolean> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const signature = Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   return crypto.subtle.verify("HMAC", key, signature, encoder.encode(message));
 }
 
 // ---- OAuth state: random, single-use, expiring, bound to owner and provider.
 const STATE_TTL_MS = 10 * 60 * 1000;
 
-export async function issueOAuthState(ctx: MutationCtx, ownerId: string, provider: string): Promise<string> {
-  const state = randomToken();
+/** `state` is made here unless the caller had to put it in a URL first (Composio's callback_url). */
+export async function issueOAuthState(ctx: MutationCtx, ownerId: string, provider: string, state = randomToken()): Promise<string> {
   await ctx.db.insert("oauthStates", { state, ownerId, provider, expiresAt: Date.now() + STATE_TTL_MS });
   return state;
 }
