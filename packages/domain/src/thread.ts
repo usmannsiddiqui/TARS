@@ -174,9 +174,101 @@ export function deliverySteps(status: DeliveryStatus): Step[] {
   });
 }
 
-/** "Saturday 5:00 PM" in the user's zone. */
-export const dueLabel = (dueAt: string, timezone: string) =>
-  new Intl.DateTimeFormat("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZone: timezone }).format(new Date(dueAt));
+/** "Saturday at 5:00 PM" in the user's zone. */
+export const dueLabel = (dueAt: string, timezone: string) => {
+  const at = new Date(dueAt);
+  const day = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: timezone }).format(at);
+  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(at);
+  return `${day} at ${time}`;
+};
+
+const HANDING_OVER = /^(send|share|email|forward|deliver|submit|provide|give|get|return)\s+(.+)$/i;
+const ARTICLE = /^(the|a|an|his|her|their|our|my|your|this|that)\b/i;
+
+/**
+ * What was asked, as a short phrase after the asker's name: "asked for the budget summary", or
+ * "asked you to review the deck". From the commitment's text only; the model's qualifiers ("per a
+ * separate request", "by 5pm today", asides in brackets) and the recipient are dropped, never quoted.
+ */
+export function askedFor(commitment: string): string {
+  let text = commitment.trim().split(/[,;(]| per | as requested| as discussed/i)[0]!.trim();
+  text = text.replace(/\.+$/, "").replace(/\s+by\s+(today|tonight|tomorrow|eod|end of (the )?day|\w+day|\d\S*)\b.*$/i, "").trim();
+  const handing = text.match(HANDING_OVER);
+  if (handing) {
+    const thing = handing[2]!
+      .replace(/^(?:[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|him|her|them|me|us)\s+(?=(the|a|an|his|her|their|our|my|this|that)\b)/, "")
+      .replace(/\s+(?:to|with)\s+[\w' -]+$/i, "")
+      .trim();
+    if (ARTICLE.test(thing)) return `asked for ${thing}`;
+  }
+  return `asked you to ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
+
+/** What one item of each source kind is called in a sentence. */
+const ITEM_NOUN: Record<string, string> = {
+  gmail: "email",
+  "outlook-mail": "email",
+  obsidian: "note",
+  notion: "Notion page",
+  slack: "Slack message",
+  teams: "Teams message",
+  canvas: "calendar item",
+  "outlook-calendar": "calendar item",
+  github: "GitHub item",
+  "claude-code": "session note",
+  codex: "session note",
+};
+
+function sourceList(sources: readonly { kind: string; count: number }[]) {
+  const counts = new Map<string, number>();
+  for (const { kind, count } of sources) if (count > 0) counts.set(ITEM_NOUN[kind] ?? "item", (counts.get(ITEM_NOUN[kind] ?? "item") ?? 0) + count);
+  const parts = [...counts].map(([noun, n]) => `${n} ${noun}${n === 1 ? "" : "s"}`);
+  return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+/**
+ * TARS's first words for a new due commitment, from stored data only: who asked (name, else address,
+ * else "Someone"), what, when in his zone, what TARS did and from what, then the one question.
+ */
+export function openingText(input: {
+  asker: { name?: string; address?: string } | null;
+  commitment: string;
+  due?: string;
+  sources: readonly { kind: string; count: number }[];
+  requestOnly: boolean;
+}): string {
+  const who = input.asker?.name || input.asker?.address || "Someone";
+  const from = sourceList(input.sources);
+  const did = input.requestOnly
+    ? "I only have the request to go on, so the draft marks what I need from you."
+    : from
+      ? `I drafted it from ${from} while you were busy.`
+      : "I drafted it while you were busy.";
+  return [`${who} ${askedFor(input.commitment)}.`, ...(input.due ? [`It's due ${input.due}.`] : []), did, "Tell me what to change, or send it."].join(" ");
+}
+
+/** Bracketed evidence ids a preparation left in text ("[gmail-15ac84d1:18d1]"): never shown on screen. */
+export const stripEvidenceIds = (text: string) => text.replace(/\s*\[(?:[a-z]+-)+[0-9a-f]{6,}[^\]\n]*\]/g, "");
+
+/** A block with nothing to show renders nothing; the unknown-type placeholder and incomplete approvals still show. */
+export function blockHasContent(view: BlockView): boolean {
+  switch (view.type) {
+    case "work":
+      return (view.props.steps?.length ?? 0) > 0;
+    case "say":
+      return (view.props.text?.trim() ?? "") !== "" || (view.props.sources?.length ?? 0) > 0;
+    case "document":
+      return view.props.artifactId !== undefined || view.props.title !== undefined;
+    case "delivery":
+      return view.props.actionId !== undefined;
+    case "allowSend":
+      return view.props.sourceId !== undefined;
+    case "receipt":
+      return (view.props.text?.trim() ?? "") !== "";
+    default:
+      return true;
+  }
+}
 
 /**
  * The user's own message asks to send or approve. Checked on his words, not on the model's choice:

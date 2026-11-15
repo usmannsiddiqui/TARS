@@ -15,7 +15,7 @@ const read = { id: "read", label: "Reading 3 items", doneLabel: "Read 3 items", 
 const draft = { id: "draft", label: `Drafting “${title}”`, doneLabel: `Drafted “${title}”` };
 const save = { id: "save", label: "Checking it against the sources and saving it", doneLabel: "Checked it against the sources and saved it" };
 const asked =
-  "Co-presenter asked: “Send the final slide order to the co-presenter.” It's due Friday 2:00 PM. I started the draft while you were busy. Tell me what to change, or send it.";
+  "Co-presenter asked for the final slide order. It's due Friday at 2:00 PM. I drafted it from 2 emails and 1 note while you were busy. Tell me what to change, or send it.";
 
 /** TARS's first message, `at` ms into the run (38 s in all when done). */
 function opening(t0: number, at: number): ThreadMessage {

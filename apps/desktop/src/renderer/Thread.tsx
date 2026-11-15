@@ -5,7 +5,9 @@
 // arrive as props.
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import {
+  blockHasContent,
   deliverySteps,
+  stripEvidenceIds,
   formatDuration,
   isMailAddress,
   viewBlock,
@@ -82,6 +84,7 @@ export function Thread({ messages, actions }: { messages: ThreadMessage[]; actio
 }
 
 function BlockSlot({ block, messageId, actions, hotkey, arrived }: { block: BlockView; messageId: string; actions: ThreadActions; hotkey: boolean; arrived: boolean }) {
+  if (!blockHasContent(block)) return null; // nothing to show: no empty card
   return (
     <div className="block-slot" data-type={block.type} data-new={arrived ? "" : undefined}>
       {block.type === "work" ? (
@@ -243,7 +246,7 @@ function DocumentBlock({ props, actions }: { props: Partial<BlockProps<"document
 function SayBlock({ props }: { props: Partial<BlockProps<"say">> }) {
   return (
     <div className="say">
-      <p className="say-text">{props.text ?? <span className="quiet">…</span>}</p>
+      <p className="say-text">{props.text ? stripEvidenceIds(props.text) : <span className="quiet">…</span>}</p>
       {props.sources && props.sources.length > 0 && (
         <p className="say-sources" aria-label="From your sources">
           {props.sources.map((s) => (

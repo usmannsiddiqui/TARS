@@ -3,7 +3,7 @@
 // direct edits, Undo and its share link) and commitments grouped by who holds them. Sending happens
 // in one place only: the approval in the thread. Presentational: data and actions arrive as props.
 import { useEffect, useId, useRef, useState } from "react";
-import type { DeliveryStatus } from "@companion/domain/thread";
+import { stripEvidenceIds, type DeliveryStatus } from "@companion/domain/thread";
 import { Composer } from "./Composer";
 import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared } from "./model";
 import { Thread, type ApproveArgs, type ThreadMessage } from "./Thread";
@@ -189,7 +189,8 @@ export function ProjectView(props: ProjectViewProps) {
 
         <aside className="chat-side" ref={draftRef}>
           <RunThrough
-            artifact={props.artifact}
+            // Evidence ids a preparation left in the text are never shown (nor saved back by an edit).
+            artifact={props.artifact && { ...props.artifact, text: stripEvidenceIds(props.artifact.text) }}
             canCreate={work !== undefined}
             editor={props.editor}
             sharing={props.sharing}
