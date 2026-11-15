@@ -39,7 +39,7 @@ export const BLOCKS = {
   },
   approval: {
     description:
-      "Exactly what will happen before anything leaves: a Word document of this revision, sent as a link by email. The recipient is a suggestion from the asking mail's header fields (empty when none), editable by the user. Built from stored data only; it emits an action and never acts.",
+      "Exactly what will happen before anything leaves: a Word document of this revision, sent as a link by email, or (form reply) the draft's text itself as an email reply. The recipient is a suggestion from the asking mail's header fields (empty when none), editable by the user. Built from stored data only; it emits an action and never acts.",
     props: z.object({
       projectId: z.string(),
       artifactId: z.string(),
@@ -50,6 +50,7 @@ export const BLOCKS = {
       replySubject: z.string(), // the subject when it goes to the asker (a reply to their mail)
       subject: z.string(), // the subject to anyone else
       document: z.string(), // the draft's title
+      form: z.enum(["document", "reply"]).optional(), // how it goes out; absent means "document"
       primary: z.string(),
       secondary: z.string(),
       state: z.enum(["open", "approved"]),
@@ -60,7 +61,7 @@ export const BLOCKS = {
     props: z.object({ sourceId: z.string(), account: z.string() }),
   },
   delivery: {
-    description: "One approved send of the Word document; the renderer follows its live status (document, link, send, verify) by action id.",
+    description: "One approved send of the draft; the renderer follows its live status (document, link, send, verify; a reply: send, verify) by action id.",
     props: z.object({ actionId: z.string(), recipient: z.string() }),
   },
   receipt: {

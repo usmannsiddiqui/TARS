@@ -85,8 +85,9 @@ export const artifactFields = {
   text: v.string(),
   userEdited: v.boolean(),
   evidenceIds: v.array(v.string()),
-  // Set by the run that wrote the draft: its name, and whether it goes out as a document or a short reply.
+  // Set by the run that wrote the draft: its name.
   title: v.optional(v.string()),
+  // How the draft is delivered: "document" (a Word document sent as a link; also when absent) or "reply" (its text is the email).
   form: v.optional(v.union(v.literal("document"), v.literal("reply"))),
 };
 
@@ -449,7 +450,7 @@ export default defineSchema({
     kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message"), v.literal("send-document")),
     destination: v.string(),
     artifactId: v.string(),
-    // send-document: the bound subject and the Word document whose link the body carries.
+    // send-document: the bound subject and, for a document (not a reply), the Word document whose link the body carries.
     subject: v.optional(v.string()),
     documentId: v.optional(v.id("artifactDocuments")),
     // send-document: the real stages as they happen, for the chat to show.

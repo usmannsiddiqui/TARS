@@ -88,11 +88,18 @@ export const loadProjectState = internalQuery({
   returns: projectState,
   handler: async (ctx, { ownerId, projectId, beforeMessage }): Promise<Infer<typeof projectState>> => {
     await requireOwnedProject(ctx, ownerId, projectId);
-    const byProject = <T extends "commitments" | "artifacts" | "threadMessages">(table: T) =>
-      ctx.db.query(table).withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId));
-    const commitments = await byProject("commitments").collect();
-    const draft = await byProject("artifacts").unique();
-    const messages = await byProject("threadMessages").collect();
+    const commitments = await ctx.db
+      .query("commitments")
+      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+      .collect();
+    const draft = await ctx.db
+      .query("artifacts")
+      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+      .unique();
+    const messages = await ctx.db
+      .query("threadMessages")
+      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+      .collect();
     const cut = beforeMessage === undefined ? messages.length : messages.findIndex((m) => m._id === beforeMessage);
     const chat = messages.slice(0, cut === -1 ? messages.length : cut).flatMap((m) => {
       const said = m.role === "user" ? m.text : m.blocks.find((b) => b.type === "say")?.props?.text;
@@ -242,7 +249,7 @@ const TOOLS: { [T in RunToolName]: (ctx: ActionCtx, run: Run, args: RunToolArgs<
     }
     const { artifact, undoRevision } = result;
     run.document = block("document", "document", { artifactId: artifact.id, title, revision: artifact.revision, ...(undoRevision ? { changeSummary, undoRevision } : {}) });
-    run.approval = undefined; // an approval shown for an earlier revision in this run no longer matches
+    delete run.approval; // an approval shown for an earlier revision in this run no longer matches
     return { saved: true, revision: artifact.revision };
   },
 

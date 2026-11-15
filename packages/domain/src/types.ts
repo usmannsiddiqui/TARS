@@ -157,6 +157,7 @@ export type Artifact = {
   userEdited: boolean;
   evidenceIds: EvidenceId[];
   title?: string;
+  /** How it is delivered; absent means "document". A new revision keeps it. */
   form?: "document" | "reply";
 };
 

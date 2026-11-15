@@ -10,6 +10,7 @@ import { ProjectIdSchema, type ProjectId } from "@companion/domain";
 import { FIRST_REVISION } from "../../packages/domain/src/artifacts";
 import { commitmentKey } from "../../packages/domain/src/attention";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { composioUserId } from "../../convex/connectors/composio";
 import schema from "../../convex/schema";
 import { makeOwners } from "../fixtures";
@@ -155,6 +156,27 @@ describe("send from the chat", () => {
     expect(status).toMatchObject({ verified: true, recipient: DANA, subject: "Re: Budget" });
     const [task] = await s.all("commitments");
     expect(task!.state).toBe("verified-done");
+  });
+
+  test("a reply draft: the approval says a reply, and the send is its text with only the send and check stages", async () => {
+    const s = await setup();
+    await s.t.run((ctx) => ctx.db.patch(s.artifactId as Id<"artifacts">, { form: "reply" }));
+    await s.allowSend();
+    await s.askToSend();
+    expect(await s.approval()).toMatchObject({ form: "reply", recipient: DANA, replySubject: "Re: Budget", revision: FIRST_REVISION, state: "open" });
+    await s.approve(DANA);
+    expect(s.sends()).toEqual([{ recipient_email: DANA, subject: "Re: Budget", body: DRAFT }]);
+    const delivery = blockOf(await s.last(), "delivery") as { actionId: string };
+    const status = await s.asAlice.query(api.delivery.status, { actionId: delivery.actionId });
+    expect(status.stages.map((st) => [st.name, st.state])).toEqual([["send", "done"], ["verify", "done"]]);
+    expect(status).toMatchObject({ verified: true, filename: null, link: null });
+    expect((await s.all("commitments"))[0]!.state).toBe("verified-done");
+  });
+
+  test("a draft without a form is offered as the Word document", async () => {
+    const s = await setup();
+    await s.askToSend();
+    expect(await s.approval()).toMatchObject({ form: "document" });
   });
 
   test("an edited recipient is the one used", async () => {

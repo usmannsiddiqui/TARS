@@ -520,7 +520,9 @@ function ApprovalBlock({ props, complete, actions, primary }: { props: Partial<B
         {approved ? "Approved" : "Before it goes out"}
       </h3>
       <p className="approval-what">
-        A Word document of {props.document ? `“${props.document}”` : "the draft"}, revision {revision ?? "not known"}, sent as a link by email.
+        {props.form === "reply"
+          ? `A reply by email, revision ${revision ?? "not known"}.`
+          : `A Word document of ${props.document ? `“${props.document}”` : "the draft"}, revision ${revision ?? "not known"}, sent as a link by email.`}
       </p>
       <dl className="approval-facts">
         <div className="approval-row">
@@ -586,7 +588,7 @@ function AllowSendBlock({ sourceId, account, actions }: { sourceId: string; acco
   return <AllowSending account={account} state={state} {...(allow ? { onAllow: () => allow(sourceId) } : {})} next="Press Send it on the approval above." />;
 }
 
-/** One approved send, followed live: its four real stages, then the receipt once it is checked. */
+/** One approved send, followed live: its real stages (four for a document, two for a reply), then the receipt once it is checked. */
 function DeliveryBlock({ actionId, actions }: { actionId: string; actions: ThreadActions }) {
   const status = (actions.useDeliveryStatus ?? noStatus)(actionId);
   if (status === undefined) return <StateNote state={{ kind: "loading", detail: "Reading where the send is…" }} />;

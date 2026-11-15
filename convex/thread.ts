@@ -6,7 +6,7 @@
 // recipient. Only `send`, the approval's primary action, sends: through delivery.approveAndSend.
 import { ConvexError, v, type Infer } from "convex/values";
 import { mailSubject } from "../packages/domain/src/actions";
-import { deliveryMail, type Requester } from "../packages/domain/src/delivery";
+import { deliveryMail, replyMail, type Requester } from "../packages/domain/src/delivery";
 import { block, dueLabel, openingText, type Block, type Step } from "../packages/domain/src/thread";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -164,7 +164,10 @@ export const finishReply = internalMutation({
   },
 });
 
-const draftView = v.union(v.null(), v.object({ id: v.id("artifacts"), revision: v.string(), text: v.string(), title: v.string() }));
+const draftView = v.union(
+  v.null(),
+  v.object({ id: v.id("artifacts"), revision: v.string(), text: v.string(), title: v.string(), form: v.union(v.literal("document"), v.literal("reply")) }),
+);
 const requesterView = v.union(v.null(), v.object({ name: v.optional(v.string()), address: v.string(), subject: v.optional(v.string()) }));
 
 /** The project's current draft, the due commitment TARS started from, and who asked (header fields only). */
@@ -179,7 +182,13 @@ async function approvalContext(ctx: Ctx, ownerId: string, projectId: string) {
     .unique();
   const commitmentKey = (await projectMessages(ctx, ownerId, projectId)).findLast((m) => m.commitmentKey !== undefined)?.commitmentKey ?? "";
   return {
-    artifact: artifact && { id: artifact._id, revision: artifact.revision, text: artifact.text, title: artifact.title ?? prepared?.work?.title ?? "Your draft" },
+    artifact: artifact && {
+      id: artifact._id,
+      revision: artifact.revision,
+      text: artifact.text,
+      title: artifact.title ?? prepared?.work?.title ?? "Your draft",
+      form: artifact.form ?? ("document" as const),
+    },
     commitmentKey,
     requester: commitmentKey === "" ? null : await requesterFor(ctx, ownerId, projectId, commitmentKey),
   };
@@ -189,7 +198,10 @@ type ApprovalContext = Awaited<ReturnType<typeof approvalContext>>;
 /** Exactly what `send` would do, from stored data: the subjects are the ones delivery's mail will carry. */
 export function approvalBlock(projectId: string, artifact: NonNullable<ApprovalContext["artifact"]>, commitmentKey: string, requester: Requester | null): Block {
   const fallbackSubject = mailSubject(artifact.text).replace(/^#+\s*/, "");
-  const mail = (replyTo?: string) => deliveryMail({ filename: "", link: "", fallbackSubject, ...(replyTo === undefined ? {} : { replyTo }) }).subject;
+  const mail = (replyTo?: string) => {
+    const args = { fallbackSubject, ...(replyTo === undefined ? {} : { replyTo }) };
+    return (artifact.form === "reply" ? replyMail({ text: artifact.text, ...args }) : deliveryMail({ filename: "", link: "", ...args })).subject;
+  };
   return block("approval", "approval", {
     projectId,
     artifactId: artifact.id,
@@ -200,6 +212,7 @@ export function approvalBlock(projectId: string, artifact: NonNullable<ApprovalC
     replySubject: mail(requester?.subject),
     subject: mail(),
     document: artifact.title,
+    form: artifact.form,
     primary: "Send it",
     secondary: "Not yet",
     state: "open",
@@ -327,7 +340,7 @@ type SendArgs = { projectId: string; artifactId: string; revision: string; commi
 
 /**
  * THE SEND: the approval's primary action, and the only way the chat sends. A Word document of
- * exactly `revision`, as a link, to the recipient as the user left the field (delivery.approveAndSend
+ * exactly `revision`, as a link (or, for a reply, that revision's text as the email), to the recipient as the user left the field (delivery.approveAndSend
  * binds and verifies it, and never sends the same revision to the same address twice). A missing send
  * permission or a needed clarification is answered in the thread in plain words.
  */

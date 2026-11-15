@@ -142,8 +142,8 @@ export const reserve = internalMutation({
   handler: (ctx, { ownerId, ...intent }) => reserveAction(ctx, ownerId, intent),
 });
 
-/** What a send-document reservation binds beyond the intent: the mail itself and its document. */
-type DocumentMail = { subject: string; body: string; documentId: Id<"artifactDocuments">; stages: NonNullable<Doc<"actions">["stages"]> };
+/** What a send-document reservation binds beyond the intent: the mail itself and its document (none for a reply). */
+type DocumentMail = { subject: string; body: string; documentId?: Id<"artifactDocuments">; stages: NonNullable<Doc<"actions">["stages"]> };
 type Intent = Omit<Infer<ReturnType<typeof v.object<typeof intentArgs>>>, "kind"> & { kind: Doc<"actions">["kind"] };
 
 /** The reservation itself; `mail` is required for (and only for) send-document. */

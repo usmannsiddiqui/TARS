@@ -1,12 +1,13 @@
 // Approve in the chat -> a Word document of that exact revision -> an unguessable download link ->
 // one verified Gmail send through the existing action flow (actions.reserveAction / runReserved).
+// An artifact with form "reply" skips the document and link: its text is the mail's body.
 // Sending is an outside act: only approveAndSend, called by the signed-in user, starts it. Nothing
 // in prepare, automatic runs, briefs, memory, model output or evidence calls anything here, and the
 // requester found in evidence is only a suggestion: the recipient is the one the user's call names.
 import { ConvexError, v } from "convex/values";
 import { checkBinding, contentHash, mailSubject } from "../packages/domain/src/actions";
 import { commitmentKey } from "../packages/domain/src/attention";
-import { DOCX_TYPE, deliveryMail, docx, requesterFrom, safeFilename } from "../packages/domain/src/delivery";
+import { DOCX_TYPE, deliveryMail, deliveryStages, docx, replyMail, requesterFrom, safeFilename } from "../packages/domain/src/delivery";
 import type { Artifact } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -100,7 +101,8 @@ export async function approveAs(
   // The same binding check as every send: this project, this revision, one plain address.
   const check = checkBinding({ ...args, kind: "send-mail", destination: recipient, contentHash: hash }, artifact, hash);
   if (!check.ok) return clarify(check.reason);
-  // The token comes from the action runtime's real CSPRNG; only its hash and a sealed copy are stored.
+  // The token comes from the action runtime's real CSPRNG; only its hash and a sealed copy are stored
+  // (and only for a document: reserveDelivery reads the form in its transaction and ignores it for a reply).
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return ctx.runMutation(internal.delivery.reserveDelivery, {
@@ -214,29 +216,31 @@ export const reserveDelivery = internalMutation({
     const artifact = await requireOwnedArtifact(ctx, ownerId, args.artifactId);
     const commitment = await findCommitment(ctx, ownerId, projectId, args.commitmentKey);
     const asker = await requesterFor(ctx, ownerId, projectId, args.commitmentKey);
-    const existing = await documentFor(ctx, artifact._id, revision);
-    const documentId =
-      existing?._id ??
-      (await ctx.db.insert("artifactDocuments", {
-        ownerId,
-        artifactId: artifact._id,
-        revision,
-        contentHash: args.contentHash,
-        filename: safeFilename(project.name),
-        tokenHash: args.tokenHash,
-        sealedToken: args.sealedToken,
-        createdAt: Date.now(),
-      }));
-    const document = (await ctx.db.get(documentId))!;
     // A reply to the asker's thread only when the user is sending it to the asker.
     const replyTo = asker?.address.toLowerCase() === recipient.toLowerCase() ? asker.subject : undefined;
-    const mail = deliveryMail({
-      filename: document.filename,
-      link: await linkFor(document.sealedToken),
-      ...(replyTo === undefined ? {} : { replyTo }),
-      fallbackSubject: mailSubject(artifact.text).replace(/^#+\s*/, ""),
-    });
-    const stages = (["document", "link", "send", "verify"] as const).map((name) => ({ name, state: "pending" as const }));
+    const subjectArgs = { ...(replyTo === undefined ? {} : { replyTo }), fallbackSubject: mailSubject(artifact.text).replace(/^#+\s*/, "") };
+    const stages = deliveryStages(artifact.form).map((name) => ({ name, state: "pending" as const }));
+    // A reply: the draft text itself is the mail. No document row, no file, no link.
+    const existing = artifact.form === "reply" ? null : await documentFor(ctx, artifact._id, revision);
+    const documentId =
+      artifact.form === "reply"
+        ? undefined
+        : (existing?._id ??
+          (await ctx.db.insert("artifactDocuments", {
+            ownerId,
+            artifactId: artifact._id,
+            revision,
+            contentHash: args.contentHash,
+            filename: safeFilename(project.name),
+            tokenHash: args.tokenHash,
+            sealedToken: args.sealedToken,
+            createdAt: Date.now(),
+          })));
+    const document = documentId === undefined ? null : (await ctx.db.get(documentId))!;
+    const mail =
+      document === null
+        ? replyMail({ text: artifact.text, ...subjectArgs })
+        : deliveryMail({ filename: document.filename, link: await linkFor(document.sealedToken), ...subjectArgs });
     // shortcut: one instruction per (revision, recipient), so a double click never sends twice; a refused
     // send of the same revision to the same address is retried by editing the draft (a new revision).
     const instructionId = `deliver:${artifact._id}:${revision}:${recipient.toLowerCase()}`;
@@ -253,24 +257,24 @@ export const reserveDelivery = internalMutation({
         contentHash: args.contentHash,
         instructionId,
       },
-      { ...mail, documentId, stages },
+      { ...mail, ...(documentId === undefined ? {} : { documentId }), stages },
     );
     if ("actionId" in reserved) {
       await ctx.scheduler.runAfter(0, internal.delivery.run, { actionId: reserved.actionId as Id<"actions"> });
       return { actionId: reserved.actionId };
     }
-    if (existing === null) await ctx.db.delete(documentId); // nothing reserved: no new document either
+    if (documentId !== undefined && existing === null) await ctx.db.delete(documentId); // nothing reserved: no new document either
     return "id" in reserved ? { actionId: reserved.id } : reserved;
   },
 });
 
-/** The reserved send-document action, its document and the text of exactly its revision. */
+/** The reserved send-document action, its document (null for a reply, which has none) and the text of exactly its revision. */
 export const loadJob = internalQuery({
   args: { actionId: v.id("actions") },
   handler: async (ctx, { actionId }) => {
     const row = await ctx.db.get(actionId);
-    if (row === null || row.kind !== "send-document" || row.documentId === undefined) return null;
-    const document = await ctx.db.get(row.documentId);
+    if (row === null || row.kind !== "send-document") return null;
+    const document = row.documentId === undefined ? null : await ctx.db.get(row.documentId);
     const artifactId = ctx.db.normalizeId("artifacts", row.artifactId)!;
     const current = await ctx.db.get(artifactId);
     const text =
@@ -343,23 +347,27 @@ export const run = internalAction({
       return null;
     };
 
-    await stage("document", "running");
     const { row, document, text, title } = job;
-    // The document is made from exactly the bound text, or not at all.
-    if (document === null) return stop("document", "document_removed");
-    if (text === null || (await contentHash(text)) !== row.contentHash || document.contentHash !== row.contentHash) {
-      return stop("document", "revision_mismatch");
-    }
-    if (document.storageId === undefined) {
-      const storageId = await ctx.storage.store(new Blob([docx(title, text)], { type: DOCX_TYPE }));
-      if (!(await ctx.runMutation(internal.delivery.attachFile, { documentId: document._id, storageId }))) await ctx.storage.delete(storageId);
-    }
-    await stage("document", "done");
+    const bound = text !== null && (await contentHash(text)) === row.contentHash;
+    if (row.documentId === undefined) {
+      // A reply: its body is the bound text itself, so there is nothing to make first.
+      if (!bound) return stop("send", "revision_mismatch");
+    } else {
+      await stage("document", "running");
+      // The document is made from exactly the bound text, or not at all.
+      if (document === null) return stop("document", "document_removed");
+      if (text === null || !bound || document.contentHash !== row.contentHash) return stop("document", "revision_mismatch");
+      if (document.storageId === undefined) {
+        const storageId = await ctx.storage.store(new Blob([docx(title, text)], { type: DOCX_TYPE }));
+        if (!(await ctx.runMutation(internal.delivery.attachFile, { documentId: document._id, storageId }))) await ctx.storage.delete(storageId);
+      }
+      await stage("document", "done");
 
-    await stage("link", "running");
-    // The link is live when the route can serve it: the row with this token hash has its file.
-    if ((await ctx.runQuery(internal.delivery.fileByToken, { tokenHash: document.tokenHash })) === null) return stop("link", "document_removed");
-    await stage("link", "done");
+      await stage("link", "running");
+      // The link is live when the route can serve it: the row with this token hash has its file.
+      if ((await ctx.runQuery(internal.delivery.fileByToken, { tokenHash: document.tokenHash })) === null) return stop("link", "document_removed");
+      await stage("link", "done");
+    }
 
     await stage("send", "running");
     let sent = false;
