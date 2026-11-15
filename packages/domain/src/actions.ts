@@ -63,6 +63,8 @@ export function outcomeLogEntry(outcome: {
   const what =
     outcome.kind === "send-mail"
       ? `Sent mail to ${outcome.destination}`
+      : outcome.kind === "send-document"
+        ? `Sent the Word document to ${outcome.destination}`
       : outcome.kind === "post-message"
         ? `Posted to Slack channel ${outcome.destination}`
         : `Updated note ${outcome.destination}`;

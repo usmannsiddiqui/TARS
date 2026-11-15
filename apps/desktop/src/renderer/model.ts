@@ -159,7 +159,7 @@ export type SessionEvent = "start" | "break" | "resume" | "stop";
 /** An instructed action's receipt (actions.listReceipts / executeIntent). */
 export type Receipt = {
   id: string;
-  kind: "send-mail" | "update-note" | "post-message";
+  kind: "send-mail" | "update-note" | "post-message" | "send-document";
   /** The address or Notion page id the user named. */
   destination: string;
   /** The run-through revision the instruction was bound to. */
