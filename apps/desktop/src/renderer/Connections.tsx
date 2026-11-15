@@ -20,7 +20,11 @@ export type ConnectionsProps = {
   cloud: CloudActions;
   observation: ObservationActions;
   shortcut: { status: ShortcutStatus | null; onSet(accelerator: string): Promise<void> };
+  /** The held talk key, shown beside the capture shortcut. */
+  talkKey: { status: TalkKeyStatus | null; onOpenAccessibility(): Promise<void> };
 };
+
+export type TalkKeyStatus = { key: string; state: "starting" | "ready" | "permission-missing" | "unavailable" };
 
 export type ShortcutStatus = { accelerator: string; registered: boolean; error?: string };
 
@@ -106,13 +110,13 @@ export function Connections(props: ConnectionsProps) {
             </section>
           );
         })}
-        <ShortcutSetting {...props.shortcut} />
+        <ShortcutSetting {...props.shortcut} talkKey={props.talkKey} />
       </div>
     </div>
   );
 }
 
-function ShortcutSetting({ status, onSet }: ConnectionsProps["shortcut"]) {
+function ShortcutSetting({ status, onSet, talkKey }: ConnectionsProps["shortcut"] & { talkKey: ConnectionsProps["talkKey"] }) {
   const id = useId();
   const [value, setValue] = useState("");
   const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
@@ -150,7 +154,27 @@ function ShortcutSetting({ status, onSet }: ConnectionsProps["shortcut"]) {
         </button>
       </form>
       {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
+      <h3 className="block-title">Hold to talk</h3>
+      <TalkKeyNote {...talkKey} />
     </section>
+  );
+}
+
+/** Which key to hold, and whether macOS lets it work; the voice button under TARS works either way. */
+function TalkKeyNote({ status, onOpenAccessibility }: ConnectionsProps["talkKey"]) {
+  if (!status || status.state === "starting") return <StateNote state={{ kind: "loading" }} />;
+  if (status.state === "ready") {
+    return <StateNote state={{ kind: "done", detail: `Hold ${status.key} anywhere to talk; let go and the words land in the capture box to edit. Nothing is saved until you press Save.` }} />;
+  }
+  if (status.state === "unavailable") {
+    return <StateNote state={{ kind: "needs-retry", detail: `Holding ${status.key} is unavailable: its helper is not running. Restart TARS; the voice button under TARS still works.` }} />;
+  }
+  return (
+    <StateNote state={{ kind: "missing-access", detail: `Holding ${status.key} to talk needs macOS Accessibility access for TARS. It reports only that key going down and up. The voice button under TARS works without it.` }}>
+      <button type="button" className="text-button" onClick={() => void onOpenAccessibility()}>
+        Open Accessibility settings
+      </button>
+    </StateNote>
   );
 }
 

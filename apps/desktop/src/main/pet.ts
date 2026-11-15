@@ -12,6 +12,9 @@ export const isDrag = (dx: number, dy: number) => Math.hypot(dx, dy) >= DRAG_THR
 /** Resting this long on the pet opens the panel; leaving both for this long closes it again. */
 export const HOVER_INTENT_MS = 300;
 export const HOVER_CLOSE_MS = 400;
+/** The pet window: the figure on top (its spot stays put when the window grows), the control pill and its note below. */
+export const PET_FIGURE: Size = { width: 184, height: 136 };
+export const PET_WINDOW: Size = { width: 184, height: 212 };
 /** Gap between the pet and the panel beside it. */
 const GAP = 8;
 
@@ -48,22 +51,39 @@ export function panelBeside(pet: Rect, panel: Size, area: Rect): Point {
   return clampToWorkAreas({ x, y: pet.y + pet.height - panel.height, ...panel }, [area]);
 }
 
+/** Whether a screen point is over the figure part of a pet window at `win` (the pill below is not). */
+export const overFigure = (win: Point, p: Point) => contains({ x: win.x, y: win.y, ...PET_FIGURE }, p);
+
+/** Where the eyes look: from the box's centre toward the pointer, each axis held within -1..1. */
+export function gaze(p: Point, box: Rect): Point {
+  const axis = (v: number, start: number, size: number) => clamp((v - start - size / 2) / (size / 2), -1, 1) + 0; // + 0: no -0
+  return { x: axis(p.x, box.x, box.width), y: axis(p.y, box.y, box.height) };
+}
+
 /**
  * The panel's hover state. "intent" and "closing" wait for a timer; "pinned" (a click, a key, the
- * shortcut or focus inside the panel) ignores the pointer until something closes it. After a drag or a
- * close the pointer must leave the pet before resting on it opens the panel again.
+ * shortcut or focus inside the panel) ignores the pointer until something closes it. While the button
+ * is down on the figure nothing opens and a hover-opened panel closes; after a drag, or a close with
+ * the pointer on the pet, the pointer must leave the pet before resting on it opens the panel again.
  */
-export type Hover = { mode: "closed" | "intent" | "open" | "closing" | "pinned"; overPet: boolean; overPanel: boolean; suppressed: boolean };
-export type HoverEvent = { type: "pet" | "panel"; over: boolean } | { type: "drag" | "pin" | "close" | "timer" };
-export const HOVER_START: Hover = { mode: "closed", overPet: false, overPanel: false, suppressed: false };
+export type Hover = { mode: "closed" | "intent" | "open" | "closing" | "pinned"; overPet: boolean; overPanel: boolean; suppressed: boolean; pressed: boolean };
+export type HoverEvent =
+  | { type: "pet" | "panel"; over: boolean }
+  | { type: "press" | "pin" | "close" | "timer" }
+  /** The button came up; `moved` when the press travelled far enough to be a drag. */
+  | { type: "release"; moved: boolean };
+export const HOVER_START: Hover = { mode: "closed", overPet: false, overPanel: false, suppressed: false, pressed: false };
 
 export function hoverNext(s: Hover, e: HoverEvent): Hover {
   switch (e.type) {
     case "pin":
       return { ...s, mode: "pinned" };
-    case "drag":
+    case "press":
+      return s.mode === "pinned" ? { ...s, pressed: true } : { ...s, mode: "closed", overPanel: false, pressed: true };
+    case "release":
+      return { ...s, pressed: false, suppressed: s.suppressed || e.moved };
     case "close":
-      return { ...s, mode: "closed", overPanel: false, suppressed: true };
+      return { ...s, mode: "closed", overPanel: false, suppressed: s.overPet };
     case "timer":
       if (s.mode === "intent") return { ...s, mode: "open" };
       if (s.mode === "closing") return { ...s, mode: "closed", overPanel: false };
@@ -72,7 +92,7 @@ export function hoverNext(s: Hover, e: HoverEvent): Hover {
     case "panel": {
       const next = e.type === "pet" ? { ...s, overPet: e.over, suppressed: e.over && s.suppressed } : { ...s, overPanel: e.over };
       const over = next.overPet || next.overPanel;
-      if (next.mode === "closed" && next.overPet && !next.suppressed) return { ...next, mode: "intent" };
+      if (next.mode === "closed" && next.overPet && !next.suppressed && !next.pressed) return { ...next, mode: "intent" };
       if (next.mode === "intent" && !next.overPet) return { ...next, mode: "closed" };
       if (next.mode === "open" && !over) return { ...next, mode: "closing" };
       if (next.mode === "closing" && over) return { ...next, mode: "open" };

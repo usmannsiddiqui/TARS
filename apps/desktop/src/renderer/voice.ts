@@ -1,8 +1,18 @@
-// One explicit microphone session. Start it only from a Record click, after window.companion.dictation.begin().
+// One explicit microphone session. Start it only from a Record click or a hold to talk, after window.companion.dictation.begin().
 // It stops itself at the size limit or at a single one-shot duration deadline; cancel releases the microphone.
 export type Captured = { bytes: Uint8Array; mimeType: string };
 export type VoiceSession = { stop(): Promise<Captured>; cancel(): void };
 export type VoiceLimits = { maxBytes: number; maxDurationMs: number };
+
+/** Plain words for each dictation failure code, for the capture box and the pet's pill alike. */
+export const DICTATION_FAILURE: Record<string, string> = {
+  transcription_failed: "Transcription failed. Your recording is kept on this Mac.",
+  too_large: "That recording is over the size limit.",
+  too_long: "That recording is over the time limit.",
+  unsupported_type: "That audio format is not supported.",
+  not_started: "Recording was not started. Try again.",
+  not_found: "That recording is no longer on this Mac.",
+};
 
 // The recorder hands over a chunk about every second (opus: a few KB each); this headroom keeps the
 // finished recording under the main-process byte limit even with one more chunk in flight.

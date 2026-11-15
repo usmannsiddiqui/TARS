@@ -71,6 +71,8 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     petVisible: () => false,
     dragPet: (senderId: number, dx: number, dy: number) => void windowCalls.push(["dragPet", senderId, dx, dy]),
     pointerOver: (senderId: number, over: boolean) => void windowCalls.push(["pointerOver", senderId, over]),
+    petPress: (senderId: number, phase: string) => void windowCalls.push(["petPress", senderId, phase]),
+    openCapture: (transcript?: { text: string; recoveryId: string }) => void windowCalls.push(["openCapture", transcript]),
   };
   const dictationCalls: unknown[][] = [];
   let finishError: unknown = null;
@@ -104,7 +106,9 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
   const system = {
     openExternal: async (url: string) => void systemCalls.push(["openExternal", url]),
     openAccessibilitySettings: async () => void systemCalls.push(["openAccessibilitySettings"]),
+    openMicrophoneSettings: async () => void systemCalls.push(["openMicrophoneSettings"]),
   };
+  const talkKey = { status: () => ({ key: "Right Option (⌥)", state: "permission-missing" }) };
   const router = createIpcRouter({
     appOrigin: APP_ORIGIN,
     auth,
@@ -115,6 +119,7 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     dictation,
     shortcut,
     system,
+    talkKey,
   });
   return {
     router,
@@ -492,5 +497,52 @@ describe("ipc router: wired routes", () => {
     await expect(router.handle("window:hover", trusted, { over: true })).rejects.toBeInstanceOf(IpcRejected);
     await router.handle("window:hover", withSender, { over: true });
     expect(windowCalls).toEqual([["pointerOver", 7, true]]);
+  });
+
+  it("pet_press_reports_only_a_phase_from_a_known_window", async () => {
+    const { router, windowCalls } = setup(null);
+    for (const payload of [{ phase: "hover" }, { phase: "down", x: 1 }, { down: true }, {}, undefined]) {
+      await expect(router.handle("pet:press", withSender, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("pet:press", untrusted[0]!, { phase: "down" })).rejects.toBeInstanceOf(IpcRejected);
+    await expect(router.handle("pet:press", trusted, { phase: "down" })).rejects.toBeInstanceOf(IpcRejected);
+    for (const phase of ["down", "up", "dragged"]) await router.handle("pet:press", withSender, { phase });
+    expect(windowCalls).toEqual([
+      ["petPress", 7, "down"],
+      ["petPress", 7, "up"],
+      ["petPress", 7, "dragged"],
+    ]);
+  });
+
+  it("open_capture_takes_an_optional_bounded_transcript_with_a_plain_recovery_id", async () => {
+    const { router, windowCalls } = setup(null);
+    for (const payload of [
+      undefined,
+      { transcript: { text: "", recoveryId: "rec_12345678" } },
+      { transcript: { text: "x".repeat(50_001), recoveryId: "rec_12345678" } },
+      { transcript: { text: "hello", recoveryId: "../../etc/passwd" } },
+      { transcript: { text: "hello", recoveryId: "rec_12345678", save: true } },
+      { transcript: { text: "hello" } },
+      { projectId: "project-avt" },
+    ]) {
+      await expect(router.handle("capture:open", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("capture:open", untrusted[0]!, {})).rejects.toBeInstanceOf(IpcRejected);
+    await router.handle("capture:open", trusted, {});
+    await router.handle("capture:open", trusted, { transcript: { text: "Book the venue walk-through", recoveryId: "rec_12345678" } });
+    expect(windowCalls).toEqual([
+      ["openCapture", undefined],
+      ["openCapture", { text: "Book the venue walk-through", recoveryId: "rec_12345678" }],
+    ]);
+  });
+
+  it("microphone_settings_and_the_talk_key_status_take_no_payload", async () => {
+    const { router, systemCalls } = setup(null);
+    await expect(router.handle("dictation:openMicrophoneSettings", trusted, { url: "x-apple.systempreferences:" })).rejects.toBeInstanceOf(IpcRejected);
+    await expect(router.handle("dictation:openMicrophoneSettings", untrusted[0]!, undefined)).rejects.toBeInstanceOf(IpcRejected);
+    await router.handle("dictation:openMicrophoneSettings", trusted, undefined);
+    expect(systemCalls).toEqual([["openMicrophoneSettings"]]);
+    await expect(router.handle("talk:keyStatus", trusted, {})).rejects.toBeInstanceOf(IpcRejected);
+    expect(await router.handle("talk:keyStatus", trusted, undefined)).toEqual({ key: "Right Option (⌥)", state: "permission-missing" });
   });
 });

@@ -2,9 +2,9 @@
 // A dictation's spooled audio is acknowledged (deleted) only after the save that holds its text resolves.
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { CaptureInput } from "@companion/domain";
-import type { DictationResult } from "../preload/index";
+import type { DictationResult, Transcript } from "../preload/index";
 import { reason, StateNote } from "./ui";
-import { startVoice, type VoiceSession } from "./voice";
+import { DICTATION_FAILURE, startVoice, type VoiceSession } from "./voice";
 
 type Voice =
   | { kind: "idle" }
@@ -17,25 +17,19 @@ const { limits } = window.companion.dictation;
 const LIMIT_TEXT = `Dictation records up to ${limits.maxDurationMs / 60_000} min or ${limits.maxBytes / 1_000_000} MB, then stops by itself.`;
 const clock = (ms: number) => `${String(Math.floor(ms / 60_000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
 
-const FAILURE: Record<string, string> = {
-  transcription_failed: "Transcription failed. Your recording is kept on this Mac.",
-  too_large: "That recording is over the size limit.",
-  too_long: "That recording is over the time limit.",
-  unsupported_type: "That audio format is not supported.",
-  not_started: "Recording was not started. Press Record again.",
-  not_found: "That recording is no longer on this Mac.",
-};
-
-/** `onSaved`: the capture is durably on this Mac (for lists that show captures). */
-export function Composer({ projectId, onSaved }: { projectId?: string; onSaved?(): void }) {
+/**
+ * `onSaved`: the capture is durably on this Mac (for lists that show captures). `transcript`: a hold-to-talk
+ * transcript to start from, editable and unsaved. `autoFocus`: focus the box with the caret at the end.
+ */
+export function Composer({ projectId, onSaved, transcript, autoFocus }: { projectId?: string; onSaved?(): void; transcript?: Transcript; autoFocus?: boolean }) {
   const id = useId();
   const box = useRef<HTMLTextAreaElement>(null);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(transcript?.text ?? "");
   const [voice, setVoice] = useState<Voice>({ kind: "idle" });
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(transcript ? "Transcript added. Edit it, then Save." : "");
   const [saving, setSaving] = useState(false);
   // Transcripts now in the box, acknowledged only after the save that contains them.
-  const [pending, setPending] = useState<string[]>([]);
+  const [pending, setPending] = useState<string[]>(transcript ? [transcript.recoveryId] : []);
   const [failed, setFailed] = useState<Failed[]>([]);
   const stopping = useRef(false);
   const live = useRef<VoiceSession | null>(null);
@@ -43,16 +37,27 @@ export function Composer({ projectId, onSaved }: { projectId?: string; onSaved?(
   // Leaving the composer mid-recording releases the microphone; nothing is kept.
   useEffect(() => () => live.current?.cancel(), []);
 
-  // The shortcut opens capture: focus the box. It never starts recording.
-  useEffect(() => window.companion.onCaptureOpen(() => box.current?.focus()), []);
+  // Opened for capture (the shortcut, Compose, a finished hold to talk): ready to type at the end. Never records.
+  useEffect(() => {
+    const el = box.current;
+    if (!autoFocus || !el) return;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.closest("form")?.scrollIntoView({ block: "end" }); // the whole card: box, Save and the status line
+  }, [autoFocus]);
 
   // Recordings left from a crash or an earlier failure: offer them, never transcribe on our own.
   useEffect(() => {
     window.companion.dictation.listRecoverable().then(
-      (found) => setFailed(found.map((r) => ({ recoveryId: r.recoveryId, message: "A recording from earlier was not saved yet." }))),
+      (found) =>
+        setFailed(
+          found
+            .filter((r) => r.recoveryId !== transcript?.recoveryId) // its words are in the box already
+            .map((r) => ({ recoveryId: r.recoveryId, message: "A recording from earlier was not saved yet." })),
+        ),
       () => {}, // signed out: there is nothing to recover for this owner yet
     );
-  }, []);
+  }, [transcript?.recoveryId]);
 
   function take(result: DictationResult, retried?: string) {
     if (result.ok) {
@@ -63,7 +68,7 @@ export function Composer({ projectId, onSaved }: { projectId?: string; onSaved?(
       box.current?.focus();
       return;
     }
-    const message = FAILURE[result.code] ?? "Dictation failed.";
+    const message = DICTATION_FAILURE[result.code] ?? "Dictation failed.";
     const recoveryId = result.recoveryId ?? retried;
     if (recoveryId) setFailed((list) => [...list.filter((f) => f.recoveryId !== recoveryId), { recoveryId, message }]);
     setStatus(message);

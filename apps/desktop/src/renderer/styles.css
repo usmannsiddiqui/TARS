@@ -1460,10 +1460,18 @@ html[data-view="panel"] body {
 
 /* ---------- Pet window: TARS alone on transparency ---------- */
 
-/* No card, border, plate or label: the state word lives on TARS's own dark screen. 184x136 window. */
+/* No card, border, plate or label: the state word lives on TARS's own dark screen. 184x212 window: the
+   figure in the top 184x136 (its spot stays put when the window grows), the control pill and a note below. */
 html[data-view="pet"],
 html[data-view="pet"] body {
   background: transparent;
+}
+
+.pet-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 184px;
 }
 
 .pet {
@@ -1507,6 +1515,137 @@ html[data-view="pet"] body {
   outline-offset: -2px;
 }
 
+/* ---------- The pet's control pill: solid ink, light line icons, one hairline divider ---------- */
+
+.pet-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.pet-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--black);
+  color: var(--on-black);
+  /* A fine light edge keeps the ink pill's outline readable on a dark wallpaper too. */
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.18), 0 2px 6px rgb(0 0 0 / 0.18);
+  font: 500 11px var(--sans);
+  user-select: none;
+}
+
+.pill-key {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  touch-action: none; /* a hold is a hold, never a scroll */
+  transition: background-color 150ms var(--ease-out);
+}
+
+.pill-key:hover,
+.pill-key[data-listening="on"] {
+  background: rgb(255 255 255 / 0.14);
+}
+
+.pill-key:focus-visible {
+  outline: 2px solid var(--on-black);
+  outline-offset: -2px;
+}
+
+.pill-icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pill-level {
+  fill: currentColor;
+  stroke: none;
+}
+
+.pill-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: level 900ms var(--ease-in-out) infinite alternate;
+}
+
+.pill-bar:nth-child(2) {
+  animation-delay: -300ms;
+}
+
+.pill-bar:nth-child(3) {
+  animation-delay: -600ms;
+}
+
+@keyframes level {
+  from {
+    transform: scaleY(0.45);
+  }
+}
+
+.pill-divider {
+  width: 1px;
+  height: 16px;
+  background: rgb(255 255 255 / 0.28);
+}
+
+.pill-word:empty {
+  display: none;
+}
+
+.pill-word {
+  display: flex;
+  gap: 5px;
+  padding: 0 9px 0 5px;
+  white-space: nowrap;
+}
+
+.pill-time {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+
+.pet-note {
+  max-width: 180px;
+  padding: 4px 9px;
+  border-radius: var(--r-control);
+  background: var(--black);
+  color: var(--on-black);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.18);
+  font: 500 11px/1.3 var(--sans);
+  text-align: center;
+}
+
+.pet-note-link {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pet-note-link:focus-visible {
+  outline: 2px solid var(--on-black);
+  outline-offset: 1px;
+}
+
 /* ---------- Pet motion: poses glide, the eyes blink, the active light ticks ---------- */
 
 .pet-part {
@@ -1541,6 +1680,47 @@ html[data-view="pet"] body {
   71% {
     opacity: 0.2;
   }
+}
+
+/* Hovered: the eyes and the screen turn toward the pointer (--gx/--gy, eased per frame in Pet.tsx), and the
+   outer slabs open a touch with a small one-off "hello" lift. Transform only; everything settles on leave. */
+.pet .head-eyes {
+  transform: translate(calc(var(--gx, 0) * 2.4px), calc(var(--gy, 0) * 1.3px));
+}
+
+.pet .head-face {
+  transform: translateX(calc(var(--gx, 0) * 0.8px));
+}
+
+.pet .pet-wave {
+  transition: transform 220ms var(--ease-out);
+}
+
+.pet[data-hover="on"] .pet-wave[data-side="l"] {
+  transform: rotate(-3deg);
+  animation: hello-l 460ms var(--ease-out);
+}
+
+.pet[data-hover="on"] .pet-wave[data-side="r"] {
+  transform: rotate(3deg);
+  animation: hello-r 460ms var(--ease-out);
+}
+
+@keyframes hello-l {
+  45% {
+    transform: rotate(-8deg) translateY(-1.5px);
+  }
+}
+
+@keyframes hello-r {
+  45% {
+    transform: rotate(8deg) translateY(-1.5px);
+  }
+}
+
+.pet .pet-mark {
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 /* ---------- Narrow windows ---------- */
@@ -1611,5 +1791,15 @@ html[data-view="pet"] body {
   .rail-disclosure:active,
   .pet:active {
     transform: none;
+  }
+  /* The pet keeps still; hovering shows as a static change: the face on its screen opens wider. */
+  .pet .head-eyes,
+  .pet .head-face,
+  .pet .pet-wave,
+  .pill-bar {
+    transform: none !important;
+  }
+  .pet[data-hover="on"] .pet-mark {
+    transform: scale(1.18);
   }
 }

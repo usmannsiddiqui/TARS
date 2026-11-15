@@ -1,5 +1,6 @@
 // The compact panel the pet opens. Presentational: data and actions arrive as props.
 import { useEffect, useRef } from "react";
+import type { Transcript } from "../preload/index";
 import { Composer } from "./Composer";
 import type { HardItem, Honest, PetState, Receipt } from "./model";
 import { PET_LABEL, PetFigure, StateNote } from "./ui";
@@ -29,6 +30,10 @@ export type PanelProps = {
   /** The focus project's newest instructed action. */
   receipt?: Receipt;
   note?: string;
+  /** Opened for capture: the capture box takes focus instead of the first action. */
+  capture?: boolean;
+  /** A hold-to-talk transcript for the capture box, editable and unsaved. */
+  transcript?: Transcript;
   onOpenApp(): void;
   onStop(): void;
   onClose(): void;
@@ -37,7 +42,7 @@ export type PanelProps = {
 /** At a glance: where you left off, what today holds, then "Open app" and "Stop for now", then capture. Escape closes it. */
 export function Panel(props: PanelProps) {
   const first = useRef<HTMLButtonElement>(null);
-  const { onClose, onRecapShown } = props;
+  const { onClose, onRecapShown, capture } = props;
   const recapKey = props.recap && !props.recap.delivered ? props.recap.key : undefined;
   const reported = useRef<string | null>(null);
   useEffect(() => {
@@ -46,11 +51,14 @@ export function Panel(props: PanelProps) {
     onRecapShown(recapKey);
   }, [recapKey, onRecapShown]);
   useEffect(() => {
-    first.current?.focus({ preventScroll: true }); // keep the context at the top in view
+    if (!capture) first.current?.focus({ preventScroll: true }); // keep the context at the top in view
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, capture]);
+  const composer = (
+    <Composer {...(props.projectId ? { projectId: props.projectId } : {})} {...(props.transcript ? { transcript: props.transcript } : {})} autoFocus={capture === true} />
+  );
 
   return (
     <main className="panel" aria-labelledby="panel-h">
@@ -64,6 +72,7 @@ export function Panel(props: PanelProps) {
       </header>
 
       {props.completion ? (
+        <>
         <section className="panel-body panel-card completion" aria-labelledby="panel-h">
           <h1 id="panel-h">Done</h1>
           <p>{props.completion.done}</p>
@@ -78,6 +87,8 @@ export function Panel(props: PanelProps) {
             </button>
           </div>
         </section>
+        {capture && composer}
+        </>
       ) : (
         <>
         <div className="panel-body panel-card">
@@ -145,7 +156,7 @@ export function Panel(props: PanelProps) {
           )}
         </div>
         {/* Capture is its own card beside the context, never glass on glass. */}
-        <Composer {...(props.projectId ? { projectId: props.projectId } : {})} />
+        {composer}
         </>
       )}
     </main>

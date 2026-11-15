@@ -49,6 +49,10 @@
       {
         "from": "../../native/observer/.build/release/observer",
         "to": "observer"
+      },
+      {
+        "from": "../../native/observer/.build/release/holdkey",
+        "to": "holdkey"
       }
     ]
   }
