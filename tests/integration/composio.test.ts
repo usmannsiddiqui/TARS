@@ -351,6 +351,143 @@ const pullRequest = (action = "opened", n = 7) => ({
   url: `https://github.com/${REPO}/pull/${n}`,
 });
 
+// GMAIL_FETCH_EMAILS processed message fields, as the fake answers them.
+const fetched = (id: string, labels: string[], at = "2026-11-14T10:40:00Z") => ({
+  messageId: id,
+  threadId: "t1",
+  labelIds: labels,
+  sender: "Bob <bob@illustrative.example>",
+  subject: `Mail ${id}`,
+  messageText: `Illustrative: message ${id}.`,
+  messageTimestamp: at,
+});
+const pushed = (id: string, labels: string[]) => ({
+  message_id: id,
+  label_ids: labels,
+  sender: "Bob <bob@illustrative.example>",
+  subject: `Mail ${id}`,
+  message_text: `Illustrative: message ${id}.`,
+  message_timestamp: "2026-11-14T10:29:00Z",
+});
+const fetchTool = (messages: unknown[]) => ({ GMAIL_FETCH_EMAILS: () => json({ successful: true, data: { messages } }) });
+const upserts = () => calls.filter((c) => c.url.startsWith(`${API}/trigger_instances/`));
+const marker = (ctx: Ctx) => ctx.t.run(async (db) => (await db.db.query("connections").collect())[0]?.triggerUpgrade);
+const allowNextCheck = (ctx: Ctx) =>
+  ctx.t.run(async (db) => {
+    for (const row of await db.db.query("connections").collect()) await db.db.patch(row._id, { mailCheckStartedAt: Date.now() - 21_000 });
+  });
+
+describe("composio gmail speed", () => {
+  test("gmail triggers ask for a one-minute polling interval", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    const { response } = await connect(ctx);
+    expect(response.status).toBe(200);
+    expect(upserts().map((c) => JSON.parse(c.body))).toEqual([
+      { user_id: await composioUserId(ctx.alice.ownerId), connected_account_id: ctx.account.id, trigger_config: { labelIds: LABEL }, polling_interval: 1 },
+    ]);
+    expect(await marker(ctx)).toBe("polling_interval_1");
+  });
+
+  test("a rejected polling interval falls back to the default and says so on the connection", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    stubFetch({
+      ...fakeComposio(ctx.account),
+      [`${API}/trigger_instances/`]: (call) => ("polling_interval" in JSON.parse(call.body) ? json({ error: "invalid field" }, 400) : json({ trigger_id: "ti_1" })),
+    });
+    await ctx.asAlice.action(api.connectors.composio.startConnect, { sourceId: ctx.sourceId, kind: "gmail" });
+    const callback = new URL(JSON.parse(calls[0]!.body).callback_url as string);
+    const response = await ctx.t.fetch(`${callback.pathname}${callback.search}&status=success&connected_account_id=${ctx.account.id}`);
+    expect(response.status).toBe(200);
+    expect(upserts().map((c) => JSON.parse(c.body))).toEqual([
+      expect.objectContaining({ polling_interval: 1 }),
+      { user_id: await composioUserId(ctx.alice.ownerId), connected_account_id: ctx.account.id, trigger_config: { labelIds: LABEL } },
+    ]);
+    expect(await ctx.connection()).toMatchObject({ availability: "connected" });
+    expect(await marker(ctx)).toBe("default_interval");
+  });
+
+  test("a check on an event stores only new mail in selected labels, through the webhook's intake", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connect(ctx, fetchTool([fetched("18c1", [LABEL, "INBOX"]), fetched("18c3", [LABEL]), fetched("18c4", ["INBOX"])]));
+    await deliver(ctx, "GMAIL_NEW_GMAIL_MESSAGE", pushed("18c1", [LABEL, "INBOX"]));
+    expect(await ctx.connection()).toMatchObject({ checkedVia: "pushed" });
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    const rows = await ctx.evidence();
+    expect(rows.map((r) => r.externalId).sort()).toEqual(["18c1", "18c3"]);
+    expect(rows.find((r) => r.externalId === "18c3")).toMatchObject({ ownerId: ctx.alice.ownerId, sourceId: ctx.sourceId, version: "18c3", occurredAt: "2026-11-14T10:40:00.000Z" });
+    const [request] = executed("GMAIL_FETCH_EMAILS");
+    const args = JSON.parse(request!.body).arguments as Record<string, unknown>;
+    // Newer than the newest stored message (10:29:00Z), in the selected label, bounded.
+    expect(args).toMatchObject({ label_ids: [LABEL], max_results: 10, query: `after:${Date.parse("2026-11-14T10:29:00Z") / 1000}` });
+    expect(await ctx.connection()).toMatchObject({ availability: "connected", checkedVia: "opened" });
+  });
+
+  test("a check within 20 seconds of the last one fetches nothing", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connect(ctx, fetchTool([fetched("18c3", [LABEL])]));
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(executed("GMAIL_FETCH_EMAILS")).toHaveLength(1);
+    await allowNextCheck(ctx);
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(executed("GMAIL_FETCH_EMAILS")).toHaveLength(2);
+  });
+
+  test("a revoked or paused grant, and another owner, fetch nothing", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connect(ctx, fetchTool([fetched("18c3", [LABEL])]));
+    const asBob = ctx.t.withIdentity({ tokenIdentifier: ctx.bob.ownerId, subject: "bob" });
+    await asBob.action(api.connectors.composio.checkMail, {});
+    await ctx.asAlice.mutation(api.evidence.setGrantState, { sourceId: ctx.sourceId, state: "paused" });
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    await allowNextCheck(ctx);
+    await ctx.asAlice.mutation(api.evidence.setGrantState, { sourceId: ctx.sourceId, state: "revoked" });
+    await ctx.t.finishAllScheduledFunctions(() => {});
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(executed("GMAIL_FETCH_EMAILS")).toHaveLength(0);
+    expect(await ctx.evidence()).toHaveLength(0);
+  });
+
+  test("a fetched message on a consenting grant leads to exactly one automatic preparation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ctx = await setup("gmail", [LABEL], { cloudProcessing: true });
+    await connect(ctx, fetchTool([fetched("18c3", [LABEL]), fetched("18c5", [LABEL], "2026-11-14T10:41:00Z")]));
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(await ctx.evidence()).toHaveLength(2);
+    const jobs = (await ctx.t.run((db) => db.db.system.query("_scheduled_functions").collect())).filter(
+      (job) => job.name.includes("runAutomatic") && job.state.kind === "pending",
+    );
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.args[0]).toEqual({ ownerId: ctx.alice.ownerId, projectId: ctx.projectId });
+  });
+
+  test("an existing connection without the marker gets its triggers re-upserted once", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connect(ctx, fetchTool([]));
+    await ctx.t.run(async (db) => {
+      for (const row of await db.db.query("connections").collect()) await db.db.patch(row._id, { triggerUpgrade: undefined });
+    });
+    calls = [];
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(upserts().map((c) => JSON.parse(c.body))).toEqual([expect.objectContaining({ trigger_config: { labelIds: LABEL }, polling_interval: 1 })]);
+    expect(await marker(ctx)).toBe("polling_interval_1");
+    await allowNextCheck(ctx);
+    await ctx.asAlice.action(api.connectors.composio.checkMail, {});
+    expect(upserts()).toHaveLength(1);
+    expect(executed("GMAIL_FETCH_EMAILS")).toHaveLength(2);
+  });
+
+  test("a return to the Mac checks mail once", async () => {
+    const ctx = await setup("gmail", [LABEL]);
+    await connect(ctx, fetchTool([fetched("18c3", [LABEL])]));
+    await ctx.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    await ctx.asAlice.mutation(api.briefs.handleReturn, { panelOpen: false });
+    await ctx.t.finishAllScheduledFunctions(() => {});
+    expect(executed("GMAIL_FETCH_EMAILS")).toHaveLength(1);
+    expect((await ctx.evidence()).map((r) => r.externalId)).toEqual(["18c3"]);
+  });
+});
+
 describe("composio github", () => {
   test("connect stores the connection and creates one trigger set per repository", async () => {
     const ctx = await setup("github", [REPO, "octo-labs/site"]);

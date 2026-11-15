@@ -136,7 +136,7 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
 export function StateNote({ state, children }: { state: Honest; children?: ReactNode }) {
   const detail =
     state.kind === "last-checked"
-      ? formatWhen(state.at)
+      ? [formatWhen(state.at), state.detail].filter(Boolean).join(", ")
       : state.kind === "stale" && !state.detail
         ? state.at && `last good ${formatWhen(state.at)}`
         : "detail" in state

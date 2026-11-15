@@ -6,7 +6,7 @@
 export type Honest =
   | { kind: "not-signed-in"; detail?: string }
   | { kind: "missing-access"; detail?: string }
-  | { kind: "last-checked"; at: string }
+  | { kind: "last-checked"; at: string; detail?: string }
   | { kind: "partial"; detail?: string }
   | { kind: "needs-retry"; detail?: string }
   /** An outcome nobody could confirm: never shown as done or as failed. */
@@ -233,11 +233,14 @@ export type ConnectionRow = {
   broker?: "composio";
   availability: string;
   lastCheckedAt?: string;
+  checkedVia?: "pushed" | "opened";
   lastError?: string;
   state: string;
   selectors: string[];
   projectIds: string[];
 };
+
+const CHECKED_VIA = { pushed: "pushed by Composio", opened: "checked when you opened TARS" } as const;
 
 /** A cloud provider's row: the live (active or paused) grant if any, else off; a revoked one says so. */
 export function cloudRow(def: { provider: CloudProvider; name: string; coverage: string }, connections: ConnectionRow[], nameOf: (projectId: string) => string | undefined): SourceRow {
@@ -248,7 +251,7 @@ export function cloudRow(def: { provider: CloudProvider; name: string; coverage:
   const status: Honest =
     c.availability === "connected"
       ? c.lastCheckedAt
-        ? { kind: "last-checked", at: c.lastCheckedAt }
+        ? { kind: "last-checked", at: c.lastCheckedAt, ...(c.checkedVia ? { detail: CHECKED_VIA[c.checkedVia] } : {}) }
         : { kind: "partial", detail: "Connected; not checked yet" }
       : c.availability === "stale"
         ? { kind: "stale", ...(c.lastCheckedAt ? { at: c.lastCheckedAt } : {}) }
