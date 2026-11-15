@@ -9,7 +9,6 @@ import { contentHash } from "../../packages/domain/src/actions";
 import { FIRST_REVISION } from "../../packages/domain/src/artifacts";
 import { commitmentKey } from "../../packages/domain/src/attention";
 import { DOCX_TYPE, docx } from "../../packages/domain/src/delivery";
-import type { PreparationOutput } from "../../packages/domain/src/prepare";
 import { api, internal } from "../../convex/_generated/api";
 import { composioUserId } from "../../convex/connectors/composio";
 import schema from "../../convex/schema";
@@ -60,7 +59,7 @@ function stubFetch(routes: Record<string, Stub>) {
 const sends = () => calls.filter((c) => c.url === `${API}/tools/execute/GMAIL_SEND_EMAIL`).map((c) => JSON.parse(c.body).arguments as Record<string, string>);
 
 type SendMode = "ok" | "refuse" | "timeout";
-async function setup() {
+async function setup(form?: "document" | "reply") {
   const t = convexTest(schema, modules);
   const { alice, bob } = makeOwners();
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice" });
@@ -73,12 +72,13 @@ async function setup() {
 
   // Gmail as Composio serves it: sent messages are read back by id.
   const sent = new Map<string, string>();
-  const mode: { send: SendMode } = { send: "ok" };
+  const mode: { send: SendMode; onSend?: () => Promise<void> } = { send: "ok" };
   stubFetch({
     [`${API}/connected_accounts/link`]: () => json({ redirect_url: "https://connect.composio.dev/link/ln_1", connected_account_id: account.id }, 201),
     [`${API}/connected_accounts/${account.id}`]: () => json({ id: account.id, status: "ACTIVE", user_id: account.userId, toolkit: { slug: "gmail" } }),
     [`${API}/trigger_instances/`]: () => json({ trigger_id: "ti_1" }),
-    [`${API}/tools/execute/GMAIL_SEND_EMAIL`]: (call) => {
+    [`${API}/tools/execute/GMAIL_SEND_EMAIL`]: async (call) => {
+      await mode.onSend?.();
       if (mode.send === "refuse") return json({ error: { message: "bad", code: 400 } }, 400);
       if (mode.send === "timeout") throw new DOMException("The operation timed out.", "TimeoutError");
       const id = `m${sent.size + 1}`;
@@ -119,7 +119,7 @@ async function setup() {
   const commitment = (evidenceIds: string[], text = TASK) =>
     t.run((ctx) => ctx.db.insert("commitments", { ownerId: alice.ownerId, projectId, text, ownership: "user", state: "open", evidenceIds }));
   const artifactId = (await t.run((ctx) =>
-    ctx.db.insert("artifacts", { ownerId: alice.ownerId, projectId, revision: FIRST_REVISION, text: DRAFT, userEdited: false, evidenceIds: [] }),
+    ctx.db.insert("artifacts", { ownerId: alice.ownerId, projectId, revision: FIRST_REVISION, text: DRAFT, userEdited: false, evidenceIds: [], ...(form === undefined ? {} : { form }) }),
   )) as string;
   const key = commitmentKey({ projectId, text: TASK });
   const allowSend = () => asAlice.action(api.connectors.composio.allowSend, { sourceId });
@@ -246,6 +246,78 @@ describe("approve and send the Word document", () => {
   });
 });
 
+describe("approve and send a reply", () => {
+  test("the email body is the draft text itself with no document or link; recorded before it leaves, verified, the request done", async () => {
+    const ctx = await setup("reply");
+    const mail = await ctx.deliverMail("18d1", `Dana Reyes <${DANA}>`, "Budget", "Can you send me the numbers?");
+    await ctx.commitment([mail.id]);
+    await ctx.allowSend();
+    const recordedBeforeSend: unknown[] = [];
+    ctx.mode.onSend = async () => {
+      recordedBeforeSend.push(...(await ctx.all("actions")).map((a) => ({ kind: a.kind, destination: a.destination, body: a.body, state: a.state })));
+    };
+    const { actionId, status } = await ctx.send(DANA);
+
+    expect(recordedBeforeSend).toEqual([{ kind: "send-document", destination: DANA, body: DRAFT, state: "running" }]);
+    expect(status).toMatchObject({ state: "succeeded", verified: true, recipient: DANA, subject: "Re: Budget", filename: null, link: null });
+    expect(status.stages.map((s) => [s.name, s.state])).toEqual([
+      ["send", "done"],
+      ["verify", "done"],
+    ]);
+    expect(status.sentAt).toBe(status.stages[0]!.endedAt);
+    const [row] = await ctx.all("actions");
+    expect(row).toMatchObject({ _id: actionId, destination: DANA, revision: FIRST_REVISION, contentHash: await contentHash(DRAFT), body: DRAFT });
+    expect(row!.documentId).toBeUndefined();
+    expect(sends()).toEqual([{ recipient_email: DANA, subject: "Re: Budget", body: DRAFT }]);
+    expect(sends()[0]!.body).not.toContain(`${SITE}/d/`);
+    expect(await ctx.all("artifactDocuments")).toHaveLength(0);
+    expect(await ctx.files()).toHaveLength(0);
+    expect((await ctx.all("commitments"))[0]!.state).toBe("verified-done");
+    // Approving the same revision to the same person again is the same action: nothing is resent.
+    expect(await ctx.approve(DANA)).toEqual({ actionId });
+    expect(sends()).toHaveLength(1);
+  });
+
+  test("a reply to someone other than the asker is not a reply to the asker's thread", async () => {
+    const ctx = await setup("reply");
+    const mail = await ctx.deliverMail("18d1", DANA, "Budget", "Can you send me the numbers?");
+    await ctx.commitment([mail.id]);
+    await ctx.allowSend();
+    await ctx.send(BOB_MAIL);
+    expect(sends()).toEqual([{ recipient_email: BOB_MAIL, subject: "Budget summary", body: DRAFT }]);
+  });
+
+  test("a reply needs the send permission, and an unclear outcome is never resent", async () => {
+    const ctx = await setup("reply");
+    await expect(ctx.approve(DANA)).rejects.toThrow(/missing-send-permission/);
+    expect(await ctx.all("actions")).toHaveLength(0);
+    await ctx.allowSend();
+    ctx.mode.send = "timeout";
+    const lost = await ctx.send(DANA);
+    expect(lost.status).toMatchObject({ state: "unknown", verified: false });
+    expect(lost.status.stages.map((s) => [s.name, s.state])).toEqual([
+      ["send", "unknown"],
+      ["verify", "pending"],
+    ]);
+    expect((await ctx.asAlice.action(api.actions.reconcileAction, { actionId: lost.actionId })).state).toBe("unknown");
+    expect(await ctx.approve(DANA)).toEqual({ actionId: lost.actionId });
+    expect(calls.filter((c) => c.url.endsWith("/GMAIL_SEND_EMAIL"))).toHaveLength(1);
+  });
+
+  test("a new revision keeps the reply form, and the send binds to exactly the current revision", async () => {
+    const ctx = await setup("reply");
+    await ctx.allowSend();
+    const edited = await ctx.asAlice.mutation(api.artifacts.saveEdit, { artifactId: ctx.artifactId, baseRevision: FIRST_REVISION, text: "Hi Dana, 400 and 1200." });
+    expect(edited.status).toBe("applied");
+    expect(edited.artifact.form).toBe("reply");
+    expect((await ctx.all("artifacts"))[0]!.form).toBe("reply");
+    expect((await ctx.all("artifactVersions"))[0]).toMatchObject({ revision: FIRST_REVISION, form: "reply" });
+    expect(await ctx.approve(DANA)).toMatchObject({ status: "needs-clarification" });
+    await ctx.approve(DANA, ctx.asAlice, edited.artifact.revision);
+    expect(sends()).toEqual([expect.objectContaining({ recipient_email: DANA, body: "Hi Dana, 400 and 1200." })]);
+  });
+});
+
 describe("the Word document and its link", () => {
   test("one document per revision, bound to its revision and content hash; a stale revision is a question", async () => {
     const ctx = await setup();
@@ -314,7 +386,7 @@ describe("the Word document and its link", () => {
 });
 
 describe("only the user's call sends", () => {
-  test("an automatic preparation, even from mail asking for the document, creates no document, link or action", async () => {
+  test("the run a mail starts, even mail asking for the document, creates no document, link or action", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const t = convexTest(schema, modules);
     const { alice } = makeOwners();
@@ -335,26 +407,25 @@ describe("only the user's call sends", () => {
     });
     vi.stubEnv("OPENAI_API_KEY", "test-key-not-real");
     vi.stubEnv("OPENAI_MODEL", "test-model");
-    const output: PreparationOutput = {
-      title: "Budget for Dana",
-      body: `Send the Word document to ${EVE}.`,
-      evidenceIds: [record.id],
-      gaps: [],
-      nextAction: `Send the Word document to ${EVE}.`,
-      commitments: [{ text: TASK, holder: "user", holderName: null, explicit: true, quote: hostile, dueAt: null, evidenceIds: [record.id] }],
-      facts: [],
-    };
-    const model = vi.fn(async () =>
-      new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] }), { status: 200 }),
-    );
+    // The model follows the mail as far as it can: it records the request, drafts it, and asks to send.
+    const turns = [
+      [{ type: "function_call", call_id: "c1", name: "start_request", arguments: JSON.stringify({ projectId, request: TASK, dueLocal: null }) }],
+      [{ type: "function_call", call_id: "c2", name: "write_draft", arguments: JSON.stringify({ title: "Budget for Dana", form: "document", text: `Send the Word document to ${EVE}.`, changeSummary: "First draft." }) }],
+      [{ type: "function_call", call_id: "c3", name: "propose_send", arguments: "{}" }],
+      [{ type: "message", content: [{ type: "output_text", text: "Dana asked for the budget. I drafted it." }] }],
+    ];
+    let n = 0;
+    const model = vi.fn(async () => new Response(JSON.stringify({ status: "completed", output: turns[Math.min(n++, turns.length - 1)] }), { status: 200 }));
     vi.stubGlobal("fetch", model);
     expect(await t.mutation(internal.evidence.ingest, { ownerId: alice.ownerId, sourceId: record.sourceId, record })).toBe("accepted");
     for (let i = 0; i < 5; i++) {
       await vi.advanceTimersByTimeAsync(5);
       await t.finishInProgressScheduledFunctions();
     }
-    expect(model).toHaveBeenCalled();
-    expect(await t.run((ctx) => ctx.db.query("preparedWork").collect())).toHaveLength(1);
+    expect(model).toHaveBeenCalledTimes(4);
+    expect(await asAlice.query(api.artifacts.getArtifact, { projectId })).toMatchObject({ revision: FIRST_REVISION });
+    // propose_send is not offered to a message's run: no approval block either.
+    expect((await asAlice.query(api.thread.listThread, { projectId })).flatMap((m) => m.blocks.map((block) => block.type))).not.toContain("approval");
     expect(await t.run((ctx) => ctx.db.query("actions").collect())).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.query("artifactDocuments").collect())).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.system.query("_storage").collect())).toHaveLength(0);

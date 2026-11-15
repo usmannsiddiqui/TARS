@@ -39,12 +39,12 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { startDraftForRequest } from "./artifacts";
+
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
-import { writeOpening } from "./thread";
-import { queueNudge, queueRecap } from "./whatsapp";
+
+import { isLinked, queueNudge, queueRecap } from "./telegram";
 import schema, { commitmentFields } from "./schema";
 
 type Ctx = Pick<QueryCtx, "db">;
@@ -280,7 +280,8 @@ async function ownerNudges(ctx: Ctx, ownerId: string) {
     .query("nudges")
     .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId))
     .collect();
-  return rows.sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
+  const due = (n: Doc<"nudges">) => (n.dueAt === undefined ? Infinity : Date.parse(n.dueAt)); // undated last
+  return rows.sort((a, b) => due(a) - due(b));
 }
 
 /** The user's commitment a nudge row stands for (rows outlive re-preparation; the key is stable). */
@@ -292,13 +293,13 @@ async function nudgeCommitment(ctx: Ctx, nudge: Doc<"nudges">) {
   return rows.find((c) => c.ownership === "user" && commitmentKey(c) === nudge.key) ?? null;
 }
 
-/** Offers showing now whose commitment is still open and not yet due. */
+/** Offers showing now whose commitment is still open and not past its due time (one with no due time stays). */
 async function liveOffers(ctx: Ctx, ownerId: string, nowMs: number) {
   const out: { nudge: Doc<"nudges">; offer: NonNullable<Doc<"nudges">["offer"]>; text: string }[] = [];
   for (const nudge of await ownerNudges(ctx, ownerId)) {
     if (nudge.offer === undefined) continue;
     const commitment = await nudgeCommitment(ctx, nudge);
-    if (commitment?.state !== "open" || commitment.dueAt === undefined || Date.parse(commitment.dueAt) <= nowMs) continue;
+    if (commitment?.state !== "open" || (commitment.dueAt !== undefined && Date.parse(commitment.dueAt) <= nowMs)) continue;
     out.push({ nudge, offer: nudge.offer, text: commitment.text });
   }
   return out;
@@ -318,11 +319,33 @@ async function openOffer(ctx: MutationCtx, nudge: Doc<"nudges">, nowMs: number, 
 }
 
 /**
- * After a preparation stored commitments: one nudge row and one due-1h reminder per user-owned open
- * commitment with a future due time. `automatic`: the project gets a draft if it has none, and that
- * commitment gets the one "started for you" offer. Never touches focus, never creates an action.
+ * A run just started work on this request of the user's: its nudge row (with the one reminder when it
+ * has a due time), then the one "started for you" offer and its Telegram copy, unless another offer
+ * is showing or he may not be contacted now. Never touches focus, never creates an action.
  */
-export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, projectId: string, automatic: boolean) {
+export async function offerStarted(ctx: MutationCtx, commitment: Doc<"commitments">, title: string) {
+  const { ownerId, projectId, dueAt } = commitment;
+  const now = Date.now();
+  const key = commitmentKey(commitment);
+  const existing = await ctx.db
+    .query("nudges")
+    .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
+    .unique();
+  if (existing !== null) return; // offered once per request
+  const remindAt = dueAt === undefined ? 0 : dueSoonAt(Date.parse(dueAt));
+  const dueJob = dueAt !== undefined && remindAt > now ? await ctx.scheduler.runAt(remindAt, internal.briefs.nudgeDueSoon, { ownerId, key, dueAt }) : undefined;
+  const id = await ctx.db.insert("nudges", { ownerId, projectId, key, ...(dueAt === undefined ? {} : { dueAt }), ...(dueJob === undefined ? {} : { dueJob }) });
+  if ((await liveOffers(ctx, ownerId, now)).length > 0) return; // one at a time
+  const settings = await loadSettings(ctx, ownerId);
+  const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
+  const may = dueAt === undefined ? !(state.quiet || state.meeting || state.working) : decideNudge({ trigger: "return", nowMs: now, commitment, ...state });
+  if (!may) return;
+  await openOffer(ctx, (await ctx.db.get(id))!, now, true);
+  await queueNudge(ctx, ownerId, key, title, dueAt, true);
+}
+
+/** After a preparation stored commitments: one nudge row and one due-1h reminder per user-owned open commitment with a future due time. */
+export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, projectId: string) {
   const now = Date.now();
   const rows = await ctx.db
     .query("commitments")
@@ -349,21 +372,7 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
       await ctx.db.patch(existing._id, { dueAt, dueJob });
       continue;
     }
-    const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
-    if (!automatic) continue;
-    // A newly seen due commitment is offered at once; "started for you" only when TARS made the draft now.
-    const draft = await startDraftForRequest(ctx, ownerId, projectId, commitment.text);
-    const started = draft.outcome !== "suggested";
-    await writeOpening(ctx, { ownerId, projectId, key, commitment, artifactId: draft.id, outcome: draft.outcome }); // TARS speaks first in the project chat
-    if ((await liveOffers(ctx, ownerId, now)).length > 0) continue; // one at a time; return/due-soon pick it up
-    const settings = await loadSettings(ctx, ownerId);
-    const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
-    // A new row has no last nudge, so only the contact rules decide.
-    if (decideNudge({ trigger: "return", nowMs: now, commitment, ...state })) {
-      await openOffer(ctx, (await ctx.db.get(id))!, now, started);
-      const title = (await ctx.db.query("preparedWork").withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId)).unique())?.work?.title ?? "Your draft";
-      await queueNudge(ctx, ownerId, key, title, dueAt, started); // and to his linked WhatsApp, once per commitment
-    }
+    await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
   }
 }
 
@@ -533,6 +542,10 @@ async function prepareDaily(ctx: MutationCtx, kind: DailyKind, ownerId: string, 
     // "New" means since the brief this one replaces, or the last day when there is none.
     ...(kind === "morning" ? { read: briefReads(context, old?.preparedAt ?? now - 24 * 3_600_000) } : {}),
   });
+  // The same moment starts the run that writes the morning message for his phone (only when one is linked).
+  if (kind === "morning" && (await isLinked(ctx, ownerId))) {
+    await ctx.scheduler.runAfter(0, internal.runs.onMorning, { ownerId, key: localDate(scheduledFor, settings.timezone) });
+  }
   // From now, not from the missed deadline: no catch-up chain after downtime.
   const time = kind === "morning" ? MORNING : EVENING;
   const next = nextLocalTime(Math.max(now, scheduledFor), settings.timezone, time.hour, time.minute);
@@ -573,7 +586,7 @@ export const recordSessionEvent = mutation({
   handler: async (ctx, { kind }) => {
     const ownerId = await requireOwnerId(ctx);
     const id = await ctx.db.insert("sessionEvents", { ownerId, kind, at: Date.now() });
-    if (kind === "stop") await queueRecap(ctx, ownerId, id); // his "Stop for now": the recap to his linked WhatsApp
+    if (kind === "stop") await queueRecap(ctx, ownerId, id); // his "Stop for now": the recap to his linked Telegram
     return null;
   },
 });

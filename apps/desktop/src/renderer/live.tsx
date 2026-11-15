@@ -512,10 +512,10 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
   const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
   const talkKey = useTalkKey();
-  const whatsapp = useQuery(api.whatsapp.status, cloud.ready ? {} : "skip");
-  const startWhatsAppLink = useMutation(api.whatsapp.startLink);
-  const unlinkWhatsApp = useMutation(api.whatsapp.unlink);
-  const testWhatsApp = useAction(api.whatsapp.sendTest);
+  const telegram = useQuery(api.telegram.status, cloud.ready ? {} : "skip");
+  const startTelegramLink = useMutation(api.telegram.startLink);
+  const unlinkTelegram = useMutation(api.telegram.unlink);
+  const testTelegram = useAction(api.telegram.sendTest);
   useEffect(() => {
     window.companion.shortcut.status().then(setShortcut, (err: unknown) => setShortcut({ accelerator: "The shortcut", registered: false, error: reason(err) }));
   }, []);
@@ -652,11 +652,11 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       }}
       shortcut={{ status: shortcut, onSet: async (accelerator) => setShortcut(await window.companion.shortcut.set(accelerator)) }}
       talkKey={{ status: talkKey, onOpenAccessibility: () => window.companion.talk.openAccessibilitySettings() }}
-      whatsapp={{
-        status: whatsapp,
-        onLink: async () => (await startWhatsAppLink({})).code,
-        onUnlink: async () => void (await unlinkWhatsApp({})),
-        onTest: async () => void (await testWhatsApp({})),
+      telegram={{
+        status: telegram,
+        onLink: async () => (await startTelegramLink({})).code,
+        onUnlink: async () => void (await unlinkTelegram({})),
+        onTest: async () => void (await testTelegram({})),
       }}
       projects={projects ?? []}
       {...(addBlocked ? { addBlocked } : {})}

@@ -135,8 +135,8 @@ export function ProjectView(props: ProjectViewProps) {
             <StateNote state={{ kind: "loading", detail: "Reading this project's conversation…" }} />
           ) : props.thread.length === 0 ? (
             <div className="thread-empty">
-              <p className="say-text">Nothing here yet. When a message asks you for something with a deadline, I start the work and write to you here first.</p>
-              <p className="quiet">You can also ask me about this project now, or tell me what to draft.</p>
+              <p className="say-text">Nothing here yet.</p>
+              <p className="quiet">I write here when someone asks you for something. You can also ask me, or tell me what to draft.</p>
               {work === undefined && (
                 <button type="button" className="secondary" onClick={() => void prepare()} disabled={preparing.busy}>
                   {preparing.busy ? "Preparing…" : prepared?.status === "needs-retry" ? "Try preparing again" : "Prepare from my sources"}
@@ -311,11 +311,13 @@ function RunThrough({ artifact, canCreate, editor, sharing }: RunThroughProps) {
         <StateNote state={{ kind: "loading", detail: "Reading the run-through…" }} />
       ) : artifact === null ? (
         <div className="run-empty">
-          <p>An editable copy of the prepared work, yours to change.</p>
-          <button type="button" className="secondary" disabled={!canCreate || busy !== null} onClick={() => run("create", editor.create)}>
-            {busy === "create" ? "Creating…" : "Start the run-through"}
-          </button>
-          {!canCreate && <StateNote state={{ kind: "empty", detail: "Available once something is prepared." }} />}
+          {canCreate ? (
+            <button type="button" className="secondary" disabled={busy !== null} onClick={() => run("create", editor.create)}>
+              {busy === "create" ? "Creating…" : "Start the run-through"}
+            </button>
+          ) : (
+            <p className="quiet small">Nothing prepared yet.</p>
+          )}
         </div>
       ) : (
         <>
@@ -453,22 +455,14 @@ function ShareLink({ revision, dirty, sharing }: { revision: string; dirty: bool
         <StateNote state={{ kind: "loading", detail: "Reading whether this draft is shared…" }} />
       ) : state === null ? (
         <div className="act-confirm">
-          <StateNote state={{ kind: "private", detail: "Only you can see this draft." }} />
-          <p className="quiet small">
-            {dirty
-              ? "Save your edits first. Only a saved revision is ever shared."
-              : `Anyone with the link could read revision ${revision}, on any device. They cannot edit it or ask TARS anything.`}
-          </p>
+          <p className="quiet small">{dirty ? "Save your edits first; only a saved revision is shared." : "Private. A link lets anyone who has it read this revision."}</p>
           <button type="button" className="secondary" disabled={dirty || busy !== null} onClick={() => run("share", () => sharing.share(revision))}>
             {busy === "share" ? "Sharing…" : `Share revision ${revision}`}
           </button>
         </div>
       ) : (
         <>
-          <StateNote
-            state={{ kind: "shared", detail: `Anyone with the link can read revision ${state.revision}, shared ${formatWhen(new Date(state.sharedAt).toISOString())}.` }}
-          />
-          <code className="copyable">{state.link}</code>
+          <StateNote state={{ kind: "shared", detail: `Revision ${state.revision}, ${formatWhen(new Date(state.sharedAt).toISOString())}. Anyone with the link can read it.` }} />
           <div className="editor-bar">
             <button type="button" className="secondary" disabled={busy !== null} onClick={() => run("copy", () => navigator.clipboard.writeText(state.link), "Link copied.")}>
               Copy link
@@ -480,7 +474,7 @@ function ShareLink({ revision, dirty, sharing }: { revision: string; dirty: bool
                 disabled={dirty || busy !== null}
                 onClick={() => run("update", () => sharing.update(revision), `The shared page now shows revision ${revision}.`)}
               >
-                {busy === "update" ? "Updating…" : `Update shared page to revision ${revision}`}
+                {busy === "update" ? "Updating…" : `Update to revision ${revision}`}
               </button>
             )}
             <button type="button" className="text-button" disabled={busy !== null} onClick={() => run("stop", sharing.stop, "Sharing stopped. The old link no longer opens anything.")}>

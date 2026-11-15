@@ -50,7 +50,7 @@ test("one_companion_across_projects", async () => {
   await expect(rows.locator(".row-name")).toHaveText(["Today", "AI Guides", "AVT", "Personal projects", "Coursework"]);
   await expect(rows.nth(0)).toHaveAttribute("aria-current", "page");
   await expect(rows.nth(1).locator(".row-time")).toHaveText("Focus");
-  await expect(rows.nth(3).locator(".row-preview")).toHaveText("Nothing prepared yet");
+  await expect(rows.nth(3).locator(".row-preview")).toHaveCount(0); // nothing to say: no second line
   await expect(rows.nth(4).locator(".row-preview")).toHaveText("Needs retry");
   // TARS stays at the front desk: the mini desk in the list and the full desk in the right pane.
   await expect(nav.locator(".desk-mini")).toBeVisible();

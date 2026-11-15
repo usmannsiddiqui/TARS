@@ -1,51 +1,48 @@
-// TARS on WhatsApp, through Twilio. The linked phone is the only identity that can instruct TARS by
-// message: proven by Twilio's X-Twilio-Signature plus the stored link, made once with a short code he
-// sees in the signed-in app. His message is his instruction, exactly like typing in the app: a project
-// message goes through the chat's own path (thread.chatAs), anything else through brain-dump sorting.
-// Inbound text is never stored as evidence. Only an exact SEND sends, through thread.sendAs. What goes
-// to the phone follows the recap's rule: titles only, no draft text, no source excerpts, no other
-// person's address except the recipient of an approval he asked for. One message per key, no retries.
+// TARS on Telegram, through a bot. The linked chat is the only identity that can instruct TARS by
+// message: proven by the webhook's secret header (set when the webhook is registered) plus the stored
+// link, made once with a short code he sees in the signed-in app. His message is his instruction,
+// exactly like typing in the app: a project message goes through the chat's own path (thread.chatAs),
+// anything else through brain-dump sorting. Inbound text is never stored as evidence. Only an exact
+// SEND sends, through thread.sendAs. What goes to the phone follows the recap's rule: titles only, no
+// draft text, no source excerpts, no other person's address except the recipient of an approval he
+// asked for. One message per key, no retries.
 import { ConvexError, v } from "convex/values";
 import { z } from "zod";
 import { recapText } from "../packages/domain/src/recap";
-import { dueLabel, type Block } from "../packages/domain/src/thread";
+import { dueLabel, phoneHtml, type Block } from "../packages/domain/src/thread";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { action, httpAction, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { sortAs } from "./captures";
 import { requireOwnerId } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
-import { issueOAuthState, takeOAuthState, verifyTwilioSignature } from "./lib/providerAuth";
+import { issueOAuthState, takeOAuthState } from "./lib/providerAuth";
 import { buildRecap } from "./recap";
 import { chatAs, sendAs } from "./thread";
 
-export const WHATSAPP_PATH = "/twilio/whatsapp";
-export const STATUS_PATH = "/twilio/whatsapp/status";
-const PROVIDER = "whatsapp";
+export const TELEGRAM_PATH = "/telegram/webhook";
+const PROVIDER = "telegram";
 const CODE = /^TARS-[A-Z0-9]{6}$/;
 const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // no 0/O or 1/I/L to misread
-const MAX_BODY = 1_000; // Twilio allows 1,600; a phone screen wants far less
-const WINDOW_CODES = new Set(["63016"]); // "Outside messaging window": the 24-hour session lapsed
+const MAX_BODY = 3_500; // Telegram allows 4,096 characters
 type Ctx = Pick<QueryCtx, "db">;
 
-const sandboxNumber = () => process.env.TWILIO_WHATSAPP_FROM?.replace(/^whatsapp:/, "") || null;
+const botName = () => process.env.TELEGRAM_BOT_NAME || null; // the bot's @username, shown so he knows where to send the code
 const linkOf = (ctx: Ctx, ownerId: string) =>
   ctx.db
-    .query("whatsappLinks")
+    .query("telegramLinks")
     .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
     .unique();
 
 // ---- The card.
 
-const outboxState = v.union(v.literal("waiting"), v.literal("queued"), v.literal("sent"), v.literal("refused"), v.literal("failed"));
+const outboxState = v.union(v.literal("waiting"), v.literal("queued"), v.literal("sent"), v.literal("failed"));
 
 export const status = query({
   args: {},
   returns: v.object({
-    sandbox: v.union(v.string(), v.null()),
+    bot: v.union(v.string(), v.null()),
     linked: v.boolean(),
-    phone: v.union(v.string(), v.null()),
-    windowClosed: v.boolean(),
     last: v.union(v.null(), v.object({ state: outboxState, at: v.number() })),
   }),
   handler: async (ctx) => {
@@ -53,23 +50,21 @@ export const status = query({
     const link = await linkOf(ctx, ownerId);
     const last = (
       await ctx.db
-        .query("whatsappOutbox")
+        .query("telegramOutbox")
         .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId))
         .collect()
     )
       .filter((row) => row.state !== "waiting")
       .sort((a, b) => b.at - a.at)[0];
     return {
-      sandbox: sandboxNumber(),
+      bot: botName(),
       linked: link !== null,
-      phone: link?.phone.replace(/^whatsapp:/, "") ?? null,
-      windowClosed: link?.windowClosedAt !== undefined,
       last: link && last ? { state: last.state, at: last.at } : null,
     };
   },
 });
 
-/** A one-time code for the signed-in owner to send from WhatsApp: single use, 10 minutes. */
+/** A one-time code for the signed-in owner to send from Telegram: single use, 10 minutes. */
 export const startLink = mutation({
   args: {},
   returns: v.object({ code: v.string() }),
@@ -97,7 +92,7 @@ export const sendTest = action({
   returns: v.null(),
   handler: async (ctx): Promise<null> => {
     const ownerId = await requireOwnerId(ctx);
-    const queued: boolean = await ctx.runMutation(internal.whatsapp.queue, {
+    const queued: boolean = await ctx.runMutation(internal.telegram.queue, {
       ownerId,
       key: `test:${Date.now()}`,
       body: "This is a test from TARS. Message me here any time to tell me what to do.",
@@ -110,17 +105,20 @@ export const sendTest = action({
 // ---- Outbound: one message per key, to the linked phone only.
 
 /** Queue one message to the owner's linked phone. False when there is no link or the key already went. */
-export async function queueMessage(ctx: MutationCtx, ownerId: string, key: string, body: string): Promise<boolean> {
+const phoneLinks = v.array(v.object({ label: v.string(), url: v.string() }));
+type PhoneLink = { label: string; url: string };
+
+export async function queueMessage(ctx: MutationCtx, ownerId: string, key: string, body: string, links: PhoneLink[] = []): Promise<boolean> {
   if ((await linkOf(ctx, ownerId)) === null) return false;
   const existing = await ctx.db
-    .query("whatsappOutbox")
+    .query("telegramOutbox")
     .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
     .unique();
   if (existing !== null && existing.state !== "waiting") return false;
   const at = Date.now();
-  const id = existing?._id ?? (await ctx.db.insert("whatsappOutbox", { ownerId, key, state: "queued", at }));
+  const id = existing?._id ?? (await ctx.db.insert("telegramOutbox", { ownerId, key, state: "queued", at }));
   if (existing !== null) await ctx.db.patch(id, { state: "queued", at });
-  await ctx.scheduler.runAfter(0, internal.whatsapp.deliver, { outboxId: id, body });
+  await ctx.scheduler.runAfter(0, internal.telegram.deliver, { outboxId: id, body, links });
   return true;
 }
 
@@ -131,101 +129,87 @@ export const queue = internalMutation({
 });
 
 export const loadDelivery = internalQuery({
-  args: { outboxId: v.id("whatsappOutbox") },
-  returns: v.union(v.null(), v.object({ phone: v.string() })),
+  args: { outboxId: v.id("telegramOutbox") },
+  returns: v.union(v.null(), v.object({ chatId: v.string() })),
   handler: async (ctx, { outboxId }) => {
     const row = await ctx.db.get(outboxId);
     const link = row === null || row.state !== "queued" ? null : await linkOf(ctx, row.ownerId);
-    return link === null ? null : { phone: link.phone };
+    return link === null ? null : { chatId: link.chatId };
   },
 });
 
 export const recordDelivery = internalMutation({
-  args: { outboxId: v.id("whatsappOutbox"), state: outboxState, twilioSid: v.optional(v.string()), code: v.optional(v.string()) },
+  args: { outboxId: v.id("telegramOutbox"), state: outboxState, code: v.optional(v.string()) },
   returns: v.null(),
-  handler: async (ctx, { outboxId, state, twilioSid, code }) => {
-    const row = await ctx.db.get(outboxId);
-    if (row === null) return null;
-    await ctx.db.patch(outboxId, { state, at: Date.now(), ...(twilioSid === undefined ? {} : { twilioSid }), ...(code === undefined ? {} : { code }) });
-    if (state === "refused") await closeWindow(ctx, row.ownerId);
+  handler: async (ctx, { outboxId, state, code }) => {
+    if ((await ctx.db.get(outboxId)) === null) return null;
+    await ctx.db.patch(outboxId, { state, at: Date.now(), ...(code === undefined ? {} : { code }) });
     return null;
   },
 });
 
-async function closeWindow(ctx: MutationCtx, ownerId: string) {
-  const link = await linkOf(ctx, ownerId);
-  if (link !== null) await ctx.db.patch(link._id, { windowClosedAt: Date.now() });
-}
-
-/**
- * One POST to Twilio's Messages API. Every outcome is recorded once: sent (with Twilio's sid, for its
- * status callback), refused (outside the 24-hour window) or failed. Never retried, no timer.
- */
+/** One POST to the bot's sendMessage. Every outcome is recorded once: sent or failed (with Telegram's own words). Never retried, no timer. */
 export const deliver = internalAction({
-  args: { outboxId: v.id("whatsappOutbox"), body: v.string() },
+  args: { outboxId: v.id("telegramOutbox"), body: v.string(), links: phoneLinks },
   returns: v.null(),
-  handler: async (ctx, { outboxId, body }): Promise<null> => {
-    const target: { phone: string } | null = await ctx.runQuery(internal.whatsapp.loadDelivery, { outboxId });
-    const record = (state: "sent" | "refused" | "failed", extra: { twilioSid?: string; code?: string } = {}) =>
-      ctx.runMutation(internal.whatsapp.recordDelivery, { outboxId, state, ...extra });
-    if (target === null) return record("failed", { code: "not_linked" });
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_WHATSAPP_FROM;
-    const site = process.env.CONVEX_SITE_URL;
-    if (!sid || !token || !from || !site) return record("failed", { code: "not_configured" });
+  handler: async (ctx, { outboxId, body, links }): Promise<null> => {
+    const target: { chatId: string } | null = await ctx.runQuery(internal.telegram.loadDelivery, { outboxId });
+    const record = (state: "sent" | "failed", code?: string) => ctx.runMutation(internal.telegram.recordDelivery, { outboxId, state, ...(code === undefined ? {} : { code }) });
+    if (target === null) return record("failed", "not_linked");
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return record("failed", "not_configured");
     let response: Response;
     try {
-      response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, {
+      // The words are escaped before any mark is added (phoneHtml), so nothing in a message can break its own formatting.
+      response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
-        headers: { Authorization: `Basic ${btoa(`${sid}:${token}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          From: from.startsWith("whatsapp:") ? from : `whatsapp:${from}`,
-          To: target.phone,
-          Body: body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 1)}…` : body,
-          StatusCallback: `${site}${STATUS_PATH}`,
-        }).toString(),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: target.chatId,
+          text: phoneHtml(body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 1)}…` : body, links),
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        }),
         signal: AbortSignal.timeout(10_000),
       });
     } catch {
-      return record("failed", { code: "network" });
+      return record("failed", "network");
     }
-    const reply = (await response.json().catch(() => ({}))) as { sid?: unknown; code?: unknown; error_code?: unknown; status?: unknown };
-    const code = String(reply.code ?? reply.error_code ?? "");
-    if (!response.ok) return record(WINDOW_CODES.has(code) ? "refused" : "failed", { code: code || `http_${response.status}` });
-    return record("sent", typeof reply.sid === "string" ? { twilioSid: reply.sid } : {});
+    const reply = (await response.json().catch(() => ({}))) as { ok?: unknown; error_code?: unknown; description?: unknown };
+    if (response.ok && reply.ok === true) return record("sent");
+    return record("failed", `${String(reply.error_code ?? `http_${response.status}`)}${typeof reply.description === "string" ? `: ${reply.description.slice(0, 120)}` : ""}`);
   },
 });
 
-/** Twilio's later word on a sent message: a failure is recorded on its row (refused for the window). */
-export const recordStatus = internalMutation({
-  args: { twilioSid: v.string(), messageStatus: v.string(), errorCode: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { twilioSid, messageStatus, errorCode }) => {
-    if (messageStatus !== "failed" && messageStatus !== "undelivered") return null;
-    // shortcut: a callback that beats deliver's own write of the sid finds no row and is dropped; Twilio's
-    // first callback comes after queued->sent, well after that write, so upgrade only if one is ever lost.
-    const row = await ctx.db
-      .query("whatsappOutbox")
-      .withIndex("by_twilio_sid", (q) => q.eq("twilioSid", twilioSid))
-      .unique();
-    if (row === null) return null;
-    const refused = WINDOW_CODES.has(errorCode);
-    await ctx.db.patch(row._id, { state: refused ? "refused" : "failed", code: errorCode || messageStatus, at: Date.now() });
-    if (refused) await closeWindow(ctx, row.ownerId);
-    return null;
+/** One-time setup, run by hand after the bot's token is set: tell Telegram where his messages go and which secret header proves they came from it. */
+export const register = internalAction({
+  args: {},
+  returns: v.string(),
+  handler: async (): Promise<string> => {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const site = process.env.CONVEX_SITE_URL;
+    if (!token || !secret || !site) return "not_configured";
+    const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: `${site}${TELEGRAM_PATH}`, secret_token: secret, allowed_updates: ["message"] }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const reply = (await response.json().catch(() => ({}))) as { ok?: unknown; description?: unknown };
+    return reply.ok === true ? "registered" : `failed: ${String(reply.description ?? response.status).slice(0, 120)}`;
   },
 });
 
 // ---- What TARS says to the phone.
 
 /** A nudge offer just opened for a newly seen due commitment: its title and due time, nothing else. */
-export async function queueNudge(ctx: MutationCtx, ownerId: string, key: string, title: string, dueAt: string, started: boolean) {
+export async function queueNudge(ctx: MutationCtx, ownerId: string, key: string, title: string, dueAt: string | undefined, started: boolean) {
   const settings = await ctx.db
     .query("attentionSettings")
     .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
     .unique();
-  const due = settings ? ` It's due ${dueLabel(dueAt, settings.timezone)}.` : "";
+  const due = settings && dueAt !== undefined ? ` It's due ${dueLabel(dueAt, settings.timezone)}.` : "";
   const lead = started ? `I started “${title}” for you while you were busy.` : `“${title}” is ready for you.`;
   await queueMessage(ctx, ownerId, `nudge:${key}`, `${lead}${due} Open TARS or reply here.`);
 }
@@ -241,46 +225,32 @@ export async function queueRecap(ctx: MutationCtx, ownerId: string, stopId: Id<"
 }
 
 const OUTCOME_TEXT = {
-  succeeded: (to: string) => `Sent to ${to} · checked: it arrived.`,
-  failed: (to: string) => `It did not send to ${to}. Open TARS to see what stopped it.`,
-  unknown: (to: string) => `I sent it to ${to} but could not confirm it arrived. Open TARS to check again; I will not resend it on my own.`,
+  succeeded: (what: string, to: string) => `Done: ${what} went to ${to}, and I checked it arrived.`,
+  failed: (what: string, to: string) => `Not done: ${what} did not send to ${to}. Open TARS to see what stopped it.`,
+  unknown: (what: string, to: string) => `I sent ${what} to ${to} but could not confirm it arrived. Open TARS to check again; I will not resend it on my own.`,
 };
 
-/** In the transaction that settles an action: one message for a send he started with SEND. */
+/** In the transaction that settles a send, wherever he approved it (the app's button or SEND here): one message. */
 export async function reportSendOutcome(ctx: MutationCtx, row: Doc<"actions">, state: keyof typeof OUTCOME_TEXT) {
-  const waiting = await ctx.db
-    .query("whatsappOutbox")
-    .withIndex("by_owner_key", (q) => q.eq("ownerId", row.ownerId).eq("key", `send:${row._id}`))
-    .unique();
-  if (waiting?.state === "waiting") await queueMessage(ctx, row.ownerId, waiting.key, OUTCOME_TEXT[state](row.destination));
+  await queueMessage(ctx, row.ownerId, `send:${row._id}`, OUTCOME_TEXT[state](row.subject ? `“${row.subject}”` : "it", row.destination));
 }
 
-/** Mark a SEND's action so its outcome comes back as one message; if it already settled, report it now. */
-export const awaitOutcome = internalMutation({
-  args: { ownerId: v.string(), actionId: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { ownerId, actionId }) => {
-    const id = ctx.db.normalizeId("actions", actionId);
-    const row = id === null ? null : await ctx.db.get(id);
-    if (row === null || row.ownerId !== ownerId) return null;
-    const key = `send:${row._id}`;
-    const existing = await ctx.db
-      .query("whatsappOutbox")
-      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
-      .unique();
-    if (existing !== null) return null;
-    await ctx.db.insert("whatsappOutbox", { ownerId, key, state: "waiting", at: Date.now() });
-    if (row.state === "succeeded" || row.state === "failed" || row.state === "unknown") await reportSendOutcome(ctx, row, row.state);
-    return null;
-  },
+/** The run's morning message for his phone: once per day's key, only to a linked phone. */
+export const queueBrief = internalMutation({
+  args: { ownerId: v.string(), key: v.string(), body: v.string(), links: phoneLinks },
+  returns: v.boolean(),
+  handler: (ctx, { ownerId, key, body, links }) => queueMessage(ctx, ownerId, `brief:${key}`, body, links),
 });
+
+export const isLinked = async (ctx: Pick<QueryCtx, "db">, ownerId: string) => (await linkOf(ctx, ownerId)) !== null;
 
 type Approval = Extract<Block, { type: "approval" }>["props"];
 
 function approvalText(a: Approval): string {
   if (a.recipient === "") return `“${a.document}” is ready, but there is no recipient yet. Open TARS to add one.`;
   const to = a.recipientName ? `${a.recipientName} <${a.recipient}>` : a.recipient;
-  return `Ready to send “${a.document}” as a Word document link by email to ${to}, subject “${a.replySubject}”.\nReply SEND to send it, or NOT YET to hold it.`;
+  const what = a.form === "reply" ? `“${a.document}” as a reply by email` : `“${a.document}” as a Word document link by email`;
+  return `Ready to send ${what} to ${to}, subject “${a.replySubject}”.\nReply SEND to send it, or NOT YET to hold it.`;
 }
 
 /** TARS's reply blocks as short plain text: what it did, what it said or asks, and any approval. */
@@ -303,39 +273,28 @@ function replyText(project: string, blocks: Block[]): string {
 
 // ---- Inbound.
 
-const twiml = () => new Response("<Response></Response>", { status: 200, headers: { "Content-Type": "text/xml" } });
-
-/** The signed request's form parameters, or null. The URL is the one configured in Twilio: this deployment's site URL. */
-async function signedParams(request: Request, path: string): Promise<URLSearchParams | null> {
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const site = process.env.CONVEX_SITE_URL;
-  if (!token || !site) return null;
-  const params = new URLSearchParams(await request.text());
-  const url = `${site}${path}${new URL(request.url).search}`;
-  return (await verifyTwilioSignature(token, url, params, request.headers.get("x-twilio-signature") ?? "")) ? params : null;
-}
-
-/** POST /twilio/whatsapp: verify, answer at once with empty TwiML, do the work in a scheduled action. */
-export const inbound = httpAction(async (ctx, request) => {
-  const params = await signedParams(request, WHATSAPP_PATH);
-  if (params === null) return new Response("Forbidden", { status: 403 });
-  const from = params.get("From") ?? "";
-  const messageSid = params.get("MessageSid") ?? "";
-  if (from.startsWith("whatsapp:") && messageSid !== "") {
-    await ctx.runMutation(internal.whatsapp.accept, { from, messageSid, text: (params.get("Body") ?? "").trim() });
-  }
-  return twiml();
+const UpdateSchema = z.object({
+  update_id: z.number(),
+  message: z.object({ chat: z.object({ id: z.number(), type: z.string() }), text: z.string().optional() }).optional(),
 });
 
-/** POST /twilio/whatsapp/status: Twilio's status callback for messages TARS sent. */
-export const statusCallback = httpAction(async (ctx, request) => {
-  const params = await signedParams(request, STATUS_PATH);
-  if (params === null) return new Response("Forbidden", { status: 403 });
-  const twilioSid = params.get("MessageSid") ?? "";
-  if (twilioSid !== "") {
-    await ctx.runMutation(internal.whatsapp.recordStatus, { twilioSid, messageStatus: params.get("MessageStatus") ?? "", errorCode: params.get("ErrorCode") ?? "" });
+const sameSecret = (a: string, b: string) => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+
+/** POST /telegram/webhook: check Telegram's secret header, answer at once, do the work in a scheduled action. Only a private chat's text goes on. */
+export const inbound = httpAction(async (ctx, request) => {
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!secret || !sameSecret(request.headers.get("x-telegram-bot-api-secret-token") ?? "", secret)) return new Response("Forbidden", { status: 403 });
+  const update = UpdateSchema.safeParse(await request.json().catch(() => null));
+  if (update.success && update.data.message?.chat.type === "private") {
+    const { chat, text } = update.data.message;
+    await ctx.runMutation(internal.telegram.accept, { from: String(chat.id), messageSid: String(update.data.update_id), text: (text ?? "").trim() });
   }
-  return twiml();
+  return new Response("ok", { status: 200 });
 });
 
 /** Drop redeliveries; link on a valid code; otherwise only a linked phone's message goes on, to its owner. */
@@ -344,32 +303,31 @@ export const accept = internalMutation({
   returns: v.null(),
   handler: async (ctx, { from, messageSid, text }) => {
     const seen = await ctx.db
-      .query("whatsappInbound")
+      .query("telegramInbound")
       .withIndex("by_sid", (q) => q.eq("messageSid", messageSid))
       .first();
     if (seen !== null) return null;
-    await ctx.db.insert("whatsappInbound", { messageSid, at: Date.now() });
+    await ctx.db.insert("telegramInbound", { messageSid, at: Date.now() });
 
     const code = text.toUpperCase();
     if (CODE.test(code)) {
       const bound = await takeOAuthState(ctx, code);
       if (bound?.provider !== PROVIDER) return null; // wrong, used or expired: nothing is linked
-      for (const old of [await linkOf(ctx, bound.ownerId), ...(await ctx.db.query("whatsappLinks").withIndex("by_phone", (q) => q.eq("phone", from)).collect())]) {
-        if (old !== null) await ctx.db.delete(old._id); // one phone per owner, one owner per phone
+      for (const old of [await linkOf(ctx, bound.ownerId), ...(await ctx.db.query("telegramLinks").withIndex("by_chat", (q) => q.eq("chatId", from)).collect())]) {
+        if (old !== null) await ctx.db.delete(old._id); // one chat per owner, one owner per chat
       }
-      await ctx.db.insert("whatsappLinks", { ownerId: bound.ownerId, phone: from, linkedAt: Date.now() });
+      await ctx.db.insert("telegramLinks", { ownerId: bound.ownerId, chatId: from, linkedAt: Date.now() });
       await queueMessage(ctx, bound.ownerId, `reply:${messageSid}`, "Linked. Message me here about any project, or dump whatever is on your mind.");
       return null;
     }
 
     const link = await ctx.db
-      .query("whatsappLinks")
-      .withIndex("by_phone", (q) => q.eq("phone", from))
+      .query("telegramLinks")
+      .withIndex("by_chat", (q) => q.eq("chatId", from))
       .unique();
     if (link === null) return null;
-    if (link.windowClosedAt !== undefined) await ctx.db.patch(link._id, { windowClosedAt: undefined }); // his message opens a new 24-hour window
-    if (text === "" || /^join \S+$/i.test(text)) return null; // media only, or Twilio's sandbox join keyword
-    await ctx.scheduler.runAfter(0, internal.whatsapp.handle, { ownerId: link.ownerId, messageSid, text });
+    if (text === "" || text.startsWith("/start")) return null; // media only, or Telegram's own first message to a bot
+    await ctx.scheduler.runAfter(0, internal.telegram.handle, { ownerId: link.ownerId, messageSid, text });
     return null;
   },
 });
@@ -437,13 +395,13 @@ export const newestApproval = internalQuery({
 
 const RouteSchema = z.strictObject({ projectId: z.string().nullable() });
 const ROUTE_INSTRUCTIONS = [
-  "You route one WhatsApp message the user sent to their own assistant, TARS. input.message is the user's own words.",
+  "You route one Telegram message the user sent to their own assistant, TARS. input.message is the user's own words.",
   "projectId: the id from input.projects when the message is clearly about that one project (asks to change, send or explain its draft, or asks about it). Otherwise null: a brain dump, a list of thoughts, several projects, or none. Never invent an id.",
 ].join("\n");
 
 /** His exact SEND: the newest approval, still open and still the current revision, goes out through the chat's send. */
 async function confirmSend(ctx: ActionCtx, ownerId: string): Promise<string | null> {
-  const found: { approval: Approval; currentRevision: string | null } | null = await ctx.runQuery(internal.whatsapp.newestApproval, { ownerId });
+  const found: { approval: Approval; currentRevision: string | null } | null = await ctx.runQuery(internal.telegram.newestApproval, { ownerId });
   if (found === null) return "There is nothing waiting for your SEND, so nothing was sent.";
   const { approval } = found;
   if (found.currentRevision !== approval.revision) return `“${approval.document}” changed after I asked, so nothing was sent. Ask me to send it again.`;
@@ -455,10 +413,7 @@ async function confirmSend(ctx: ActionCtx, ownerId: string): Promise<string | nu
     commitmentKey: approval.commitmentKey,
     recipient: approval.recipient,
   });
-  if ("actionId" in result) {
-    await ctx.runMutation(internal.whatsapp.awaitOutcome, { ownerId, actionId: result.actionId });
-    return null; // one message when the send settles
-  }
+  if ("actionId" in result) return null; // one message when the send settles (reportSendOutcome)
   if (result.status === "missing-send-permission") return "Sending from Gmail hasn't been allowed yet. Allow it in TARS under Connections → Gmail, then reply SEND again.";
   return `${result.reason} Nothing was sent.`;
 }
@@ -469,17 +424,17 @@ export const handle = internalAction({
   returns: v.null(),
   handler: async (ctx, { ownerId, messageSid, text }): Promise<null> => {
     const reply = async (body: string | null) => {
-      if (body !== null) await ctx.runMutation(internal.whatsapp.queue, { ownerId, key: `reply:${messageSid}`, body });
+      if (body !== null) await ctx.runMutation(internal.telegram.queue, { ownerId, key: `reply:${messageSid}`, body });
       return null;
     };
     if (/^send$/i.test(text)) return reply(await confirmSend(ctx, ownerId));
     if (/^not yet$/i.test(text)) return reply("Held. Nothing was sent.");
 
-    const list: { id: string; name: string }[] = await ctx.runQuery(internal.whatsapp.projects, { ownerId });
+    const list: { id: string; name: string }[] = await ctx.runQuery(internal.telegram.projects, { ownerId });
     let projectId: string | null;
     try {
       // JSON keeps his words inside one string value.
-      ({ projectId } = await generateStructured({ name: "whatsapp_route", schema: RouteSchema, instructions: ROUTE_INSTRUCTIONS, input: JSON.stringify({ projects: list, message: text }) }));
+      ({ projectId } = await generateStructured({ name: "telegram_route", schema: RouteSchema, instructions: ROUTE_INSTRUCTIONS, input: JSON.stringify({ projects: list, message: text }) }));
     } catch (error) {
       if (!(error instanceof ModelError)) throw error;
       return reply(`I could not read that just now (${error.code}). Try again in a minute.`);
@@ -487,13 +442,13 @@ export const handle = internalAction({
     const project = list.find((p) => p.id === projectId);
     if (project !== undefined) {
       const messageId = await chatAs(ctx, ownerId, project.id, text.slice(0, 2_000));
-      const blocks = (await ctx.runQuery(internal.whatsapp.replyBlocks, { ownerId, messageId })) as Block[]; // stored only through block()
+      const blocks = (await ctx.runQuery(internal.telegram.replyBlocks, { ownerId, messageId })) as Block[]; // stored only through block()
       return reply(replyText(project.name, blocks));
     }
-    const captureId = `whatsapp:${messageSid}`;
+    const captureId = `telegram:${messageSid}`;
     const sorted = await sortAs(ctx, ownerId, captureId, text);
     if (sorted.status === "failed") return reply(`I could not sort that just now (${sorted.code}). Try again in a minute.`);
-    const lines: { text: string; project: string | null }[] = await ctx.runQuery(internal.whatsapp.sortedLines, { ownerId, captureId });
+    const lines: { text: string; project: string | null }[] = await ctx.runQuery(internal.telegram.sortedLines, { ownerId, captureId });
     return reply([`Sorted into ${lines.length} ${lines.length === 1 ? "line" : "lines"}:`, ...lines.map((l) => `- ${l.text}${l.project ? ` (${l.project})` : ""}`)].join("\n"));
   },
 });

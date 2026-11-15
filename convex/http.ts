@@ -7,7 +7,7 @@ import { handleEvent as slackEvent } from "./connectors/slack";
 import { DOWNLOAD_PREFIX, download as documentDownload } from "./delivery";
 import { SHARE_PREFIX, page as sharedPage } from "./shares";
 import { upload as transcriptionUpload } from "./transcription";
-import { STATUS_PATH, WHATSAPP_PATH, inbound as whatsappInbound, statusCallback as whatsappStatus } from "./whatsapp";
+import { TELEGRAM_PATH, inbound as telegramInbound } from "./telegram";
 
 // One route per event-capable provider. Each handler verifies its provider's signature
 // over the raw body before parsing and answers 2xx for valid deliveries it ignores.
@@ -23,9 +23,8 @@ http.route({ path: "/composio/callback", method: "GET", handler: composioCallbac
 http.route({ path: "/oauth/google/callback", method: "GET", handler: googleCallback });
 http.route({ path: "/oauth/microsoft/callback", method: "GET", handler: microsoftCallback });
 http.route({ path: "/transcription", method: "POST", handler: transcriptionUpload });
-// TARS on WhatsApp (Twilio): his messages, and Twilio's status for messages TARS sent. X-Twilio-Signature checked.
-http.route({ path: WHATSAPP_PATH, method: "POST", handler: whatsappInbound });
-http.route({ path: STATUS_PATH, method: "POST", handler: whatsappStatus });
+// TARS on Telegram: his messages to the bot. Telegram's secret header is checked.
+http.route({ path: TELEGRAM_PATH, method: "POST", handler: telegramInbound });
 // Public read-only shared pages: anyone with the link, no sign-in.
 http.route({ pathPrefix: SHARE_PREFIX, method: "GET", handler: sharedPage });
 // Word documents the user sent: anyone with the link downloads that one file, no sign-in.

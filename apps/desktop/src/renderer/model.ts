@@ -569,6 +569,9 @@ export function rowTime(ms: number, now: number): string {
 
 export type RowPreview = { text: string; time?: number; warn?: boolean };
 
+/** A row whose project has nothing to say: the list leaves its second line out. */
+export const NOTHING_PREPARED = "Nothing prepared yet";
+
 /** A project row's second line: first match wins, from stored data only. */
 export function rowPreview(p: ProjectSummary, ctx: { helpers: HelperRun[]; nudgeProjectId?: string }): RowPreview {
   const updated = p.prepared ? Date.parse(p.prepared.updatedAt) : NaN;
@@ -587,7 +590,7 @@ export function rowPreview(p: ProjectSummary, ctx: { helpers: HelperRun[]; nudge
     const due = next(open);
     return { text: `${open.length} open${due === undefined ? "" : `, next due ${shortDayFmt.format(due)}`}`, ...time };
   }
-  return { text: "Nothing prepared yet", ...time };
+  return { text: NOTHING_PREPARED, ...time };
 }
 
 /** The Today row's second line, from the brief's real state. */

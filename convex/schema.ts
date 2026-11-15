@@ -85,6 +85,10 @@ export const artifactFields = {
   text: v.string(),
   userEdited: v.boolean(),
   evidenceIds: v.array(v.string()),
+  // Set by the run that wrote the draft: its name.
+  title: v.optional(v.string()),
+  // How the draft is delivered: "document" (a Word document sent as a link; also when absent) or "reply" (its text is the email).
+  form: v.optional(v.union(v.literal("document"), v.literal("reply"))),
 };
 
 /** Block specs as stored; their props are checked by the domain catalog's Zod schemas before writing. */
@@ -235,13 +239,13 @@ export default defineSchema({
     stageTimes: v.optional(v.array(v.object({ stage: runStage, at: v.number() }))),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
-  // Gentle nudges for one of the user's commitments with a due time (key = commitmentKey, stable
+  // Gentle nudges for one of the user's commitments (key = commitmentKey, stable
   // across re-preparation). dueJob: the one due-1h reminder. offer: what is showing now, if anything.
   nudges: defineTable({
     ownerId: v.string(),
     projectId: v.string(),
     key: v.string(),
-    dueAt: v.string(),
+    dueAt: v.optional(v.string()), // absent: the request gave no due time, so it has an offer but no reminder
     dueJob: v.optional(v.id("_scheduled_functions")),
     lastNudgedAt: v.optional(v.number()),
     offer: v.optional(v.object({ key: v.string(), startedForYou: v.boolean() })),
@@ -446,7 +450,7 @@ export default defineSchema({
     kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message"), v.literal("send-document")),
     destination: v.string(),
     artifactId: v.string(),
-    // send-document: the bound subject and the Word document whose link the body carries.
+    // send-document: the bound subject and, for a document (not a reply), the Word document whose link the body carries.
     subject: v.optional(v.string()),
     documentId: v.optional(v.id("artifactDocuments")),
     // send-document: the real stages as they happen, for the chat to show.
@@ -485,25 +489,21 @@ export default defineSchema({
     credential: v.string(), // sealed {refreshToken}
   }).index("by_source", ["sourceId"]),
 
-  // TARS on WhatsApp: the one phone ("whatsapp:+E164") that may instruct TARS by message, one per owner.
-  // windowClosedAt: Twilio refused a message because the 24-hour session lapsed; his next message clears it.
-  whatsappLinks: defineTable({ ownerId: v.string(), phone: v.string(), linkedAt: v.number(), windowClosedAt: v.optional(v.number()) })
+  // TARS on Telegram: the one private chat (Telegram's chat id) that may instruct TARS by message, one per owner.
+  telegramLinks: defineTable({ ownerId: v.string(), chatId: v.string(), linkedAt: v.number() })
     .index("by_owner", ["ownerId"])
-    .index("by_phone", ["phone"]),
-  // Inbound MessageSids already accepted, so a redelivery is dropped. Holds no message text.
-  whatsappInbound: defineTable({ messageSid: v.string(), at: v.number() }).index("by_sid", ["messageSid"]),
+    .index("by_chat", ["chatId"]),
+  // Inbound update ids already accepted, so a redelivery is dropped. Holds no message text.
+  telegramInbound: defineTable({ messageSid: v.string(), at: v.number() }).index("by_sid", ["messageSid"]),
   // Each message to the linked phone, once per key: "reply:<MessageSid>", "nudge:<key>", "recap:<event>",
   // "send:<actionId>" (waiting until the send's outcome is recorded), "test:<ms>". Holds no message text.
-  whatsappOutbox: defineTable({
+  telegramOutbox: defineTable({
     ownerId: v.string(),
     key: v.string(),
-    state: v.union(v.literal("waiting"), v.literal("queued"), v.literal("sent"), v.literal("refused"), v.literal("failed")),
-    twilioSid: v.optional(v.string()),
-    code: v.optional(v.string()), // Twilio's error code or a short failure code, never message content
+    state: v.union(v.literal("waiting"), v.literal("queued"), v.literal("sent"), v.literal("failed")),
+    code: v.optional(v.string()), // Telegram's error code and words, or a short failure code; never message content
     at: v.number(),
-  })
-    .index("by_owner_key", ["ownerId", "key"])
-    .index("by_twilio_sid", ["twilioSid"]),
+  }).index("by_owner_key", ["ownerId", "key"]),
 
   // Explicit, owner-bound recording sessions for dictation; the row's _id is the recoveryId.
   // Holds no audio or transcript. Consumed on success, deleted by a one-shot job at expiry.

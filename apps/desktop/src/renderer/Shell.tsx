@@ -4,7 +4,7 @@
 // TARS at the front desk on the right. Below 1024px the right pane becomes an overlay that starts closed.
 import { createContext, useEffect, useState, type ReactNode } from "react";
 import { RECAP_EMPTY, type ClosingRecap, type RecapList } from "@companion/domain/recap";
-import { rowTime, type RowPreview, type SessionEvent, type SessionState } from "./model";
+import { rowTime, type RowPreview, type SessionEvent, type SessionState, NOTHING_PREPARED } from "./model";
 import { Boundary } from "./boundary";
 import { Desk } from "./Desk";
 import { NewProject, RetryNote } from "./ui";
@@ -93,9 +93,11 @@ function Row({ current, icon, name, time, preview, onClick }: { current: boolean
           <span className="row-name">{name}</span>
           {time && <span className="row-time num">{time}</span>}
         </span>
-        <span key={preview.text} className="row-preview" data-warn={preview.warn || undefined}>
-          {preview.text}
-        </span>
+        {preview.text !== NOTHING_PREPARED && (
+          <span key={preview.text} className="row-preview" data-warn={preview.warn || undefined}>
+            {preview.text}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -279,7 +281,9 @@ export function Shell({ route, today, projects, account, pet, session, title, su
       {pane !== null && (
         <aside id="desk-pane" className="pane" aria-labelledby="pane-h" inert={!open}>
           <div className="pane-head">
-            <h2 id="pane-h">TARS at the front desk</h2>
+            <h2 id="pane-h" className="sr-only">
+              TARS at the front desk
+            </h2>
             {overlay && (
               <button type="button" className="icon-button" aria-label="Close TARS's desk" onClick={() => setOpen(false)}>
                 <Icon name="close" />

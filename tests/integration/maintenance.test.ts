@@ -34,7 +34,7 @@ const EXPECTED = {
   dismissedInvitations: 1,
   deliveryReceipts: 2,
   actions: 1,
-  whatsappOutbox: 1,
+  telegramOutbox: 1,
   evidence: 1,
   tradeoffFlags: 1,
 };
@@ -51,7 +51,7 @@ async function seed(ctx: MutationCtx, ownerId: string, projectName: string) {
   await ctx.db.insert("deliveryReceipts", { ownerId, key: `nudge:${nudgeId}@1`, channel: "panel", at: 1 });
   await ctx.db.insert("deliveryReceipts", { ownerId, key: `task:${projectId}@${NOW}`, channel: "panel", at: 1 });
   await ctx.db.insert("dismissedInvitations", { ownerId, key: `task:${projectId}@${NOW}`, at: 1 });
-  await ctx.db.insert("whatsappOutbox", { ownerId, key: `nudge:${key}`, state: "sent", at: 1 });
+  await ctx.db.insert("telegramOutbox", { ownerId, key: `nudge:${key}`, state: "sent", at: 1 });
   await ctx.db.insert("tradeoffFlags", { ownerId, key, state: "none" });
   await ctx.db.insert("threadMessages", { ownerId, projectId, role: "user", text: "hi", blocks: [], createdAt: 1 });
   const art = { ownerId, projectId, revision: "r2", text: "Draft", userEdited: false, evidenceIds: [] };

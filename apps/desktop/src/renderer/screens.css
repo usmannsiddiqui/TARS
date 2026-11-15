@@ -1130,6 +1130,36 @@
   color: var(--ink);
 }
 
+.say-text p + p,
+.say-text p + ul,
+.say-text p + ol,
+.say-text ul + p,
+.say-text ol + p {
+  margin-top: 10px;
+}
+
+.say-text ul,
+.say-text ol {
+  padding-left: 22px;
+}
+
+.say-text li + li {
+  margin-top: 4px;
+}
+
+.say-text strong {
+  font-weight: 600;
+}
+
+.say-source-link {
+  text-decoration: none;
+  border-radius: 999px;
+}
+
+.say-source-link:hover .source-chip-label {
+  text-decoration: underline;
+}
+
 .say-sources {
   display: flex;
   flex-wrap: wrap;
@@ -1405,4 +1435,44 @@
 .dump-fix-body .text-button {
   font-size: 14px;
   padding-bottom: 6px;
+}
+
+/* ---------- The right pane reads as one column: hairlines between sections, no boxes inside boxes. ---------- */
+.pane-project > .block,
+.pane-project > .card {
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.pane-project > .open-items {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.pane-head {
+  min-height: 12px;
+}
+
+/* A revision's change note is one line in the chat; the draft itself has the rest. */
+.doc-change {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+/* A row with only a name is one line tall and centred; a row with a second line keeps its icon at the top. */
+.row {
+  align-items: center;
+  min-height: 40px;
+}
+
+.row:has(.row-preview) {
+  align-items: flex-start;
 }

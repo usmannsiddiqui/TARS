@@ -383,7 +383,7 @@ describe("ipc router: wired routes", () => {
     expect(shortcutCalls).toEqual(["Alt+Shift+K"]);
   });
 
-  it("the Mac no longer texts: the old iMessage channels are not on the allowlist (WhatsApp is backend-only)", async () => {
+  it("the Mac no longer texts: the old iMessage channels are not on the allowlist (Telegram is backend-only)", async () => {
     const { router } = setup(null);
     for (const channel of ["selfText:get", "selfText:set", "selfText:test", "selfText:recap"]) {
       await expect(router.handle(channel, trusted, undefined)).rejects.toBeInstanceOf(IpcRejected);

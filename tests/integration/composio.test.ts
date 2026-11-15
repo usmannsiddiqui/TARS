@@ -75,7 +75,7 @@ function fakeComposio(account: { id: string; userId: () => Promise<string>; tool
   } satisfies Record<string, Stub>;
 }
 
-/** Cloud-processing consent is off unless a test is about automatic preparation, so no model run is scheduled. */
+/** Cloud-processing consent is off unless a test is about the run a message starts, so no model run is scheduled. */
 async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams" | "github", selectors: string[], opts: { cloudProcessing?: boolean } = {}) {
   const t = convexTest(schema, modules);
   const { alice, bob } = makeOwners();
@@ -101,6 +101,10 @@ async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams" | "githu
   return { t, alice, bob, asAlice, projectId, sourceId, grant, evidence, connection, account };
 }
 type Ctx = Awaited<ReturnType<typeof setup>>;
+
+/** Agent runs scheduled and not yet started, oldest first. */
+const pendingRuns = async (ctx: Ctx) =>
+  (await ctx.t.run((db) => db.db.system.query("_scheduled_functions").collect())).filter((job) => job.name === "runs:onMessage" && job.state.kind === "pending");
 
 async function connect(ctx: Ctx, tools: Record<string, Stub> = {}) {
   stubFetch(fakeComposio(ctx.account, tools));
@@ -225,27 +229,20 @@ describe("composio events", () => {
     });
   });
 
-  test("a webhook message on a consenting grant leads to exactly one automatic preparation", async () => {
-    // Hold scheduled jobs (convex-test runs them on setTimeout) so the run is observed while pending.
+  test("each new webhook message on a consenting grant starts exactly one run, a redelivery none", async () => {
+    // Hold scheduled jobs (convex-test runs them on setTimeout) so the runs are observed while pending.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const ctx = await setup("slack", [CHANNEL], { cloudProcessing: true });
     await connect(ctx);
-    const automatic = async () =>
-      (await ctx.t.run((db) => db.db.system.query("_scheduled_functions").collect())).filter(
-        (job) => job.name.includes("runAutomatic") && job.state.kind === "pending",
-      );
-    expect(await automatic()).toHaveLength(0);
+    expect(await pendingRuns(ctx)).toHaveLength(0);
     await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage());
-    // A second new message and a redelivery of the first coalesce into the same pending run.
     await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage(CHANNEL, "1763150460.000300"));
     await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage());
-    expect(await ctx.evidence()).toHaveLength(2);
-    const jobs = await automatic();
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]!.args[0]).toEqual({ ownerId: ctx.alice.ownerId, projectId: ctx.projectId });
-    expect(await ctx.t.run((db) => db.db.query("preparationRuns").collect())).toMatchObject([
-      { ownerId: ctx.alice.ownerId, projectId: ctx.projectId, state: "pending", followUp: false },
-    ]);
+    const rows = await ctx.evidence();
+    expect(rows).toHaveLength(2);
+    expect((await pendingRuns(ctx)).map((job) => job.args[0])).toEqual(rows.map((row) => ({ ownerId: ctx.alice.ownerId, evidenceId: row.id })));
+    // A message never starts a preparation.
+    expect(await ctx.t.run((db) => db.db.query("preparationRuns").collect())).toEqual([]);
   });
 
   test("the same event delivered twice is stored once", async () => {
@@ -448,17 +445,15 @@ describe("composio gmail speed", () => {
     expect(await ctx.evidence()).toHaveLength(0);
   });
 
-  test("a fetched message on a consenting grant leads to exactly one automatic preparation", async () => {
+  test("each fetched message on a consenting grant starts exactly one run", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const ctx = await setup("gmail", [LABEL], { cloudProcessing: true });
     await connect(ctx, fetchTool([fetched("18c3", [LABEL]), fetched("18c5", [LABEL], "2026-11-14T10:41:00Z")]));
     await ctx.asAlice.action(api.connectors.composio.checkMail, {});
-    expect(await ctx.evidence()).toHaveLength(2);
-    const jobs = (await ctx.t.run((db) => db.db.system.query("_scheduled_functions").collect())).filter(
-      (job) => job.name.includes("runAutomatic") && job.state.kind === "pending",
-    );
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]!.args[0]).toEqual({ ownerId: ctx.alice.ownerId, projectId: ctx.projectId });
+    const rows = await ctx.evidence();
+    expect(rows).toHaveLength(2);
+    expect((await pendingRuns(ctx)).map((job) => job.args[0])).toEqual(rows.map((row) => ({ ownerId: ctx.alice.ownerId, evidenceId: row.id })));
+    expect(await ctx.t.run((db) => db.db.query("preparationRuns").collect())).toEqual([]);
   });
 
   test("an existing connection without the marker gets its triggers re-upserted once", async () => {

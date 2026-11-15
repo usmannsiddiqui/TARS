@@ -22,6 +22,8 @@ export const ArtifactSchema = z.strictObject({
   text: z.string().max(MAX_ARTIFACT_TEXT),
   userEdited: z.boolean(),
   evidenceIds: z.array(EvidenceIdSchema),
+  title: z.string().exactOptional(),
+  form: z.enum(["document", "reply"]).exactOptional(),
 }) satisfies z.ZodType<Artifact>;
 
 export const FIRST_REVISION = "1" as RevisionId;

@@ -521,11 +521,11 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           }}
           shortcut={{ status: { accelerator: "CommandOrControl+Shift+Space", registered: false, error: "another app already uses it" }, onSet: async (a) => record("shortcut.set", a) }}
           talkKey={{ status: { key: "Right Option (⌥)", state: "permission-missing" }, onOpenAccessibility: async () => record("talk.openAccessibilitySettings") }}
-          whatsapp={{
-            status: { sandbox: "+14155238886", linked: false, phone: null, windowClosed: false, last: null },
-            onLink: async () => (record("whatsapp.link"), "TARS-ABC234"),
-            onUnlink: async () => record("whatsapp.unlink"),
-            onTest: async () => record("whatsapp.test"),
+          telegram={{
+            status: { bot: "illustrative_tars_bot", linked: false, last: null },
+            onLink: async () => (record("telegram.link"), "TARS-ABC234"),
+            onUnlink: async () => record("telegram.unlink"),
+            onTest: async () => record("telegram.test"),
           }}
           projects={projects}
           onAdd={async (kind, projectId) => record("chooseSource", kind, projectId)}

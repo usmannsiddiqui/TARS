@@ -16,12 +16,21 @@ const completed = (output: unknown): Envelope => ({
   status: "completed",
   output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }],
 });
+let callSeq = 0;
+const call = (name: string, args: unknown) => ({ type: "function_call", call_id: `call-${++callSeq}`, name, arguments: JSON.stringify(args) });
+const says = (text: string) => ({ type: "message", content: [{ type: "output_text", text }] });
+const turns = (...outputs: unknown[][]): Envelope[] => outputs.map((output) => ({ status: "completed", output }));
 let fetchMock: ReturnType<typeof vi.fn>;
-/** Each call runs `during` (if any) before replying: a stand-in for work that lands while the model thinks. */
-function stubModel(reply: Envelope, during?: () => Promise<unknown>) {
+/**
+ * Replies answer in order (the last repeats). `during` runs once, inside the first request: a stand-in
+ * for work that lands while the model thinks.
+ */
+function stubModel(replies: Envelope | Envelope[], during?: () => Promise<unknown>) {
+  const list = Array.isArray(replies) ? replies : [replies];
+  let n = 0;
   fetchMock = vi.fn(async () => {
-    await during?.();
-    return new Response(JSON.stringify(reply), { status: 200 });
+    if (n === 0) await during?.();
+    return new Response(JSON.stringify(list[Math.min(n++, list.length - 1)]), { status: 200 });
   });
   vi.stubGlobal("fetch", fetchMock);
 }
@@ -85,9 +94,9 @@ function setup() {
   return { t, alice, bob, asAlice, asBob, project, artifactFor, get, versionCount, evidence, chat, lastReply };
 }
 
-/** The chat model choosing "revise" with this text. */
+/** The chat run saving this text as a new revision, then saying what changed. */
 const revises = (text: string, changeSummary: string) =>
-  completed({ outcome: "revise", reply: changeSummary, revisedText: text, changeSummary, evidenceIds: [] });
+  turns([call("write_draft", { title: "Run-through", form: "document", text, changeSummary })], [says(changeSummary)]);
 
 describe("chosen focus and restoration", () => {
   test("switch_restores_each_projects_draft_and_next_step", async () => {
@@ -180,8 +189,8 @@ describe("protected edits and revisions", () => {
     const doc = (await lastReply(guides)).blocks.find((b) => b.type === "document")!.props as { revision: string; undoRevision: string; changeSummary: string };
     expect(doc).toMatchObject({ revision: revised.revision, undoRevision: original.revision, changeSummary: "Shortened to the key points." });
     // The model saw his words and the current text.
-    const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input);
-    expect(sent).toMatchObject({ message: "Make it shorter.", draft: "Long prepared run-through." });
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { input: { content: string }[] };
+    expect(JSON.parse(body.input[0]!.content)).toMatchObject({ message: "Make it shorter.", draft: { text: "Long prepared run-through.", revision: original.revision } });
     expect(await versionCount()).toBe(1);
 
     const undone = await asAlice.mutation(api.artifacts.undoRevision, {
@@ -196,24 +205,26 @@ describe("protected edits and revisions", () => {
     expect(await versionCount()).toBe(2);
   });
 
-  test("late_revision_cannot_overwrite_user_edit", async () => {
+  test("late_revision_keeps_the_user_edit_one_undo_away", async () => {
     const { asAlice, project, artifactFor, get, chat, lastReply } = setup();
     const guides = await project("AI Guides");
     const original = await artifactFor(guides, "Prepared run-through.");
     const userEditedText = "My own wording, typed while the model was working.";
 
-    // The user's edit lands while the model call is in flight: the draft is now newer than the one the model saw.
-    stubModel(revises("Formal run-through.", "Made formal."), () =>
-      asAlice.mutation(api.artifacts.saveEdit, { artifactId: original.id, baseRevision: original.revision, text: userEditedText }),
-    );
+    // The user's edit lands while the model call is in flight; the run's revision goes on top of it.
+    stubModel(revises("Formal run-through.", "Made formal."), async () => {
+      const edit = await asAlice.mutation(api.artifacts.saveEdit, { artifactId: original.id, baseRevision: original.revision, text: userEditedText });
+      expect(edit.status).toBe("applied");
+    });
     await chat(guides, "Make it formal.");
     const current = await get(guides);
-    expect(current.text).toBe(userEditedText);
-    expect(current.userEdited).toBe(true);
-    // The proposed text is kept separately for the user to apply later, and the chat says so.
-    expect(current.suggestions.map((s) => [s.kind, s.text, s.baseRevision])).toEqual([["revision", "Formal run-through.", original.revision]]);
-    const work = (await lastReply(guides)).blocks.find((b) => b.type === "work")!.props as { steps: { id: string; status: string }[] };
-    expect(work.steps.map((s) => [s.id, s.status])).toEqual([["read", "done"], ["revise", "failed"]]);
+    expect(current.text).toBe("Formal run-through.");
+    // His edit is never lost: it is exactly what Undo restores.
+    const doc = (await lastReply(guides)).blocks.find((b) => b.type === "document")!.props as { revision: string; undoRevision: string };
+    expect(doc).toMatchObject({ revision: current.revision });
+    const undone = await asAlice.mutation(api.artifacts.undoRevision, { artifactId: original.id, expectedCurrent: doc.revision, undoRevision: doc.undoRevision });
+    expect(undone.status).toBe("applied");
+    expect((await get(guides)).text).toBe(userEditedText);
   });
 
   test("undo_cannot_erase_intervening_edit", async () => {
@@ -321,10 +332,10 @@ describe("protected edits and revisions", () => {
       expect(await versionCount()).toBe(0);
     };
 
+    // Failures of the request itself: the chat run and the source suggestion both stop honestly.
     const failures: Envelope[] = [
       { status: "completed", output: [{ type: "message", content: [{ type: "refusal", refusal: "no" }] }] },
       { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [] },
-      completed({ text: 42 }),
     ];
     for (const reply of failures) {
       stubModel(reply);
@@ -334,6 +345,12 @@ describe("protected edits and revisions", () => {
       });
       await unchanged();
     }
+    // An answer of the wrong shape fails the structured source suggestion (a chat run's plain words are just its answer).
+    stubModel(completed({ text: 42 }));
+    await expect(asAlice.action(api.artifacts.suggestSourceAdjustment, { artifactId: original.id })).rejects.toMatchObject({
+      data: { code: "model_failed" },
+    });
+    await unchanged();
     vi.stubEnv("OPENAI_API_KEY", "");
     await revise();
     expect(((await lastReply(guides)).blocks[0]!.props as { steps: { error: string }[] }).steps[0]!.error).toMatch(/missing_OPENAI_API_KEY/);

@@ -22,7 +22,7 @@ const TABLES = [
   "dismissedInvitations",
   "deliveryReceipts",
   "actions",
-  "whatsappOutbox",
+  "telegramOutbox",
   "evidence",
   "tradeoffFlags",
 ] as const satisfies readonly TableNames[];
@@ -69,7 +69,7 @@ export const resetProject = internalMutation({
     for (const nudge of nudges) {
       const [nLo, nHi] = range(`nudge:${nudge._id}@`);
       add("deliveryReceipts", await db.query("deliveryReceipts").withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).gte("key", nLo).lt("key", nHi)).take(LIMIT + 1));
-      add("whatsappOutbox", await db.query("whatsappOutbox").withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", `nudge:${nudge.key}`)).take(LIMIT + 1));
+      add("telegramOutbox", await db.query("telegramOutbox").withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", `nudge:${nudge.key}`)).take(LIMIT + 1));
     }
     add("deliveryReceipts", await db.query("deliveryReceipts").withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).gte("key", tLo).lt("key", tHi)).take(LIMIT + 1));
     add("dismissedInvitations", await db.query("dismissedInvitations").withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).gte("key", tLo).lt("key", tHi)).take(LIMIT + 1));

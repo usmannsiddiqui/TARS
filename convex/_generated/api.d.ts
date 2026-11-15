@@ -33,10 +33,11 @@ import type * as memory from "../memory.js";
 import type * as prepare from "../prepare.js";
 import type * as projects from "../projects.js";
 import type * as recap from "../recap.js";
+import type * as runs from "../runs.js";
 import type * as shares from "../shares.js";
+import type * as telegram from "../telegram.js";
 import type * as thread from "../thread.js";
 import type * as transcription from "../transcription.js";
-import type * as whatsapp from "../whatsapp.js";
 
 import type {
   ApiFromModules,
@@ -70,10 +71,11 @@ declare const fullApi: ApiFromModules<{
   prepare: typeof prepare;
   projects: typeof projects;
   recap: typeof recap;
+  runs: typeof runs;
   shares: typeof shares;
+  telegram: typeof telegram;
   thread: typeof thread;
   transcription: typeof transcription;
-  whatsapp: typeof whatsapp;
 }>;
 
 /**

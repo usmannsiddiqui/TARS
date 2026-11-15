@@ -1,6 +1,7 @@
 // @vitest-environment edge-runtime
-// New evidence -> one automatic preparation -> the user's due commitment gets a draft and one
-// "started for you" offer, then gentle nudges. Source text never authorizes anything.
+// New mail -> one agent run -> the user's request gets a draft and one "started for you" offer, then
+// gentle nudges. Other new evidence (a local folder here) -> one automatic preparation, which stores
+// commitments and their nudge rows but never drafts, speaks or offers. Source text never authorizes anything.
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ProjectIdSchema, type Evidence, type ProjectId } from "@companion/domain";
@@ -14,6 +15,7 @@ const RESPONSES_URL = "https://api.openai.com/v1/responses";
 const HOUR = 3_600_000;
 const NOW = "2026-11-14T15:00:00.000Z"; // Saturday 10:00 in New York
 const DUE = "2026-11-14T22:00:00.000Z"; // legacy form: a UTC instant from the model is taken as given (it is now asked for local wall time)
+const DUE_LOCAL = "2026-11-14T17:00"; // the same instant as a run's local wall time in New York
 
 const completed = (output: unknown) => ({
   status: "completed",
@@ -31,7 +33,7 @@ const prepared = (overrides: Partial<PreparationOutput>): PreparationOutput => (
 });
 
 let fetchMock: ReturnType<typeof vi.fn>;
-/** Every model call answers with `reply(callIndex)`; `gate` (when set) holds a call until released. */
+/** A preparation: every model call answers with `reply(callIndex)`; `gate` (when set) holds a call until released. */
 function stubModel(reply: (n: number) => unknown, gate?: Promise<void>) {
   let n = 0;
   fetchMock = vi.fn(async () => {
@@ -41,6 +43,23 @@ function stubModel(reply: (n: number) => unknown, gate?: Promise<void>) {
   });
   vi.stubGlobal("fetch", fetchMock);
 }
+
+let callSeq = 0;
+const call = (name: string, args: unknown) => ({ type: "function_call", call_id: `call-${++callSeq}`, name, arguments: JSON.stringify(args) });
+const says = (text: string) => ({ type: "message", content: [{ type: "output_text", text }] });
+/** An agent run: model turns answer in order, each the output items of one response; the last repeats. */
+function stubRun(turns: unknown[][]) {
+  let n = 0;
+  fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "completed", output: turns[Math.min(n++, turns.length - 1)] }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+}
+/** The run's steps for one request: record it, draft it, then speak. */
+const startsRequest = (projectId: ProjectId, request: string, dueLocal: string | null, title = "Budget summary") => [
+  [call("start_request", { projectId, request, dueLocal })],
+  [call("write_draft", { title, form: "document", text: `Illustrative draft: ${request}.`, changeSummary: "First draft." })],
+  [says(`${request}: I drafted it; tell me what to change.`)],
+];
+const asksNothing = [[says("")]];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -60,17 +79,17 @@ function setup() {
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice", name: "Alice" });
   const project = async (name: string): Promise<ProjectId> =>
     ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name }));
-  const sourceOf = new Map<ProjectId, string>();
-  /** One grant per project (created on first use), then ingest one illustrative record. */
-  const evidence = async (projectId: ProjectId, text: string, opts: { cloudProcessing?: boolean } = {}): Promise<Evidence> => {
-    let sourceId = sourceOf.get(projectId);
+  const sourceOf = new Map<string, string>();
+  /** One grant per project and kind (created on first use), then ingest one illustrative record. */
+  const ingest = async (kind: "obsidian" | "gmail", projectId: ProjectId, text: string, opts: { cloudProcessing?: boolean } = {}): Promise<Evidence> => {
+    let sourceId = sourceOf.get(`${kind}:${projectId}`);
     const record = makeEvidence(alice.ownerId, [projectId], { text, ...(sourceId ? { sourceId: sourceId as Evidence["sourceId"] } : {}) });
     if (sourceId === undefined) {
       sourceId = record.sourceId;
-      sourceOf.set(projectId, sourceId);
+      sourceOf.set(`${kind}:${projectId}`, sourceId);
       await asAlice.mutation(api.evidence.setGrant, {
         id: sourceId,
-        kind: "gmail",
+        kind,
         selectors: ["illustrative-label"],
         projectIds: [projectId],
         read: true,
@@ -83,9 +102,13 @@ function setup() {
     expect(await t.mutation(internal.evidence.ingest, { ownerId: alice.ownerId, sourceId, record })).toBe("accepted");
     return record;
   };
+  /** A local-folder note: starts an automatic preparation. */
+  const evidence = (projectId: ProjectId, text: string, opts: { cloudProcessing?: boolean } = {}) => ingest("obsidian", projectId, text, opts);
+  /** A mail someone sent: starts an agent run. */
+  const mail = (projectId: ProjectId, text: string, opts: { cloudProcessing?: boolean } = {}) => ingest("gmail", projectId, text, opts);
   /** Run whatever is due now (and follow-ups it schedules for now), never later deadlines. */
   const settle = async () => {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await vi.advanceTimersByTimeAsync(5);
       await t.finishInProgressScheduledFunctions();
     }
@@ -97,7 +120,7 @@ function setup() {
       .map((job) => [job.name, new Date(job.scheduledTime).toISOString()])
       .sort();
   const offers = () => asAlice.query(api.briefs.listNudgeOffers, {});
-  return { t, alice, asAlice, project, evidence, settle, all, pendingJobs, offers };
+  return { t, alice, asAlice, project, evidence, mail, settle, all, pendingJobs, offers };
 }
 
 const dueCommitment = (id: string, quote: string) => ({
@@ -110,7 +133,7 @@ const dueCommitment = (id: string, quote: string) => ({
   evidenceIds: [id],
 });
 
-describe("automatic preparation on new evidence", () => {
+describe("a new mail starts a run", () => {
   test("new_mail_with_my_due_task_gets_a_draft_and_one_started_offer", async () => {
     // The due-1h reminder, beside the two daily brief deadlines the zone setting schedules.
     const JOBS = [
@@ -118,25 +141,24 @@ describe("automatic preparation on new evidence", () => {
       ["briefs:prepareEvening", "2026-11-15T00:30:00.000Z"],
       ["briefs:prepareMorning", "2026-11-15T14:00:00.000Z"],
     ];
-    const { asAlice, project, evidence, settle, all, pendingJobs, offers } = setup();
+    const { asAlice, project, mail, settle, all, pendingJobs, offers } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
     const budget = await project("Budget");
     const other = await project("Other");
     await asAlice.mutation(api.projects.switchProject, { targetProjectId: other, userInitiated: true });
-    let mailId = "";
-    stubModel(() => prepared({ evidenceIds: [mailId], commitments: [dueCommitment(mailId, "Alice, please send the budget to Dana by 5pm")] }));
-    mailId = (await evidence(budget, "Alice, please send the budget to Dana by 5pm today.")).id;
+    stubRun(startsRequest(budget, "Send the budget to Dana", DUE_LOCAL));
+    await mail(budget, "Alice, please send the budget to Dana by 5pm today.");
 
     await settle();
 
-    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([RESPONSES_URL]);
+    expect(new Set(fetchMock.mock.calls.map((c) => c[0]))).toEqual(new Set([RESPONSES_URL]));
     // Who the user is came from the verified sign-in stored at connect time, not from the payload.
-    const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input);
-    expect(sent.user).toEqual({ name: "Alice", email: null });
+    const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input[0].content);
+    expect(sent.user).toEqual({ name: "Alice" });
     const mine = (await asAlice.query(api.prepare.listCommitments, { projectId: budget })).filter((c) => c.ownership === "user");
     expect(mine.map((c) => [c.text, c.state, c.dueAt])).toEqual([["Send the budget to Dana", "open", DUE]]);
     const draft = await asAlice.query(api.artifacts.getArtifact, { projectId: budget });
-    expect(draft?.text).toBe("Illustrative draft: the budget summary Dana asked for.");
+    expect(draft?.text).toBe("Illustrative draft: Send the budget to Dana.");
     expect(draft?.userEdited).toBe(false);
     const shown = await offers();
     expect(shown).toHaveLength(1);
@@ -151,15 +173,30 @@ describe("automatic preparation on new evidence", () => {
     expect(await all("preparationRuns")).toEqual([]);
     expect(await all("actions")).toEqual([]);
 
-    // A second preparation of the same commitment neither redrafts nor re-offers nor reschedules.
-    await evidence(budget, "Illustrative follow-up: thanks!");
+    // A later mail that asks for nothing neither redrafts nor re-offers nor reschedules.
+    stubRun(asksNothing);
+    await mail(budget, "Illustrative follow-up: thanks!");
     await settle();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(await all("artifacts")).toHaveLength(1);
-    expect(await offers()).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await all("artifacts")).toMatchObject([{ revision: "1" }]);
+    expect(await offers()).toEqual(shown);
     expect(await pendingJobs()).toEqual(JOBS);
   });
 
+  test("no_cloud_processing_consent_means_no_run", async () => {
+    const { project, mail, evidence, settle, all, pendingJobs } = setup();
+    const budget = await project("Budget");
+    stubModel(() => prepared({}));
+    await mail(budget, "Alice, please send the budget to Dana by 5pm today.", { cloudProcessing: false });
+    await evidence(budget, "Alice, please send the budget to Dana by 5pm today.", { cloudProcessing: false });
+    await settle();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await all("preparationRuns")).toEqual([]);
+    expect(await pendingJobs()).toEqual([]);
+  });
+});
+
+describe("automatic preparation on new evidence", () => {
   test("a_burst_of_evidence_coalesces_into_one_run_and_at_most_one_follow_up", async () => {
     const { project, evidence, settle, all } = setup();
     const budget = await project("Budget");
@@ -181,18 +218,7 @@ describe("automatic preparation on new evidence", () => {
     expect(await all("preparationRuns")).toEqual([]);
   });
 
-  test("no_cloud_processing_consent_means_no_run", async () => {
-    const { project, evidence, settle, all, pendingJobs } = setup();
-    const budget = await project("Budget");
-    stubModel(() => prepared({}));
-    await evidence(budget, "Alice, please send the budget to Dana by 5pm today.", { cloudProcessing: false });
-    await settle();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(await all("preparationRuns")).toEqual([]);
-    expect(await pendingJobs()).toEqual([]);
-  });
-
-  test("injected_instructions_in_new_mail_create_no_action_send_or_memory", async () => {
+  test("injected_instructions_in_new_evidence_create_no_action_send_or_memory", async () => {
     const { t, asAlice, project, evidence, settle, all, offers } = setup();
     const budget = await project("Budget");
     const texts = [
@@ -219,7 +245,7 @@ describe("automatic preparation on new evidence", () => {
     await settle();
 
     expect(fetchMock).toHaveBeenCalled();
-    expect(new Set(fetchMock.mock.calls.map((call) => call[0]))).toEqual(new Set([RESPONSES_URL]));
+    expect(new Set(fetchMock.mock.calls.map((c) => c[0]))).toEqual(new Set([RESPONSES_URL]));
     for (const table of Object.keys(schema.tables).filter((name) => /action/i.test(name))) {
       expect(await t.run((ctx) => ctx.db.query(table as never).collect())).toEqual([]);
     }
@@ -240,7 +266,7 @@ describe("one commitment per request", () => {
   ] as const;
   const NEW = ["Alice, please send the AI Guides summary by tomorrow at 5 PM.", "send the AI Guides summary by tomorrow at 5 PM", "2026-11-15T17:00"] as const;
 
-  /** Three older similar requests, prepared once; `next` decides what the model says about the new mail. */
+  /** Three older similar requests, prepared once; `next` decides what the model says about the new note. */
   async function olderThenNew(next: (older: string[], fresh: string) => PreparationOutput["commitments"]) {
     const s = setup();
     await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
@@ -255,13 +281,13 @@ describe("one commitment per request", () => {
     for (const [text] of OLDER) older.push((await s.evidence(guides, text)).id);
     await s.settle();
     const before = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
-    const counts = { nudges: (await s.all("nudges")).length, messages: (await s.all("threadMessages")).length };
+    const counts = { nudges: (await s.all("nudges")).length };
     fresh = (await s.evidence(guides, NEW[0])).id;
     await s.settle();
     return { ...s, guides, older, fresh, before, counts, olderCommitments, ask };
   }
 
-  test("a_new_mail_like_earlier_ones_gets_its_own_commitment_due_time_nudge_message_and_draft", async () => {
+  test("a_new_note_like_earlier_ones_gets_its_own_commitment_due_time_and_nudge_and_no_message_or_draft", async () => {
     const s = await olderThenNew((older, fresh) => [
       ...OLDER.map((o, i) => ({ ...dueCommitment(older[i]!, `Alice, please ${o[1]}`), text: `Send the AI Guides ${["report", "summary", "recap"][i]}`, dueAt: o[2] })),
       { ...dueCommitment(fresh, `Alice, please ${NEW[1]}`), text: "Send the AI Guides summary", dueAt: NEW[2] },
@@ -272,20 +298,44 @@ describe("one commitment per request", () => {
     expect([created.dueAt, created.evidenceIds]).toEqual(["2026-11-15T22:00:00.000Z", [s.fresh]]); // 17:00 New York
     for (const old of s.before) expect(mine).toContainEqual(old); // untouched
     expect((await s.all("nudges")).length).toBe(s.counts.nudges + 1);
-    expect((await s.all("threadMessages")).length).toBe(s.counts.messages + 1);
-    expect(await s.all("artifacts")).toHaveLength(1);
+    // A preparation never speaks, drafts or offers.
+    expect(await s.all("threadMessages")).toEqual([]);
+    expect(await s.all("artifacts")).toEqual([]);
+    expect(await s.offers()).toEqual([]);
     expect((await s.all("preparedWork"))[0]!.uncitedNewest).toBe(0);
   });
 
-  test("a_model_that_still_folds_the_new_mail_into_an_old_request_invents_no_due_time_and_reports_it", async () => {
+  test("a_model_that_still_folds_the_new_note_into_an_old_request_invents_no_due_time_and_reports_it", async () => {
     const s = await olderThenNew((older, fresh) => [
       { ...dueCommitment(older[0]!, `Alice, please ${OLDER[0][1]}`), text: "Send the AI Guides report", dueAt: null, evidenceIds: [older[0]!, older[1]!, fresh] },
     ]);
     const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: s.guides })).filter((c) => c.ownership === "user");
     expect(mine.some((c) => c.dueAt === "2026-11-15T22:00:00.000Z")).toBe(false);
     expect(mine.find((c) => c.evidenceIds.includes(s.fresh))?.dueAt).toBeUndefined();
-    expect((await s.all("threadMessages")).length).toBe(s.counts.messages);
     expect((await s.all("preparedWork"))[0]!.uncitedNewest).toBe(1);
+  });
+
+  test("each_new_mail_like_earlier_ones_starts_its_own_request_message_and_nudge", async () => {
+    const s = setup();
+    await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const guides = await s.project("AI Guides");
+    for (const [i, [text, , dueLocal]] of OLDER.entries()) {
+      stubRun(startsRequest(guides, `Send the AI Guides ${["report", "summary", "recap"][i]}`, dueLocal));
+      await s.mail(guides, text);
+      await s.settle();
+    }
+    const before = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
+    stubRun(startsRequest(guides, "Send the AI Guides summary", NEW[2]));
+    const fresh = (await s.mail(guides, NEW[0])).id;
+    await s.settle();
+
+    const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
+    expect(mine).toHaveLength(4);
+    expect(mine.find((c) => c.evidenceIds.includes(fresh))).toMatchObject({ text: "Send the AI Guides summary", dueAt: "2026-11-15T22:00:00.000Z", evidenceIds: [fresh] });
+    for (const old of before) expect(mine).toContainEqual(old); // untouched
+    expect(await s.all("nudges")).toHaveLength(4);
+    expect(await s.all("threadMessages")).toHaveLength(4);
+    expect(await s.all("artifacts")).toMatchObject([{ revision: "4" }]); // each request is the next revision of the one draft
   });
 });
 
@@ -293,14 +343,14 @@ describe("stable commitment identity across re-preparation", () => {
   const ASK = "Alice, please send the budget to Dana by 5pm";
   const DUE2 = "2026-11-14T23:00:00.000Z";
 
-  test("reworded_commitment_from_the_same_mail_stays_one_commitment_one_nudge_one_offer_one_message", async () => {
+  test("reworded_commitment_from_the_same_note_stays_one_commitment_and_one_nudge_and_is_never_spoken_or_offered", async () => {
     const { asAlice, project, evidence, settle, all, offers } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
     const budget = await project("Budget");
-    let mail = "";
+    let note = "";
     const wording = ["Send the budget to Dana", "Email Dana the budget summary", "Get Dana the budget"];
-    stubModel((n) => prepared({ evidenceIds: [mail], commitments: [{ ...dueCommitment(mail, ASK), text: wording[n % 3]! }] }));
-    mail = (await evidence(budget, `${ASK} today.`)).id;
+    stubModel((n) => prepared({ evidenceIds: [note], commitments: [{ ...dueCommitment(note, ASK), text: wording[n % 3]! }] }));
+    note = (await evidence(budget, `${ASK} today.`)).id;
     await settle();
     for (const text of ["Illustrative follow-up: thanks!", "Illustrative follow-up: one more thing."]) {
       await evidence(budget, text);
@@ -311,50 +361,42 @@ describe("stable commitment identity across re-preparation", () => {
     const mine = (await asAlice.query(api.prepare.listCommitments, { projectId: budget })).filter((c) => c.ownership === "user");
     expect(mine.map((c) => c.text)).toEqual(["Get Dana the budget"]); // updated in place
     expect(await all("nudges")).toHaveLength(1);
-    expect(await offers()).toHaveLength(1);
-    expect((await all("nudges")).filter((n) => n.offer !== undefined)).toHaveLength(1);
-    expect(await all("threadMessages")).toHaveLength(1);
+    expect(await offers()).toEqual([]);
+    expect(await all("threadMessages")).toEqual([]);
   });
 
   test("a_due_time_changed_by_a_later_run_updates_the_row_and_its_due_soon_job", async () => {
     const { asAlice, project, evidence, settle, all, pendingJobs } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const budget = await project("Budget");
-    let mail = "";
+    let note = "";
     stubModel((n) =>
-      prepared({ evidenceIds: [mail], commitments: [{ ...dueCommitment(mail, ASK), text: n === 0 ? "Send the budget to Dana" : "Email Dana the budget", dueAt: n === 0 ? DUE : DUE2 }] }),
+      prepared({ evidenceIds: [note], commitments: [{ ...dueCommitment(note, ASK), text: n === 0 ? "Send the budget to Dana" : "Email Dana the budget", dueAt: n === 0 ? DUE : DUE2 }] }),
     );
-    mail = (await evidence(budget, `${ASK} today.`)).id;
+    note = (await evidence(budget, `${ASK} today.`)).id;
     await settle();
     await evidence(budget, "Illustrative follow-up: make it 6pm instead.");
     await settle();
 
     expect((await all("nudges")).map((n) => n.dueAt)).toEqual([DUE2]);
     expect((await pendingJobs()).filter(([name]) => name === "briefs:nudgeDueSoon")).toEqual([["briefs:nudgeDueSoon", "2026-11-14T22:00:00.000Z"]]);
-    expect(await all("threadMessages")).toHaveLength(1);
   });
 
-  test("two_new_due_commitments_in_one_run_open_one_offer_and_the_second_comes_on_a_later_return", async () => {
-    const { asAlice, project, evidence, settle, all, offers } = setup();
+  test("two_new_requests_open_one_offer_and_the_second_comes_on_a_later_return", async () => {
+    const { asAlice, project, mail, settle, all, offers } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const budget = await project("Budget");
-    let mail = "";
-    const text = "Alice, please send the budget to Dana by 5pm and book the room by 6pm today.";
-    stubModel(() =>
-      prepared({
-        evidenceIds: [mail],
-        commitments: [
-          { ...dueCommitment(mail, "book the room by 6pm"), text: "Book the room", dueAt: DUE2 },
-          { ...dueCommitment(mail, ASK), text: "Send the budget to Dana", dueAt: DUE },
-        ],
-      }),
-    );
-    mail = (await evidence(budget, text)).id;
+    stubRun(startsRequest(budget, "Send the budget to Dana", DUE_LOCAL));
+    await mail(budget, "Alice, please send the budget to Dana by 5pm today.");
+    await settle();
+    stubRun(startsRequest(budget, "Book the room", "2026-11-14T18:00", "Room booking"));
+    await mail(budget, "Alice, please book the room by 6pm today.");
     await settle();
 
     const [first] = await offers();
-    expect(await offers()).toHaveLength(1);
-    expect(first!.body).toMatch(/^Send the budget to Dana/); // the soonest due
+    expect(await offers()).toHaveLength(1); // one at a time
+    expect(first!.body).toMatch(/^Send the budget to Dana/);
+    expect(await all("nudges")).toHaveLength(2);
     expect(await all("threadMessages")).toHaveLength(2);
 
     await asAlice.mutation(api.briefs.respondToNudge, { nudgeId: first!.nudgeId, choice: "finish" });
@@ -363,29 +405,28 @@ describe("stable commitment identity across re-preparation", () => {
     expect(second!.body).toMatch(/^Book the room/);
   });
 
-  test("one_mail_asking_one_thing_twice_in_one_run_is_one_commitment_due_at_the_earlier_local_time", async () => {
+  test("one_note_asking_one_thing_twice_in_one_run_is_one_commitment_due_at_the_earlier_local_time", async () => {
     const { asAlice, project, evidence, settle, all } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const budget = await project("Budget");
-    let mail = "";
+    let note = "";
     const quote = "send the report by tomorrow at 5 PM";
     stubModel(() =>
       prepared({
-        evidenceIds: [mail],
+        evidenceIds: [note],
         commitments: [
           // Local wall time in the user's zone: code does the offset, not the model.
-          { ...dueCommitment(mail, quote), text: "Email Dana the report", dueAt: "2026-11-15T18:00" },
-          { ...dueCommitment(mail, `Alice, please ${quote}`), text: "Send the report", dueAt: "2026-11-15T17:00" },
+          { ...dueCommitment(note, quote), text: "Email Dana the report", dueAt: "2026-11-15T18:00" },
+          { ...dueCommitment(note, `Alice, please ${quote}`), text: "Send the report", dueAt: "2026-11-15T17:00" },
         ],
       }),
     );
-    mail = (await evidence(budget, `Alice, please ${quote}.`)).id;
+    note = (await evidence(budget, `Alice, please ${quote}.`)).id;
     await settle();
 
     const mine = (await asAlice.query(api.prepare.listCommitments, { projectId: budget })).filter((c) => c.ownership === "user");
     expect(mine.map((c) => [c.text, c.dueAt])).toEqual([["Email Dana the report", "2026-11-15T22:00:00.000Z"]]); // 17:00 EST
     expect(await all("nudges")).toHaveLength(1);
-    expect(await all("threadMessages")).toHaveLength(1);
   });
 
   test("cleanup_merges_duplicate_nudges_for_that_owner_only", async () => {
@@ -420,34 +461,35 @@ describe("stable commitment identity across re-preparation", () => {
 });
 
 describe("offer on a new due commitment", () => {
-  test("new_due_commitment_opens_its_offer_at_once_even_when_the_user_already_has_a_draft", async () => {
-    const { asAlice, project, evidence, settle, all, offers } = setup();
+  test("new_request_opens_its_offer_at_once_even_when_the_user_already_has_a_draft", async () => {
+    const { asAlice, project, evidence, mail, settle, all, offers } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const budget = await project("Budget");
-    const ids: string[] = [];
-    // First: plain evidence, no commitment; the user prepares and starts the draft himself.
-    stubModel(() => prepared({ evidenceIds: ids.slice(0, 1) }));
-    ids.push((await evidence(budget, "Illustrative note: the budget lives in the shared sheet.")).id);
+    // First: a plain note, no commitment; the user prepares and starts the draft himself.
+    let note = "";
+    stubModel(() => prepared({ evidenceIds: [note] }));
+    note = (await evidence(budget, "Illustrative note: the budget lives in the shared sheet.")).id;
     await settle();
     await asAlice.mutation(api.artifacts.createFromPrepared, { projectId: budget });
     expect(await offers()).toEqual([]);
 
     // Then a real-looking mail with a due task for the user arrives.
-    stubModel(() => prepared({ evidenceIds: [ids[1]!], commitments: [dueCommitment(ids[1]!, "Alice, please send the budget to Dana by 5pm")] }));
-    ids.push((await evidence(budget, "Alice, please send the budget to Dana by 5pm today.")).id);
+    stubRun(startsRequest(budget, "Send the budget to Dana", DUE_LOCAL));
+    await mail(budget, "Alice, please send the budget to Dana by 5pm today.");
     await settle();
 
     const shown = await offers();
     expect(shown).toHaveLength(1);
-    // The earlier draft was never edited by the user, so the new request is started as its next revision.
     expect(shown[0]).toMatchObject({ projectId: budget, startedForYou: true, delivered: false });
     expect(shown[0]!.body).toMatch(/I started this for you/);
     expect((await asAlice.query(api.briefs.getAttentionState, {}))?.key).toBe(shown[0]!.key);
+    // The run's draft is the next revision of his draft; the earlier one stays in the versions.
     expect((await all("artifacts")).map((a) => a.revision)).toEqual(["2"]);
     expect((await all("artifactVersions")).map((a) => a.revision)).toEqual(["1"]);
 
-    // A second automatic run sees the same commitment: nothing new.
-    ids.push((await evidence(budget, "Illustrative follow-up: thanks!")).id);
+    // A later mail that asks for nothing: nothing new.
+    stubRun(asksNothing);
+    await mail(budget, "Illustrative follow-up: thanks!");
     await settle();
     expect(await offers()).toEqual(shown);
     expect(await all("nudges")).toHaveLength(1);
@@ -492,9 +534,8 @@ describe("gentle nudges", () => {
     const s = setup();
     await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const budget = await s.project("Budget");
-    let mailId = "";
-    stubModel(() => prepared({ evidenceIds: [mailId], commitments: [dueCommitment(mailId, "Alice, please send the budget to Dana by 5pm")] }));
-    mailId = (await s.evidence(budget, "Alice, please send the budget to Dana by 5pm today.")).id;
+    stubRun(startsRequest(budget, "Send the budget to Dana", DUE_LOCAL));
+    await s.mail(budget, "Alice, please send the budget to Dana by 5pm today.");
     await s.settle();
     const [offer] = await s.offers();
     return { ...s, budget, offer: offer! };
@@ -556,14 +597,14 @@ describe("due times from relative dates", () => {
     dueAt,
     evidenceIds: [id],
   });
-  /** One automatic run on the report mail, the stubbed model answering `dueAt`; the zone set first when given. */
+  /** One automatic preparation on the report note, the stubbed model answering `dueAt`; the zone set first when given. */
   async function run(dueAt: string | null, timezone: string | null) {
     const s = setup();
     if (timezone !== null) await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone });
     const guides = await s.project("AI Guides");
-    let mailId = "";
-    stubModel(() => prepared({ evidenceIds: [mailId], commitments: [report(mailId, dueAt)] }));
-    mailId = (await s.evidence(guides, REPORT)).id;
+    let noteId = "";
+    stubModel(() => prepared({ evidenceIds: [noteId], commitments: [report(noteId, dueAt)] }));
+    noteId = (await s.evidence(guides, REPORT)).id;
     await s.settle();
     const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input);
     const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
@@ -571,7 +612,7 @@ describe("due times from relative dates", () => {
     return { ...s, guides, sent, mine, dueJobs };
   }
 
-  test("due_tonight_resolves_in_the_users_zone_and_gets_a_draft_one_offer_and_one_due_soon_job", async () => {
+  test("due_tonight_resolves_in_the_users_zone_and_gets_one_nudge_row_and_one_due_soon_job", async () => {
     const { sent, mine, dueJobs, all, offers } = await run(TONIGHT, "America/New_York");
 
     // The trusted clock sits beside the evidence, never inside an evidence text.
@@ -588,19 +629,27 @@ describe("due times from relative dates", () => {
     expect(mine.map((c) => [c.text, c.state, c.dueAt])).toEqual([["Send the AI Guides report", "open", TONIGHT]]);
     expect(await all("nudges")).toHaveLength(1);
     expect(dueJobs).toEqual([["briefs:nudgeDueSoon", "2026-11-15T03:59:00.000Z"]]);
-    expect(await all("artifacts")).toHaveLength(1);
-    expect(await offers()).toMatchObject([{ startedForYou: true }]);
+    // A preparation never drafts or offers.
+    expect(await all("artifacts")).toEqual([]);
+    expect(await offers()).toEqual([]);
   });
 
-  test("due_in_under_an_hour_opens_the_started_offer_now_and_schedules_no_past_reminder", async () => {
-    const soon = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
-    const { mine, dueJobs, all, offers } = await run(soon, "America/New_York");
+  test("a_run_request_due_in_under_an_hour_opens_the_started_offer_now_and_schedules_no_past_reminder", async () => {
+    const s = setup();
+    await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const guides = await s.project("AI Guides");
+    stubRun(startsRequest(guides, "Send the AI Guides report", "2026-11-14T10:30"));
+    await s.mail(guides, "Alice, the AI Guides report is due at 10:30 this morning. Can you send it over?");
+    await s.settle();
+
+    const soon = "2026-11-14T15:30:00.000Z";
+    const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
     expect(mine.map((c) => c.dueAt)).toEqual([soon]);
-    const nudges = await all("nudges");
+    const nudges = await s.all("nudges");
     expect(nudges).toMatchObject([{ dueAt: soon }]);
     expect(nudges[0]!.dueJob).toBeUndefined();
-    expect(dueJobs).toEqual([]);
-    expect(await offers()).toMatchObject([{ startedForYou: true }]);
+    expect((await s.pendingJobs()).filter(([name]) => name === "briefs:nudgeDueSoon")).toEqual([]);
+    expect(await s.offers()).toMatchObject([{ startedForYou: true }]);
   });
 
   test("already_past_due_stores_the_time_but_nudges_and_drafts_nothing", async () => {

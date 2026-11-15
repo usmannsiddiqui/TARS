@@ -100,6 +100,8 @@ async function replaceGrant(ctx: MutationCtx, existing: Doc<"grants">, next: Omi
   if (stop !== null) await ctx.scheduler.runAfter(0, stop, { sourceId: existing.id, grantVersion: next.version });
 }
 
+const MESSAGE_KINDS = new Set(["gmail", "outlook-mail", "slack"]);
+
 export const intakeResult = v.union(v.literal("accepted"), v.literal("duplicate"), v.literal("denied"));
 
 /**
@@ -138,7 +140,9 @@ export async function intakeRecord(
   await ctx.db.insert("evidence", { ...record, isCurrent: decision.becomesCurrent });
   // grant is non-null here: decideIntake denies without one. Owner and consent come from the stored grant.
   if (decision.becomesCurrent && grant!.cloudProcessing) {
-    for (const projectId of record.projectIds) await requestAutomaticPreparation(ctx, grant!.ownerId, projectId);
+    // A message someone sent starts a run that decides what it asks; anything else refreshes the project's preparation.
+    if (MESSAGE_KINDS.has(grant!.kind)) await ctx.scheduler.runAfter(0, internal.runs.onMessage, { ownerId: grant!.ownerId, evidenceId: record.id });
+    else for (const projectId of record.projectIds) await requestAutomaticPreparation(ctx, grant!.ownerId, projectId);
   }
   return "accepted";
 }

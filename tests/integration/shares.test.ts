@@ -7,7 +7,6 @@ import { ProjectIdSchema, type Evidence, type ProjectId } from "@companion/domai
 import { api, internal } from "../../convex/_generated/api";
 import schema from "../../convex/schema";
 import { FIRST_REVISION } from "../../packages/domain/src/artifacts";
-import type { PreparationOutput } from "../../packages/domain/src/prepare";
 import { makeEvidence, makeOwners } from "../fixtures";
 
 const modules = import.meta.glob("../../convex/**/*.*s");
@@ -199,21 +198,11 @@ describe("share an artifact by link", () => {
   });
 });
 
-// ---- Automatic preparation never shares and never moves a shared page.
+// ---- The run a mail starts never shares and never moves a shared page.
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
-const prepared = (overrides: Partial<PreparationOutput>): PreparationOutput => ({
-  title: "Budget for Dana",
-  body: "Illustrative draft: the budget summary Dana asked for.",
-  evidenceIds: [],
-  gaps: [],
-  nextAction: "Open the budget sheet.",
-  commitments: [],
-  facts: [],
-  ...overrides,
-});
 
-describe("automatic preparation and sharing", () => {
-  test("an_automatic_preparation_creates_no_share_and_leaves_a_shared_page_byte_identical", async () => {
+describe("the run a mail starts and sharing", () => {
+  test("a_run_creates_no_share_and_leaves_a_shared_page_byte_identical", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(new Date("2026-11-14T15:00:00.000Z"));
     vi.stubEnv("OPENAI_API_KEY", "test-key-not-real");
@@ -221,16 +210,17 @@ describe("automatic preparation and sharing", () => {
     const { t, alice, asAlice, project, page, all } = setup();
     await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
     const budget = await project("Budget");
-    let mailId = "";
+    // Each run records its mail's request and writes the next revision of the draft.
+    const output = (n: number, body: string) => {
+      const step = n % 3;
+      if (step === 0) return [{ type: "function_call", call_id: `c${n}`, name: "start_request", arguments: JSON.stringify({ projectId: budget, request: "Send the budget to Dana", dueLocal: "2026-11-14T17:00" }) }];
+      if (step === 1) return [{ type: "function_call", call_id: `c${n}`, name: "write_draft", arguments: JSON.stringify({ title: "Budget for Dana", form: "document", text: body, changeSummary: "Drafted." }) }];
+      return [{ type: "message", content: [{ type: "output_text", text: "I drafted the budget." }] }];
+    };
+    let calls = 0;
     const model = vi.fn<(url: string) => Promise<Response>>(async () => {
-      const body = prepared({
-        body: `Illustrative draft ${model.mock.calls.length}.`,
-        evidenceIds: [mailId],
-        commitments: [
-          { text: "Send the budget to Dana", holder: "user", holderName: null, explicit: true, quote: "Alice, please send the budget", dueAt: "2026-11-14T22:00:00.000Z", evidenceIds: [mailId] },
-        ],
-      });
-      return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(body) }] }] }));
+      const n = calls++;
+      return new Response(JSON.stringify({ status: "completed", output: output(n, `Illustrative draft ${Math.floor(n / 3) + 1}.`) }));
     });
     vi.stubGlobal("fetch", model);
     let sourceId: string | undefined;
@@ -254,25 +244,26 @@ describe("automatic preparation and sharing", () => {
       return record;
     };
     const settle = async () => {
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 8; i++) {
         await vi.advanceTimersByTimeAsync(5);
         await t.finishInProgressScheduledFunctions();
       }
     };
 
-    mailId = (await ingest("Alice, please send the budget to Dana by 5pm today.")).id;
+    await ingest("Alice, please send the budget to Dana by 5pm today.");
     await settle();
-    expect(model).toHaveBeenCalledTimes(1);
+    expect(model).toHaveBeenCalledTimes(3);
     const draft = (await asAlice.query(api.artifacts.getArtifact, { projectId: budget }))!;
-    expect(draft).not.toBeNull(); // the automatic run drafted it ...
+    expect(draft).toMatchObject({ revision: FIRST_REVISION, text: "Illustrative draft 1." }); // the run drafted it ...
     expect(await all("artifactShares")).toEqual([]); // ... and shared nothing
 
     const { link } = await asAlice.action(api.shares.share, { artifactId: draft.id, revision: draft.revision });
     const before = (await page(link)).body;
-    mailId = (await ingest("Illustrative follow-up: Dana needs the budget.")).id;
+    await ingest("Alice, Dana also needs the budget by 5pm.");
     await settle();
-    expect(model).toHaveBeenCalledTimes(2);
-    expect(await all("artifactShares")).toHaveLength(1);
+    expect(model).toHaveBeenCalledTimes(6);
+    expect(await asAlice.query(api.artifacts.getArtifact, { projectId: budget })).toMatchObject({ text: "Illustrative draft 2." }); // a new revision ...
+    expect(await all("artifactShares")).toHaveLength(1); // ... and the share still names the one it was made for
     expect((await page(link)).body).toBe(before);
     expect(model.mock.calls.every(([url]) => url === RESPONSES_URL)).toBe(true);
   });

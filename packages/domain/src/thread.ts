@@ -34,12 +34,12 @@ export const BLOCKS = {
     }),
   },
   say: {
-    description: "TARS's two or three sentences, with source chips when it answers from evidence.",
-    props: z.object({ text: z.string(), sources: z.array(z.object({ id: z.string(), label: z.string() })).optional() }),
+    description: "TARS's words (short paragraphs, lists and **bold**: sayParts), with a chip per source it used; a chip with a url opens the item where it lives.",
+    props: z.object({ text: z.string(), sources: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string().optional(), url: z.string().optional() })).optional() }),
   },
   approval: {
     description:
-      "Exactly what will happen before anything leaves: a Word document of this revision, sent as a link by email. The recipient is a suggestion from the asking mail's header fields (empty when none), editable by the user. Built from stored data only; it emits an action and never acts.",
+      "Exactly what will happen before anything leaves: a Word document of this revision, sent as a link by email, or (form reply) the draft's text itself as an email reply. The recipient is a suggestion from the asking mail's header fields (empty when none), editable by the user. Built from stored data only; it emits an action and never acts.",
     props: z.object({
       projectId: z.string(),
       artifactId: z.string(),
@@ -50,6 +50,7 @@ export const BLOCKS = {
       replySubject: z.string(), // the subject when it goes to the asker (a reply to their mail)
       subject: z.string(), // the subject to anyone else
       document: z.string(), // the draft's title
+      form: z.enum(["document", "reply"]).optional(), // how it goes out; absent means "document"
       primary: z.string(),
       secondary: z.string(),
       state: z.enum(["open", "approved"]),
@@ -60,7 +61,7 @@ export const BLOCKS = {
     props: z.object({ sourceId: z.string(), account: z.string() }),
   },
   delivery: {
-    description: "One approved send of the Word document; the renderer follows its live status (document, link, send, verify) by action id.",
+    description: "One approved send of the draft; the renderer follows its live status (document, link, send, verify; a reply: send, verify) by action id.",
     props: z.object({ actionId: z.string(), recipient: z.string() }),
   },
   receipt: {
@@ -244,78 +245,6 @@ export const dueLabel = (dueAt: string, timezone: string) => {
   return `${day} at ${time}`;
 };
 
-const HANDING_OVER = /^(send|share|email|forward|deliver|submit|provide|give|get|return)\s+(.+)$/i;
-const ARTICLE = /^(the|a|an|his|her|their|our|my|your|this|that)\b/i;
-
-/**
- * What was asked, as a short phrase after the asker's name: "asked for the budget summary", or
- * "asked you to review the deck". From the commitment's text only; the model's qualifiers ("per a
- * separate request", "by 5pm today", asides in brackets) and the recipient are dropped, never quoted.
- */
-export function askedFor(commitment: string): string {
-  let text = commitment.trim().split(/[,;(]| per | as requested| as discussed/i)[0]!.trim();
-  text = text.replace(/\.+$/, "").replace(/\s+by\s+(today|tonight|tomorrow|eod|end of (the )?day|\w+day|\d\S*)\b.*$/i, "").trim();
-  const handing = text.match(HANDING_OVER);
-  if (handing) {
-    const thing = handing[2]!
-      .replace(/^(?:[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)?|him|her|them|me|us)\s+(?=(the|a|an|his|her|their|our|my|this|that)\b)/, "")
-      .replace(/\s+(?:to|with)\s+[\w' -]+$/i, "")
-      .trim();
-    if (ARTICLE.test(thing)) return `asked for ${thing}`;
-  }
-  return `asked you to ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
-}
-
-/** What one item of each source kind is called in a sentence. */
-const ITEM_NOUN: Record<string, string> = {
-  gmail: "email",
-  "outlook-mail": "email",
-  obsidian: "note",
-  notion: "Notion page",
-  slack: "Slack message",
-  teams: "Teams message",
-  canvas: "calendar item",
-  "outlook-calendar": "calendar item",
-  github: "GitHub item",
-  "claude-code": "session note",
-  codex: "session note",
-};
-
-function sourceList(sources: readonly { kind: string; count: number }[]) {
-  const counts = new Map<string, number>();
-  for (const { kind, count } of sources) if (count > 0) counts.set(ITEM_NOUN[kind] ?? "item", (counts.get(ITEM_NOUN[kind] ?? "item") ?? 0) + count);
-  const parts = [...counts].map(([noun, n]) => `${n} ${noun}${n === 1 ? "" : "s"}`);
-  return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
-}
-
-/**
- * TARS's first words for a new due commitment, from stored data only: who asked (name, else address,
- * else "Someone"), what, when in his zone, what TARS did and from what, then the one question.
- */
-export function openingText(input: {
-  asker: { name?: string; address?: string } | null;
-  commitment: string;
-  due?: string;
-  sources: readonly { kind: string; count: number }[];
-  requestOnly: boolean;
-  /** What happened to the draft: made now, a fresh one over an earlier one (Undo), or a suggestion beside his edited one. */
-  outcome?: "created" | "revised" | "suggested";
-}): string {
-  const who = input.asker?.name || input.asker?.address || "Someone";
-  const list = sourceList(input.sources);
-  const from = list && !input.requestOnly ? ` from ${list}` : "";
-  const onlyRequest = "I only have the request to go on, so";
-  const did = {
-    created: input.requestOnly ? `${onlyRequest} the draft marks what I need from you.` : `I drafted it${from} while you were busy.`,
-    revised: input.requestOnly
-      ? `${onlyRequest} the fresh draft marks what I need from you; Undo brings back the earlier one.`
-      : `I wrote a fresh draft${from} while you were busy; Undo brings back the earlier one.`,
-    suggested: `I left your edited draft as it is and put a fresh one${from} next to it as a suggestion${input.requestOnly ? `; ${onlyRequest} it marks what I need from you` : ""}.`,
-  }[input.outcome ?? "created"];
-  const ask = input.outcome === "suggested" ? "Apply it, or tell me what to change." : "Tell me what to change, or send it.";
-  return [`${who} ${askedFor(input.commitment)}.`, ...(input.due ? [`It's due ${input.due}.`] : []), did, ask].join(" ");
-}
-
 /** Bracketed evidence ids a preparation left in text ("[gmail-15ac84d1:18d1]"): never shown on screen. */
 export const stripEvidenceIds = (text: string) => text.replace(/\s*\[(?:[a-z]+-)+[0-9a-f]{6,}[^\]\n]*\]/g, "");
 
@@ -339,8 +268,55 @@ export function blockHasContent(view: BlockView): boolean {
   }
 }
 
+
+export type SaySpan = { text: string; bold?: true };
+export type SayPart = { kind: "p" | "ul" | "ol"; lines: SaySpan[][] };
+
+const spans = (line: string): SaySpan[] =>
+  line
+    .split(/\*\*(\S(?:.*?\S)?)\*\*/)
+    .flatMap((text, i): SaySpan[] => (text === "" ? [] : [i % 2 === 1 ? { text, bold: true } : { text }]));
+
 /**
- * The user's own message asks to send or approve. Checked on his words, not on the model's choice:
- * evidence can steer a model, it can never type in his chat.
+ * TARS's words as paragraphs and lists: a blank line ends a paragraph, lines starting "- " or "1."
+ * form one list, **bold** marks a run. Anything else the model wrote (a heading mark) is shown as words.
  */
-export const asksToSend = (text: string) => /\b(send|sent|approve|approved|ship)\b/i.test(text);
+export function sayParts(text: string): SayPart[] {
+  const parts: SayPart[] = [];
+  let open: { kind: SayPart["kind"]; lines: string[] } | null = null;
+  const close = () => {
+    if (open === null) return;
+    parts.push({ kind: open.kind, lines: open.kind === "p" ? [spans(open.lines.join(" "))] : open.lines.map(spans) });
+    open = null;
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim().replace(/^#+\s+/, "");
+    if (line === "") {
+      close();
+      continue;
+    }
+    const item = /^(?:[-*•]|(\d+)[.)])\s+(.*)$/.exec(line);
+    const kind = item === null ? "p" : item[1] === undefined ? "ul" : "ol";
+    if (open !== null && open.kind !== kind) close();
+    open ??= { kind, lines: [] };
+    open.lines.push(item === null ? line : item[2]!);
+  }
+  close();
+  return parts;
+}
+
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * TARS's words as a Telegram message (parse mode HTML): everything escaped, then **bold** and list
+ * lines become Telegram's own marks; blank lines stay, so paragraphs keep their spacing. Links are
+ * added only from `links` (stored addresses of items a run read), never from the words themselves.
+ */
+export function phoneHtml(text: string, links: readonly { label: string; url: string }[]): string {
+  const body = escapeHtml(text)
+    .split("\n")
+    .map((line) => line.replace(/^\s*[-*•]\s+/, "• ").replace(/\*\*(\S(?:.*?\S)?)\*\*/g, "<b>$1</b>"))
+    .join("\n");
+  const list = links.map(({ label, url }) => `• <a href="${escapeHtml(url).replace(/"/g, "&quot;")}">${escapeHtml(label).replace(/"/g, "&quot;")}</a>`);
+  return list.length === 0 ? body : `${body}\n\n${list.join("\n")}`;
+}

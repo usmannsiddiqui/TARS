@@ -1,4 +1,4 @@
-// The closing recap shown on "Stop for now" (and sent to his linked WhatsApp on the stop event).
+// The closing recap shown on "Stop for now" (and sent to his linked Telegram on the stop event).
 // Read-only: built from receipts, commitments, nudge answers and drafts the caller owns.
 import { ConvexError, v } from "convex/values";
 import {
@@ -29,7 +29,7 @@ export const getClosingRecap = query({
   },
 });
 
-/** Today's recap for one owner: item titles only. Also sent to his linked WhatsApp on "Stop for now". */
+/** Today's recap for one owner: item titles only. Also sent to his linked Telegram on "Stop for now". */
 export async function buildRecap(ctx: Pick<QueryCtx, "db">, ownerId: string, timezone: string): Promise<ClosingRecap> {
     const input: RecapInput = {
       nowMs: Date.now(),
