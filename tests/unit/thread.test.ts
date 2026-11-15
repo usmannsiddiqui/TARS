@@ -154,10 +154,15 @@ describe("primaryBlockId (the one navy action on screen)", () => {
   it("is the newest open start, ask or approval; older ones are secondary", () => {
     const thread = [
       msg("m1", [{ id: "start", type: "start", props: { items: [] } }]),
-      msg("m2", [{ id: "say", type: "say", props: { text: "hi" } }, { id: "ask", type: "ask", props: { id: "n1", title: "t", text: "t", choices: [] } }]),
+      msg("m2", [{ id: "say", type: "say", props: { text: "hi" } }, { id: "ask", type: "ask", props: { id: "n1", title: "t", text: "t", choices: [], primaryId: "finish" } }]),
       msg("m3", [{ id: "say", type: "say", props: { text: "done" } }]),
     ];
     expect(primaryBlockId(thread)).toBe("m2/ask");
+  });
+
+  it("an ask with equal choices (a tradeoff) holds no primary, so the older start keeps it", () => {
+    const thread = [msg("m1", [{ id: "start", type: "start", props: { items: [] } }]), msg("m2", [{ id: "ask", type: "ask", props: { id: "t1", title: "t", text: "t", choices: [] } }])];
+    expect(primaryBlockId(thread)).toBe("m1/start");
   });
 
   it("skips an approval already approved, and is null when nothing is open", () => {

@@ -222,15 +222,18 @@ export function Shell({ route, today, projects, account, pet, session, title, su
       <main className="center">
         <header className="head">
           <div className="head-title">
-            <h1>
-              {pane === null ? (
-                title
-              ) : (
+            {pane === null ? (
+              // The More screens keep their own h1; this is the same name, drawn where every screen's name sits.
+              <p className="head-h" aria-hidden="true">
+                {title}
+              </p>
+            ) : (
+              <h1 className="head-h">
                 <button type="button" className="head-name" aria-expanded={open} aria-controls="desk-pane" onClick={() => setOpen(!open)}>
                   {title}
                 </button>
-              )}
-            </h1>
+              </h1>
+            )}
             {sub && <span className="head-sub">{sub}</span>}
           </div>
           <div className="head-session" role="group" aria-label="Work session">

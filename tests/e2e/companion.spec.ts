@@ -44,50 +44,40 @@ test("one_companion_across_projects", async () => {
   // One identity: a single companion name, no roster of agents.
   await expect(page.getByRole("navigation", { name: "TARS" })).toBeVisible();
   await expect(page.locator(".wordmark")).toHaveCount(1);
-  // Four project contexts side by side; the focus project lists its own items and "View all".
-  const rail = page.getByRole("list", { name: "Projects" });
-  await expect(rail.getByRole("button")).toHaveText(["AI GuidesFocus", "View all", "AVT", "Personal projects", "CourseworkNeeds retry"]);
-  await expect(page.getByRole("list", { name: "In AI Guides" }).getByRole("listitem")).toHaveText([
-    "Presenter run-through for the co-presentation",
-    "Open slides 9–18 and time the demo section against 25 minutes.",
-    "4 open commitments",
-    "View all",
+  // The left list: Today, then the four project contexts as two-line rows; the focus says so where the time goes.
+  const nav = page.getByRole("navigation", { name: "TARS" });
+  const rows = nav.locator(".row");
+  await expect(rows.locator(".row-name")).toHaveText(["Today", "AI Guides", "AVT", "Personal projects", "Coursework"]);
+  await expect(rows.nth(0)).toHaveAttribute("aria-current", "page");
+  await expect(rows.nth(1).locator(".row-time")).toHaveText("Focus");
+  await expect(rows.nth(3).locator(".row-preview")).toHaveText("Nothing prepared yet");
+  await expect(rows.nth(4).locator(".row-preview")).toHaveText("Needs retry");
+  // TARS stays at the front desk: the mini desk in the list and the full desk in the right pane.
+  await expect(nav.locator(".desk-mini")).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "TARS at the front desk" }).locator(".desk")).toBeInViewport();
+  // Today is one thread: what the brief read (real counts), then the numbered list whose first item is the one
+  // recommended start, with its reason and exactly one navy action on the screen.
+  const thread = page.getByRole("list", { name: "Today with TARS" });
+  await expect(thread.locator(".results").first().getByRole("listitem")).toHaveText([
+    "Read→today's meeting",
+    "Read→4 new emails",
+    "Checked→1 Canvas deadline",
+    "Went through→6 open commitments",
   ]);
-  // The section folds like a disclosure, and opens again.
-  const section = page.getByRole("button", { name: "Projects", expanded: true });
-  await section.click();
-  await expect(rail).toBeHidden();
-  await page.getByRole("button", { name: "Projects", expanded: false }).click();
-  await expect(rail).toBeVisible();
-  // The morning brief: what it read (one row per kind, real counts), then the brief as a numbered list whose first
-  // item is the one recommended start, with its reason and exactly one navy action on the screen; TARS stays at the desk.
-  const start = page.getByRole("region", { name: "Morning brief" });
-  await expect(start).toContainText("Prepared");
-  await expect(start.getByRole("list", { name: "What TARS read for this brief" }).getByRole("listitem")).toHaveText([
-    "Read today's meeting",
-    "Read 4 new emails",
-    "Checked 1 Canvas deadline",
-    "Went through 6 open commitments",
-  ]);
-  const items = start.getByRole("list", { name: "Morning brief" }).getByRole("listitem");
+  const items = thread.getByRole("list", { name: "Today's brief" }).getByRole("listitem");
   await expect(items).toHaveCount(5);
   await expect(items.first()).toContainText("Recommended start");
   await expect(items.first()).toContainText("AI Guides");
-  await expect(start.locator(".desk")).toBeInViewport();
-  await expect(start).toContainText("Why this one: You chose this last time; nothing due sooner is backed by your sources.");
+  await expect(thread).toContainText("Why this one: You chose this last time; nothing due sooner is backed by your sources.");
   await expect(page.locator(".primary")).toHaveCount(1);
-  await expect(start.getByRole("button", { name: "Help me start" })).toBeVisible();
-  await expect(start.getByRole("button", { name: "Improve content first" })).toBeVisible();
-  // Alternatives and the full backlog stay reachable.
-  const others = page.getByRole("region", { name: "Other ways to start" });
-  for (const name of ["AVT", "Personal projects", "Coursework"]) await expect(others.getByRole("button", { name: `Open ${name}` })).toBeVisible();
-  await page.getByText("All open work").click();
-  await expect(page.getByRole("region", { name: "Open work in Coursework" })).toContainText("Reading response 4");
+  await expect(items.first().getByRole("button", { name: "Help me start" })).toHaveClass(/primary/);
+  await expect(items.first().getByRole("button", { name: "Improve content first" })).toBeVisible();
+  // The tradeoff asks with three equal choices and says nothing moves.
+  await expect(thread).toContainText("Your choice is recorded once. Nothing is moved, rescheduled or sent.");
 
   // Looking at another project does not change focus; only an explicit pick does.
-  await others.getByRole("button", { name: "Open AVT" }).click();
+  await rows.nth(2).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("AVT");
-  await expect(page.getByText("Not your focus.")).toBeVisible();
   // Showing the brief is its delivery (panel channel, never a notification); nothing else happened.
   const shown = ["markDelivered", "morning:2026-11-14", "panel"];
   expect(await calls(page)).toEqual([shown]);
@@ -97,17 +87,18 @@ test("one_companion_across_projects", async () => {
   await page.close();
 });
 
-test("rail_reaches_projects_schedule_and_tars_calendar", async () => {
+test("list_adds_projects_and_more_reaches_schedule_and_tars_calendar", async () => {
   const page = await scene("today");
   const nav = page.getByRole("navigation", { name: "TARS" });
-  // Adding a project lives on the project index now, with the same names.
+  // "+" opens adding a project inline at the top of the list.
   await expect(page.getByLabel("Add a project")).toHaveCount(0);
-  await nav.getByRole("button", { name: "Projects", exact: true }).first().click();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Projects");
-  await expect(page.getByRole("row", { name: /Coursework/ })).toContainText("Needs retry");
+  await nav.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Add a project").fill("Band website");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   expect((await calls(page)).at(-1)).toEqual(["createProject", "Band website"]);
+  // Schedule, TARS's calendar, Connections and What I remember stay under "More".
+  await nav.getByRole("button", { name: "More", expanded: false }).click();
+  for (const name of ["Schedule", "TARS's calendar", "Connections", "What I remember"]) await expect(nav.getByRole("button", { name })).toBeVisible();
   // The user's schedule: meetings and real due dates by day, each with its source; never suggestions.
   await nav.getByRole("button", { name: "Schedule" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Schedule");

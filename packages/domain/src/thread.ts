@@ -161,7 +161,8 @@ const ACTIONABLE = new Set(["start", "ask", "approval"]);
  */
 export function primaryBlockId(messages: readonly { id: string; views: readonly BlockView[] }[]): string | null {
   for (const m of [...messages].reverse()) {
-    const open = m.views.findLast((b) => ACTIONABLE.has(b.type) && !(b.type === "approval" && b.props.state !== "open"));
+    // An approval only while open; an ask only when it names a primary choice (a tradeoff's three are equal).
+    const open = m.views.findLast((b) => ACTIONABLE.has(b.type) && !(b.type === "approval" && b.props.state !== "open") && !(b.type === "ask" && !b.props.primaryId));
     if (open) return `${m.id}/${open.id}`;
   }
   return null;
