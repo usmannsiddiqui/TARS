@@ -383,6 +383,11 @@ const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; und
 
 /** One send's live status: a Convex subscription, never a timer. */
 const useDeliveryStatus = (actionId: string) => useQuery(api.delivery.status, { actionId });
+/** Whether sending from this source is allowed, from the connections subscription. */
+const useSendingState = (sourceId: string) => {
+  const rows = useQuery(api.connections.listConnections, {});
+  return rows === undefined ? undefined : (rows.find((c) => c.sourceId === sourceId)?.sending ?? "not-allowed");
+};
 
 export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
   const { projectId } = props;
@@ -394,6 +399,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const retryReply = useAction(api.thread.retry);
   const send = useAction(api.thread.send);
   const reconcile = useAction(api.actions.reconcileAction);
+  const allowSend = useAction(api.connectors.composio.allowSend);
   const prepare = useAction(api.prepare.prepareProject);
   const create = useMutation(api.artifacts.createFromPrepared);
   const saveEdit = useMutation(api.artifacts.saveEdit);
@@ -438,6 +444,8 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
         retry: async (messageId) => void (await retryReply({ messageId: messageId as Id<"threadMessages"> })),
         useDeliveryStatus,
         checkAgain: async (actionId) => void (await reconcile({ actionId })),
+        useSendingState,
+        allowSend: async (sourceId) => void (await allowSend({ sourceId })),
       }}
       commitments={commitments ?? null}
       artifact={artifact === undefined ? undefined : artifact && { id: artifact.id, revision: artifact.revision, text: artifact.text, userEdited: artifact.userEdited, suggestions: artifact.suggestions }}
@@ -519,6 +527,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const refreshOutlook = useAction(api.connectors.outlook.refresh);
   const startOutlook = useMutation(api.connectors.outlook.startConnect);
   const startComposio = useAction(api.connectors.composio.startConnect);
+  const allowComposioSend = useAction(api.connectors.composio.allowSend);
   const setGrantState = useMutation(api.evidence.setGrantState);
   const [local, setLocal] = useState<LocalSourceView[] | null>(null);
   const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
@@ -646,6 +655,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
     onPause: async (row) => void (await setGrantState({ sourceId: row.id, state: "paused" })),
     onResume: async (row) => void (await setGrantState({ sourceId: row.id, state: "active" })),
     onRevoke: async (row) => void (await setGrantState({ sourceId: row.id, state: "revoked" })),
+    onAllowSend: async (row) => void (await allowComposioSend({ sourceId: row.id })),
     notionWebhookUrl: (sourceId) => `${SITE_URL}/notion/events?source=${encodeURIComponent(sourceId)}`,
     revealNotionToken: (sourceId) => revealNotion({ sourceId }),
   };

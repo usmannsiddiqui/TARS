@@ -30,6 +30,15 @@ export async function loadContext(ctx: QueryCtx, sourceId: string): Promise<Sour
  * Status of the caller's connections for the UI, with the grant's state, version, selection and
  * projects (cloud selectors are ids, returned to their owner). Never credentials or secrets.
  */
+/** The user's send consent for this source, if he gave it (the same row the send itself requires). */
+export async function sendPermissionOf(ctx: Pick<QueryCtx, "db">, ownerId: string, sourceId: string) {
+  const row = await ctx.db
+    .query("sendPermissions")
+    .withIndex("by_source", (q) => q.eq("sourceId", sourceId))
+    .unique();
+  return row?.ownerId === ownerId ? row : null;
+}
+
 export const listConnections = query({
   args: {},
   returns: v.array(
@@ -46,6 +55,8 @@ export const listConnections = query({
       version: v.number(),
       selectors: v.array(v.string()),
       projectIds: v.array(v.string()),
+      // Composio Gmail and Slack only: whether the user allowed TARS to send (a separate consent from reading).
+      sending: v.optional(v.union(v.literal("allowed"), v.literal("not-allowed"))),
     }),
   ),
   handler: async (ctx) => {
@@ -71,6 +82,9 @@ export const listConnections = query({
         version: grant.version,
         selectors: grant.selectors,
         projectIds: grant.projectIds,
+        ...(row.broker === "composio" && (row.provider === "gmail" || row.provider === "slack")
+          ? { sending: (await sendPermissionOf(ctx, ownerId, row.sourceId)) ? ("allowed" as const) : ("not-allowed" as const) }
+          : {}),
       });
     }
     return out;

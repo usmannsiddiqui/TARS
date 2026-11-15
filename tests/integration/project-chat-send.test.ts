@@ -47,7 +47,8 @@ const approveReply = { outcome: "approve", reply: "Here is exactly what will go 
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const { alice } = makeOwners();
+  const { alice, bob } = makeOwners();
+  const asBob = t.withIdentity({ tokenIdentifier: bob.ownerId, subject: "bob" });
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice" });
   const projectId = ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name: "Budget for Dana" }));
   const sourceId = `source-gmail-${crypto.randomUUID()}`;
@@ -131,7 +132,7 @@ async function setup() {
   const allowSend = () => asAlice.action(api.connectors.composio.allowSend, { sourceId });
   const last = async () => (await thread()).at(-1)!;
   const all = <T extends keyof typeof schema.tables>(table: T) => t.run((ctx) => ctx.db.query(table).collect());
-  return { t, asAlice, projectId, artifactId, key, mode, sends, deliverMail, thread, approval, askToSend, approve, allowSend, last, all };
+  return { t, asAlice, asBob, sourceId, projectId, artifactId, key, mode, sends, deliverMail, thread, approval, askToSend, approve, allowSend, last, all };
 }
 
 const blockOf = (message: { blocks: { type: string; props: unknown }[] }, type: string) => message.blocks.find((b) => b.type === type)?.props as Record<string, unknown> | undefined;
@@ -172,16 +173,39 @@ describe("send from the chat", () => {
     expect(s.sends()).toEqual([]);
   });
 
-  test("without Gmail sending allowed, one plain line says where to allow it and the approval stays open", async () => {
+  test("without Gmail sending allowed, the thread offers the allow control right there and the approval stays open", async () => {
     const s = await setup();
     await s.askToSend();
     expect(await s.approve(DANA)).toEqual({ status: "missing-send-permission" });
-    const say = blockOf(await s.last(), "say") as { text: string };
-    expect(say.text).toMatch(/Sending from Gmail hasn't been allowed yet/);
-    expect(say.text).toMatch(/Connections → Gmail/);
+    const reply = await s.last();
+    expect((blockOf(reply, "say") as { text: string }).text).toMatch(/Sending from Gmail hasn't been allowed yet\. Allow it below, then press Send it\./);
+    expect(blockOf(reply, "allowSend")).toEqual({ sourceId: s.sourceId, account: "Gmail" });
     expect((await s.approval()).state).toBe("open");
     expect(s.sends()).toEqual([]);
     expect(await s.all("actions")).toEqual([]);
+  });
+
+  test("allowing from the thread, then Send it, sends the same approval once and verifies", async () => {
+    const s = await setup();
+    await s.askToSend();
+    await s.approve(DANA);
+    const sending = async () => (await s.asAlice.query(api.connections.listConnections, {})).find((c) => c.sourceId === s.sourceId)!.sending;
+    expect(await sending()).toBe("not-allowed");
+    await s.allowSend();
+    expect(await sending()).toBe("allowed");
+    // Consent alone sends nothing and creates no action: he presses Send it himself.
+    expect(s.sends()).toEqual([]);
+    expect(await s.all("actions")).toEqual([]);
+    const result = (await s.approve(DANA)) as { actionId: string };
+    expect(s.sends().map((m) => m.recipient_email)).toEqual([DANA]);
+    expect(await s.asAlice.query(api.delivery.status, { actionId: result.actionId })).toMatchObject({ verified: true });
+    expect((await s.approval()).state).toBe("approved");
+  });
+
+  test("allowing sending on another owner's Gmail is refused", async () => {
+    const s = await setup();
+    await expect(s.asBob.action(api.connectors.composio.allowSend, { sourceId: s.sourceId })).rejects.toThrow(/Source is not available/);
+    expect((await s.asAlice.query(api.connections.listConnections, {})).find((c) => c.sourceId === s.sourceId)!.sending).toBe("not-allowed");
   });
 
   test("a draft changed since the approval is a plain question with an approval for the current revision", async () => {

@@ -129,7 +129,10 @@ export function chatThread(variant: string, now: number): ThreadMessage[] {
         first,
         user("u1", later, "Looks good, send it"),
         askedToSend(later, "open"),
-        reply("m3", later + 20 * S, [{ id: "say", type: "say", props: { text: "Sending from Gmail hasn't been allowed yet. Allow it in Connections → Gmail, then press Send it again." } }]),
+        reply("m3", later + 20 * S, [
+          { id: "say", type: "say", props: { text: "Sending from Gmail hasn't been allowed yet. Allow it below, then press Send it." } },
+          { id: "allow-gmail", type: "allowSend", props: { sourceId: "gmail-illustrative", account: "Gmail" } },
+        ]),
       ];
     case "sending":
     case "verified":
@@ -174,7 +177,16 @@ export function useChatThread(variant: string, now: number): [ThreadMessage[], (
   return [thread, setThread];
 }
 
-export function chatActions(thread: ThreadMessage[], setThread: (next: ThreadMessage[]) => void, record: (...args: unknown[]) => void): ChatActions {
+type Sending = { allowed: "allowed" | "not-allowed" };
+/** Illustrative: Gmail sending starts not allowed; pressing Allow flips it (as composio.allowSend does). */
+export const useSendingFixture = () => useState<Sending>({ allowed: "not-allowed" });
+
+export function chatActions(
+  thread: ThreadMessage[],
+  setThread: (next: ThreadMessage[]) => void,
+  record: (...args: unknown[]) => void,
+  [sending, setSending]: [Sending, (next: Sending) => void],
+): ChatActions {
   return {
     send: async (text) => {
       record("sendMessage", text);
@@ -193,5 +205,7 @@ export function chatActions(thread: ThreadMessage[], setThread: (next: ThreadMes
     retry: async (messageId) => record("retry", messageId),
     useDeliveryStatus: (actionId) => deliveryFixture(actionId, Date.now()),
     checkAgain: async (actionId) => record("reconcileAction", actionId),
+    useSendingState: () => sending.allowed,
+    allowSend: async (sourceId) => (record("allowSend", sourceId), setSending({ allowed: "allowed" })),
   };
 }

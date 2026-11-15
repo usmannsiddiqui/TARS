@@ -153,6 +153,41 @@ export function StateNote({ state, children }: { state: Honest; children?: React
 }
 
 /** A state as its glyph and one word (or the caller's few words), for a compact place such as a pill; the detail lives elsewhere. */
+/** The send consent, in the words the old send control used: what it allows, who holds the sign-in, how to turn it off. */
+export const sendConsentText = (account: string) =>
+  `Sending is a separate permission from reading. If you allow it, TARS may send only what you approve with Send it, one message at a time, from the ${account} account you connected, and nothing else. Composio holds that sign-in. You can turn it off by disconnecting ${account} in Connections. Allowing it sends nothing.`;
+
+/** The separate permission to send from one account: its honest state, and the one control when it is not allowed. */
+export function AllowSending({ account, state, onAllow, next }: { account: string; state: "allowed" | "not-allowed" | undefined; onAllow(): Promise<void>; next?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (state === "allowed") return <StateNote state={{ kind: "done", detail: `Sending from ${account} is allowed.${next ? ` ${next}` : ""}` }} />;
+  return (
+    <div className="confirm consent" role="group" aria-label={`Allow sending from ${account}`}>
+      <p className="small">{sendConsentText(account)}</p>
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy || state === undefined}
+        onClick={async () => {
+          setBusy(true);
+          setError(null);
+          try {
+            await onAllow();
+          } catch (err) {
+            setError(reason(err));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Allowing…" : `Allow TARS to send from ${account}`}
+      </button>
+      {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
+    </div>
+  );
+}
+
 export function StateTag({ state, id, label }: { state: Honest; id?: string; label?: string }) {
   return (
     <span className="state-tag" data-kind={state.kind} id={id}>

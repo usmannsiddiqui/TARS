@@ -16,7 +16,7 @@ import {
   type Step,
 } from "@companion/domain/thread";
 import { SourceChip } from "./logos";
-import { formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
+import { AllowSending, formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type ThreadMessage = { id: string; role: "tars" | "user"; text?: string; blocks: unknown[]; createdAt: number };
 export type ApproveArgs = { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string };
@@ -31,6 +31,10 @@ export type ThreadActions = {
   useDeliveryStatus(actionId: string): DeliveryStatus | undefined;
   /** "Check again" for an unconfirmed send: looks it up, never resends. */
   onCheckAgain(actionId: string): Promise<void>;
+  /** A hook: whether sending from this source is allowed (undefined while loading). */
+  useSendingState(sourceId: string): "allowed" | "not-allowed" | undefined;
+  /** The user's consent to send from this source (composio.allowSend); it never sends. */
+  onAllowSend(sourceId: string): Promise<void>;
 };
 
 export function Thread({ messages, actions }: { messages: ThreadMessage[]; actions: ThreadActions }) {
@@ -90,6 +94,8 @@ function BlockSlot({ block, messageId, actions, hotkey, arrived }: { block: Bloc
         <ApprovalBlock props={block.props} complete={block.complete} actions={actions} hotkey={hotkey} />
       ) : block.type === "receipt" ? (
         <ReceiptBlock props={block.props} />
+      ) : block.type === "allowSend" && block.props.sourceId ? (
+        <AllowSendBlock sourceId={block.props.sourceId} account={block.props.account ?? "Gmail"} actions={actions} />
       ) : block.type === "delivery" && block.props.actionId ? (
         <DeliveryBlock actionId={block.props.actionId} actions={actions} />
       ) : (
@@ -351,6 +357,12 @@ function ApprovalBlock({ props, complete, actions, hotkey }: { props: Partial<Bl
       {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
     </section>
   );
+}
+
+/** The permission to send, asked where he is; after it, he presses Send it on the approval himself. */
+function AllowSendBlock({ sourceId, account, actions }: { sourceId: string; account: string; actions: ThreadActions }) {
+  const state = actions.useSendingState(sourceId);
+  return <AllowSending account={account} state={state} onAllow={() => actions.onAllowSend(sourceId)} next="Press Send it on the approval above." />;
 }
 
 /** One approved send, followed live: its four real stages, then the receipt once it is checked. */

@@ -197,6 +197,8 @@ export type SourceRow = {
   unavailableReason?: string;
   /** Cloud rows: exactly what the stored grant reads (provider ids) and for which projects. */
   selection?: { selectors: string[]; projects: string[] };
+  /** Cloud rows that can send (Composio Gmail and Slack): the separate permission to send, as it stands. */
+  sending?: "allowed" | "not-allowed";
 };
 
 export type PetState = "idle" | "working" | "done";
@@ -238,6 +240,7 @@ export type ConnectionRow = {
   state: string;
   selectors: string[];
   projectIds: string[];
+  sending?: "allowed" | "not-allowed";
 };
 
 const CHECKED_VIA = { pushed: "pushed by Composio", opened: "checked when you opened TARS" } as const;
@@ -264,6 +267,7 @@ export function cloudRow(def: { provider: CloudProvider; name: string; coverage:
     state: c.state === "paused" ? "paused" : "on",
     status,
     selection: { selectors: c.selectors, projects: c.projectIds.map((id) => nameOf(id) ?? "a project no longer listed") },
+    ...(c.sending ? { sending: c.sending } : {}),
   };
 }
 

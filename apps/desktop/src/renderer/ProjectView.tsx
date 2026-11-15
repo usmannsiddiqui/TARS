@@ -42,6 +42,10 @@ export type ChatActions = {
   useDeliveryStatus(actionId: string): DeliveryStatus | undefined;
   /** Look an unconfirmed send up again; never resends. */
   checkAgain(actionId: string): Promise<void>;
+  /** A hook: whether sending from this source is allowed. */
+  useSendingState(sourceId: string): "allowed" | "not-allowed" | undefined;
+  /** His consent to send from this source; it sends nothing. */
+  allowSend(sourceId: string): Promise<void>;
 };
 
 export type ProjectViewProps = {
@@ -173,6 +177,8 @@ export function ProjectView(props: ProjectViewProps) {
                 onUndo: async (artifactId, expectedCurrent, undoRevision) => void (artifactId === props.artifact?.id && (await props.editor.undo(expectedCurrent, undoRevision))),
                 useDeliveryStatus: props.chat.useDeliveryStatus,
                 onCheckAgain: props.chat.checkAgain,
+                useSendingState: props.chat.useSendingState,
+                onAllowSend: props.chat.allowSend,
               }}
             />
           )}

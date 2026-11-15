@@ -352,7 +352,31 @@ export const retry = action({
   },
 });
 
-const MISSING_SEND_PERMISSION = "Sending from Gmail hasn't been allowed yet. Allow it in Connections → Gmail, then press Send it again.";
+const MISSING_SEND_PERMISSION = "Sending from Gmail hasn't been allowed yet. Allow it below, then press Send it.";
+const NO_GMAIL = "Sending from Gmail hasn't been allowed yet, and this project has no Gmail connected through Composio. Connect Gmail in Connections, then ask me to send it again.";
+
+/**
+ * The project's Gmail sources that can send the document: active grants for this project whose
+ * connection is through Composio (the only route delivery sends a document by).
+ */
+export const gmailSenders = internalQuery({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.array(v.string()),
+  handler: async (ctx, { ownerId, projectId }) => {
+    const grants = (await ctx.db.query("grants").collect()).filter(
+      (g) => g.ownerId === ownerId && g.state === "active" && g.kind === "gmail" && g.projectIds.includes(projectId),
+    );
+    const out = [];
+    for (const grant of grants) {
+      const connection = await ctx.db
+        .query("connections")
+        .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
+        .unique();
+      if (connection?.broker === "composio" && connection.ownerId === ownerId) out.push(grant.id);
+    }
+    return out;
+  },
+});
 
 export const loadApprovalContext = internalQuery({
   args: { ownerId: v.string(), projectId: v.string() },
@@ -414,7 +438,13 @@ export const send = action({
       result = await ctx.runAction(api.delivery.approveAndSend, args);
     } catch (error) {
       if (!(error instanceof ConvexError) || error.data !== "missing-send-permission") throw error;
-      await reply([block("say", "say", { text: MISSING_SEND_PERMISSION })]);
+      // The permission is asked for right here, for the Gmail the send would go through; it never sends by itself.
+      const senders: string[] = await ctx.runQuery(internal.thread.gmailSenders, { ownerId, projectId: args.projectId });
+      await reply(
+        senders.length === 0
+          ? [block("say", "say", { text: NO_GMAIL })]
+          : [block("say", "say", { text: MISSING_SEND_PERMISSION }), ...senders.map((sourceId) => block(`allow-${sourceId}`, "allowSend", { sourceId, account: "Gmail" }))],
+      );
       return { status: "missing-send-permission" };
     }
     if ("actionId" in result) {

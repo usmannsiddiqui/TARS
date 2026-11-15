@@ -54,6 +54,10 @@ export const BLOCKS = {
       state: z.enum(["open", "approved"]),
     }),
   },
+  allowSend: {
+    description: "Asks for the separate permission to send from one connected Composio Gmail source; it emits an action and never sends.",
+    props: z.object({ sourceId: z.string(), account: z.string() }),
+  },
   delivery: {
     description: "One approved send of the Word document; the renderer follows its live status (document, link, send, verify) by action id.",
     props: z.object({ actionId: z.string(), recipient: z.string() }),
