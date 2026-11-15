@@ -3,11 +3,11 @@
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
 // stay one click away; adding a project lives on the project index. Presentational: data and actions arrive as props.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { preparedNote, type Brief, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
+import { preparedNote, type Brief, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
 import { SourceChip } from "./logos";
-import { formatWhen, NewProject, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
+import { formatWhen, NewProject, NudgeCard, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
   dateLabel: string;
@@ -21,6 +21,8 @@ export type HomeProps = {
   reentry?: Reentry;
   /** One open tradeoff for a new commitment; the user's choice ends it. */
   tradeoff?: Tradeoff;
+  /** One gentle nudge for a due commitment of yours, with its draft. */
+  nudge?: NudgeOffer;
   /** The brief service could not be set up or reached. */
   briefError?: string;
   ideas: CapturedIdea[];
@@ -34,6 +36,7 @@ export type HomeProps = {
   /** The brief was actually shown here, so it is never offered as news again. */
   onBriefShown(key: string): void;
   onResolveTradeoff(commitmentId: string, choice: TradeoffChoice): Promise<void>;
+  onNudge(choice: NudgeChoice): Promise<void>;
 };
 
 export function Home(props: HomeProps) {
@@ -194,6 +197,7 @@ export function Home(props: HomeProps) {
         <div className="home-main">
           {projects !== null && projects.length > 0 && (
             <>
+              {props.nudge && <NudgeCard offer={props.nudge} className="block tradeoff" onRespond={props.onNudge} onShown={onBriefShown} />}
               {props.tradeoff && <TradeoffFlag tradeoff={props.tradeoff} onResolve={props.onResolveTradeoff} />}
 
               {reentry ? (
