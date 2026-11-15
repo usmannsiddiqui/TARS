@@ -44,7 +44,7 @@ import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
 
-import { queueNudge, queueRecap } from "./whatsapp";
+import { isLinked, queueNudge, queueRecap } from "./whatsapp";
 import schema, { commitmentFields } from "./schema";
 
 type Ctx = Pick<QueryCtx, "db">;
@@ -542,6 +542,10 @@ async function prepareDaily(ctx: MutationCtx, kind: DailyKind, ownerId: string, 
     // "New" means since the brief this one replaces, or the last day when there is none.
     ...(kind === "morning" ? { read: briefReads(context, old?.preparedAt ?? now - 24 * 3_600_000) } : {}),
   });
+  // The same moment starts the run that writes the morning message for his phone (only when one is linked).
+  if (kind === "morning" && (await isLinked(ctx, ownerId))) {
+    await ctx.scheduler.runAfter(0, internal.runs.onMorning, { ownerId, key: localDate(scheduledFor, settings.timezone) });
+  }
   // From now, not from the missed deadline: no catch-up chain after downtime.
   const time = kind === "morning" ? MORNING : EVENING;
   const next = nextLocalTime(Math.max(now, scheduledFor), settings.timezone, time.hour, time.minute);

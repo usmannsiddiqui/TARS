@@ -363,6 +363,10 @@ async function stopOnModelError(ctx: ActionCtx, run: Run, error: unknown, retry:
   });
 }
 
+/** Now, as the user's wall clock reads it ("2026-11-15 09:00"), or UTC when no time zone is stored. */
+const localNow = (timezone: string | null) =>
+  timezone ? new Intl.DateTimeFormat("sv-SE", { timeZone: timezone, dateStyle: "short", timeStyle: "short" }).format(new Date()) : new Date().toISOString();
+
 /** A new message arrived from a source that allows cloud processing: decide what it asks, and start the work. */
 export const onMessage = internalAction({
   args: { ownerId: v.string(), evidenceId: v.string() },
@@ -371,10 +375,8 @@ export const onMessage = internalAction({
     const c = await ctx.runQuery(internal.runs.loadMessage, { ownerId, evidenceId });
     if (c === null || c.projects.length === 0) return null;
     const run: Run = { ownerId, trigger: "message", projects: new Map(c.projects.map((p) => [p.id, p.name])), evidenceId, timezone: c.timezone, steps: [], items: new Map(), calls: [] };
-    const now = new Date();
-    const localNow = c.timezone ? new Intl.DateTimeFormat("sv-SE", { timeZone: c.timezone, dateStyle: "short", timeStyle: "short" }).format(now) : now.toISOString();
     try {
-      const said = await work(ctx, run, { now: localNow, timezone: c.timezone, user: c.user, projects: c.projects, message: c.message });
+      const said = await work(ctx, run, { now: localNow(c.timezone), timezone: c.timezone, user: c.user, projects: c.projects, message: c.message });
       if (run.messageId === undefined || run.projectId === undefined || run.key === undefined) {
         log(run, "nothing asked of the user");
         return null;
@@ -408,3 +410,44 @@ export async function answerChat(ctx: ActionCtx, ownerId: string, messageId: Id<
     await stopOnModelError(ctx, run, error, true);
   }
 }
+
+const MAX_PHONE = 1_500; // one WhatsApp message
+
+/** The owner's projects, name and time zone for a run nobody typed: only what the stored profile and settings hold. */
+export const loadOwner = internalQuery({
+  args: { ownerId: v.string() },
+  returns: v.object({ projects: v.array(projectRef), user: v.object({ name: v.optional(v.string()) }), timezone: v.union(v.string(), v.null()) }),
+  handler: async (ctx, { ownerId }) => {
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .collect();
+    const profile = await ctx.db
+      .query("ownerProfiles")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .unique();
+    const settings = await ctx.db
+      .query("attentionSettings")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .unique();
+    return { projects: projects.map((p) => ({ id: p._id as string, name: p.name })), user: profile?.name ? { name: profile.name } : {}, timezone: settings?.timezone ?? null };
+  },
+});
+
+/** The morning brief's time came (briefs.prepareDaily): a read-only run writes the day's message for his linked phone. */
+export const onMorning = internalAction({
+  args: { ownerId: v.string(), key: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, key }): Promise<null> => {
+    const c = await ctx.runQuery(internal.runs.loadOwner, { ownerId });
+    const run: Run = { ownerId, trigger: "brief", projects: new Map(c.projects.map((p) => [p.id, p.name])), timezone: c.timezone, steps: [], items: new Map(), calls: [] };
+    try {
+      const said = await work(ctx, run, { now: localNow(c.timezone), timezone: c.timezone, user: c.user, projects: c.projects });
+      if (said.length > 0) await ctx.runMutation(internal.whatsapp.queueBrief, { ownerId, key, body: said.slice(0, MAX_PHONE) });
+      log(run, said.length > 0 ? "wrote the morning brief" : "had nothing to say");
+    } catch (error) {
+      await stopOnModelError(ctx, run, error, false);
+    }
+    return null;
+  },
+});

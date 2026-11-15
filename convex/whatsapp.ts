@@ -246,34 +246,19 @@ const OUTCOME_TEXT = {
   unknown: (to: string) => `I sent it to ${to} but could not confirm it arrived. Open TARS to check again; I will not resend it on my own.`,
 };
 
-/** In the transaction that settles an action: one message for a send he started with SEND. */
+/** In the transaction that settles a send, wherever he approved it (the app's button or SEND here): one message. */
 export async function reportSendOutcome(ctx: MutationCtx, row: Doc<"actions">, state: keyof typeof OUTCOME_TEXT) {
-  const waiting = await ctx.db
-    .query("whatsappOutbox")
-    .withIndex("by_owner_key", (q) => q.eq("ownerId", row.ownerId).eq("key", `send:${row._id}`))
-    .unique();
-  if (waiting?.state === "waiting") await queueMessage(ctx, row.ownerId, waiting.key, OUTCOME_TEXT[state](row.destination));
+  await queueMessage(ctx, row.ownerId, `send:${row._id}`, OUTCOME_TEXT[state](row.destination));
 }
 
-/** Mark a SEND's action so its outcome comes back as one message; if it already settled, report it now. */
-export const awaitOutcome = internalMutation({
-  args: { ownerId: v.string(), actionId: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { ownerId, actionId }) => {
-    const id = ctx.db.normalizeId("actions", actionId);
-    const row = id === null ? null : await ctx.db.get(id);
-    if (row === null || row.ownerId !== ownerId) return null;
-    const key = `send:${row._id}`;
-    const existing = await ctx.db
-      .query("whatsappOutbox")
-      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
-      .unique();
-    if (existing !== null) return null;
-    await ctx.db.insert("whatsappOutbox", { ownerId, key, state: "waiting", at: Date.now() });
-    if (row.state === "succeeded" || row.state === "failed" || row.state === "unknown") await reportSendOutcome(ctx, row, row.state);
-    return null;
-  },
+/** The run's morning message for his phone: once per day's key, only to a linked phone. */
+export const queueBrief = internalMutation({
+  args: { ownerId: v.string(), key: v.string(), body: v.string() },
+  returns: v.boolean(),
+  handler: (ctx, { ownerId, key, body }) => queueMessage(ctx, ownerId, `brief:${key}`, body),
 });
+
+export const isLinked = async (ctx: Pick<QueryCtx, "db">, ownerId: string) => (await linkOf(ctx, ownerId)) !== null;
 
 type Approval = Extract<Block, { type: "approval" }>["props"];
 
@@ -456,10 +441,7 @@ async function confirmSend(ctx: ActionCtx, ownerId: string): Promise<string | nu
     commitmentKey: approval.commitmentKey,
     recipient: approval.recipient,
   });
-  if ("actionId" in result) {
-    await ctx.runMutation(internal.whatsapp.awaitOutcome, { ownerId, actionId: result.actionId });
-    return null; // one message when the send settles
-  }
+  if ("actionId" in result) return null; // one message when the send settles (reportSendOutcome)
   if (result.status === "missing-send-permission") return "Sending from Gmail hasn't been allowed yet. Allow it in TARS under Connections → Gmail, then reply SEND again.";
   return `${result.reason} Nothing was sent.`;
 }

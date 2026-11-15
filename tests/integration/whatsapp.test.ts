@@ -345,6 +345,45 @@ describe("messages from his phone", () => {
     expect(s.texts()[0]!.Body).toMatch(/nothing waiting/i);
   });
 
+  test("a send he presses in the app is reported once to the linked phone", async () => {
+    const s = await setup();
+    await s.link();
+    s.run(APPROVE);
+    await s.asAlice.action(api.thread.sendMessage, { projectId: s.projectId, text: "looks good" });
+    const approval = (await s.thread()).flatMap((m) => m.blocks).find((b) => b.type === "approval")!.props as { artifactId: string; revision: string; commitmentKey: string; recipient: string };
+    s.calls.length = 0;
+    await s.asAlice.action(api.thread.send, { projectId: s.projectId, artifactId: approval.artifactId, revision: approval.revision, commitmentKey: approval.commitmentKey, recipient: approval.recipient });
+    await s.settle();
+    expect(s.gmailSends().map((m) => m.recipient_email)).toEqual([DANA]);
+    expect(s.texts().map((m) => m.Body)).toEqual([`Sent to ${DANA} · checked: it arrived.`]);
+  });
+
+  test("the morning brief goes to the linked phone in the run's own words, after it read his projects", async () => {
+    const s = await setup();
+    await s.link();
+    await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const { morningAt } = (await s.t.run((ctx) => ctx.db.query("attentionSettings").first()))!;
+    s.calls.length = 0;
+    s.run([[call("read_project", { projectId: s.projectId })], [says("*This week*\n- *Fri:* budget summary for Dana")]]);
+    await s.t.mutation(internal.briefs.prepareMorning, { ownerId: s.alice.ownerId, scheduledFor: morningAt });
+    await s.settle();
+    expect(s.texts().map((m) => m.Body)).toEqual(["*This week*\n- *Fri:* budget summary for Dana"]);
+    const first = JSON.parse(s.calls.find((c) => c.url === MODEL)!.body) as { tools: { name: string }[]; input: { content: string }[] };
+    expect(first.tools.map((tool) => tool.name)).toEqual(["read_project"]); // it can only read
+    expect((JSON.parse(first.input[0]!.content) as { projects: { name: string }[] }).projects.map((p) => p.name)).toEqual(["Budget for Dana"]);
+  });
+
+  test("with no linked phone the morning brief asks the model nothing", async () => {
+    const s = await setup();
+    await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const { morningAt } = (await s.t.run((ctx) => ctx.db.query("attentionSettings").first()))!;
+    s.calls.length = 0;
+    await s.t.mutation(internal.briefs.prepareMorning, { ownerId: s.alice.ownerId, scheduledFor: morningAt });
+    await s.settle();
+    expect(s.calls.filter((c) => c.url === MODEL)).toEqual([]);
+    expect(s.texts()).toEqual([]);
+  });
+
   test("anything but an exact SEND does not send", async () => {
     const s = await setup();
     await s.link();
