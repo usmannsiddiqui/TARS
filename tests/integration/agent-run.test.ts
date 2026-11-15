@@ -132,7 +132,7 @@ describe("a new message starts a run", () => {
   test("mail_that_asks_for_nothing_leaves_no_trace_in_the_project", async () => {
     const s = await setup();
     stubModel([[says("")]]);
-    await s.mail("Your weekly digest: 12 new job matches.", { from: { address: "news@example.com" }, subject: "Digest" });
+    await s.mail("Your weekly digest: 12 new job matches.", { from: { name: "News", address: "news@example.com" }, subject: "Digest" });
     await s.settle();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);

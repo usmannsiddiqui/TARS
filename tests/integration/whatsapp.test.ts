@@ -387,8 +387,8 @@ describe("TARS to his phone", () => {
     await s.link();
     const projectId = await nudgeSetup(s);
     s.calls.length = 0;
-    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId, true));
-    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId, true));
+    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId));
+    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId));
     await s.settle();
     const nudges = s.texts().filter((m) => m.Body!.startsWith("I started"));
     expect(nudges).toHaveLength(1);
@@ -400,7 +400,7 @@ describe("TARS to his phone", () => {
   test("nothing goes to a phone that is not linked", async () => {
     const s = await setup();
     const projectId = await nudgeSetup(s);
-    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId, true));
+    await s.t.run((ctx) => trackDueCommitments(ctx, s.alice.ownerId, projectId));
     await s.asAlice.mutation(api.briefs.recordSessionEvent, { kind: "stop" });
     await s.settle();
     expect(s.texts()).toEqual([]);

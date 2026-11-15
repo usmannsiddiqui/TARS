@@ -472,7 +472,7 @@ export const persistPreparation = internalMutation({
     };
     if (row === null) await ctx.db.insert("preparedWork", { ownerId, projectId, ...next });
     else await ctx.db.patch(row._id, { ...next, lastError: undefined });
-    await trackDueCommitments(ctx, ownerId, projectId, automatic);
+    await trackDueCommitments(ctx, ownerId, projectId);
     return "stored" as const;
   },
 });

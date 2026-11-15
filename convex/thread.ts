@@ -7,10 +7,10 @@
 import { ConvexError, v, type Infer } from "convex/values";
 import { mailSubject } from "../packages/domain/src/actions";
 import { deliveryMail, replyMail, type Requester } from "../packages/domain/src/delivery";
-import { block, dueLabel, openingText, type Block, type Step } from "../packages/domain/src/thread";
+import { block, type Block, type Step } from "../packages/domain/src/thread";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { action, internalMutation, internalQuery, query, type ActionCtx, type QueryCtx } from "./_generated/server";
 import { approveAs, requesterFor } from "./delivery";
 import { requireOwnerId } from "./lib/auth";
 import { requireOwnedProject } from "./memory";
@@ -18,7 +18,6 @@ import { answerChat } from "./runs";
 import { threadBlocks } from "./schema";
 
 const MAX_MESSAGE = 2_000;
-const MAX_REPLY = 600;
 type Ctx = Pick<QueryCtx, "db">;
 
 const messageView = v.object({
@@ -51,76 +50,6 @@ export const listThread = query({
     }));
   },
 });
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-/**
- * TARS's first message for a newly recorded due commitment, written in the same transaction as the
- * preparation that found it. Steps are only the stages the run really recorded, with their times.
- * Exactly once per commitment key.
- */
-export async function writeOpening(
-  ctx: MutationCtx,
-  {
-    ownerId,
-    projectId,
-    key,
-    commitment,
-    artifactId,
-    outcome,
-  }: { ownerId: string; projectId: string; key: string; commitment: Doc<"commitments">; artifactId: Id<"artifacts">; outcome: "created" | "revised" | "suggested" },
-) {
-  const already = await ctx.db
-    .query("threadMessages")
-    .withIndex("by_owner_commitment", (q) => q.eq("ownerId", ownerId).eq("commitmentKey", key))
-    .first();
-  if (already !== null) return;
-  const run = await ctx.db
-    .query("preparationRuns")
-    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-    .unique();
-  const artifact = await ctx.db.get(artifactId);
-  const prepared = await ctx.db
-    .query("preparedWork")
-    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-    .unique();
-  const settings = await ctx.db
-    .query("attentionSettings")
-    .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
-    .unique();
-  if (artifact === null) return;
-  const title = prepared?.work?.title ?? "Your draft";
-  const now = Date.now();
-  const at = (stage: "reading" | "drafting" | "saving") => run?.stageTimes?.find((t) => t.stage === stage)?.at;
-  const [read, draft, save] = [at("reading"), at("drafting"), at("saving")];
-  const sources = run?.sources ?? [];
-  const items = sources.reduce((n, s) => n + s.count, 0);
-  const steps: Step[] = [];
-  if (read !== undefined) {
-    steps.push({ id: "read", label: `Reading ${plural(items, "item")}`, doneLabel: `Read ${plural(items, "item")}`, status: "done", startedAt: read, endedAt: draft ?? now, sources });
-  }
-  if (draft !== undefined) steps.push({ id: "draft", label: `Drafting “${title}”`, doneLabel: `Drafted “${title}”`, status: "done", startedAt: draft, endedAt: save ?? now });
-  if (save !== undefined) {
-    steps.push({ id: "save", label: "Checking it against the sources and saving it", doneLabel: "Checked it against the sources and saved it", status: "done", startedAt: save, endedAt: now });
-  }
-
-  const asker = await requesterFor(ctx, ownerId, projectId, key); // the mail's own From field, never its body
-  const text = openingText({
-    asker,
-    commitment: commitment.text,
-    ...(commitment.dueAt && settings ? { due: dueLabel(commitment.dueAt, settings.timezone) } : {}),
-    sources,
-    // The model was sent nothing beyond the request itself: say so instead of claiming sources.
-    requestOnly: items > 0 && items <= commitment.evidenceIds.length,
-    outcome,
-  });
-  const blocks: Block[] = [
-    ...(steps.length > 0 ? [block("work", "work", { steps })] : []),
-    block("document", "document", { artifactId, title, revision: artifact.revision }),
-    block("say", "say", { text }),
-  ];
-  await ctx.db.insert("threadMessages", { ownerId, projectId, role: "tars", blocks, commitmentKey: key, createdAt: now });
-}
 
 // ---- The user's turn.
 

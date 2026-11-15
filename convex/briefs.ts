@@ -39,11 +39,11 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { startDraftForRequest } from "./artifacts";
+
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
-import { writeOpening } from "./thread";
+
 import { queueNudge, queueRecap } from "./whatsapp";
 import schema, { commitmentFields } from "./schema";
 
@@ -344,12 +344,8 @@ export async function offerStarted(ctx: MutationCtx, commitment: Doc<"commitment
   await queueNudge(ctx, ownerId, key, title, dueAt, true);
 }
 
-/**
- * After a preparation stored commitments: one nudge row and one due-1h reminder per user-owned open
- * commitment with a future due time. `automatic`: the project gets a draft if it has none, and that
- * commitment gets the one "started for you" offer. Never touches focus, never creates an action.
- */
-export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, projectId: string, automatic: boolean) {
+/** After a preparation stored commitments: one nudge row and one due-1h reminder per user-owned open commitment with a future due time. */
+export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, projectId: string) {
   const now = Date.now();
   const rows = await ctx.db
     .query("commitments")
@@ -376,21 +372,7 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
       await ctx.db.patch(existing._id, { dueAt, dueJob });
       continue;
     }
-    const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
-    if (!automatic) continue;
-    // A newly seen due commitment is offered at once; "started for you" only when TARS made the draft now.
-    const draft = await startDraftForRequest(ctx, ownerId, projectId, commitment.text);
-    const started = draft.outcome !== "suggested";
-    await writeOpening(ctx, { ownerId, projectId, key, commitment, artifactId: draft.id, outcome: draft.outcome }); // TARS speaks first in the project chat
-    if ((await liveOffers(ctx, ownerId, now)).length > 0) continue; // one at a time; return/due-soon pick it up
-    const settings = await loadSettings(ctx, ownerId);
-    const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
-    // A new row has no last nudge, so only the contact rules decide.
-    if (decideNudge({ trigger: "return", nowMs: now, commitment, ...state })) {
-      await openOffer(ctx, (await ctx.db.get(id))!, now, started);
-      const title = (await ctx.db.query("preparedWork").withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId)).unique())?.work?.title ?? "Your draft";
-      await queueNudge(ctx, ownerId, key, title, dueAt, started); // and to his linked WhatsApp, once per commitment
-    }
+    await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
   }
 }
 
