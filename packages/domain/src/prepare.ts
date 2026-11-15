@@ -73,7 +73,7 @@ const MAX_VALUE = 500;
 export type CommitmentDraft = Omit<Commitment, "id" | "ownerId" | "projectId">;
 export type FactDraft = { key: string; value: string; evidenceIds: EvidenceId[] };
 export type AssembledPreparation =
-  | { ok: true; work: PreparedWork; commitments: CommitmentDraft[]; facts: FactDraft[] }
+  | { ok: true; work: PreparedWork; commitments: CommitmentDraft[]; facts: FactDraft[]; uncitedNewest: number }
   | { ok: false; reason: "no_valid_evidence" | "empty_fields" | "next_action_not_one_step" };
 
 const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -127,7 +127,9 @@ export function assemblePreparation(
   const quotes: string[] = []; // squashed quote of each kept commitment
   for (const item of output.commitments) {
     const text = item.text.trim();
-    const ids = valid(item.evidenceIds);
+    // Oldest first: evidenceIds[0] is the message that made the request (its origin); later ones add detail.
+    const at = (id: string) => Date.parse(byId.get(id)!.occurredAt);
+    const ids = valid(item.evidenceIds).sort((x, y) => at(x) - at(y) || x.localeCompare(y));
     if (text === "" || ids.length === 0) continue; // no grounded evidence: not persisted
     const quote = squash(item.quote);
     const quoted = quote !== "" && ids.some((id) => squash(byId.get(id)!.text).includes(quote));
@@ -178,11 +180,17 @@ export function assemblePreparation(
     facts.push({ key, value, evidenceIds: ids });
   }
 
+  // Guard on the model: the newest message made no request of its own (no commitment starts there).
+  // Often fine ("thanks!"); when a request was folded into an older one, this is how it shows.
+  const newest = [...supplied].sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt) || y.id.localeCompare(x.id))[0];
+  const uncitedNewest = newest !== undefined && !commitments.some((c) => c.evidenceIds[0] === newest.id) ? 1 : 0;
+
   return {
     ok: true,
     work: { projectId, title, body, evidenceIds, gaps, nextAction, state: gaps.length > 0 ? "partial" : "ready" },
     commitments,
     facts,
+    uncitedNewest,
   };
 }
 
@@ -241,16 +249,18 @@ const words = (text: string) => new Set(squash(text).split(/[^a-z0-9]+/).filter(
 
 /**
  * Which stored commitment each new one continues (index into `stored`, or null when it is new).
- * Identity is the evidence it cites, not its wording: a pair must share a cited evidence ID. When
- * one message holds several, pairs with more words in common win, then earlier positions; each
- * stored commitment continues at most one new one.
+ * Identity is the message that made the request, not its wording: a new commitment continues a
+ * stored one only when the stored one cites the new one's origin (evidenceIds[0], see
+ * assemblePreparation), so a new message is always a new commitment. When one message holds
+ * several, pairs with more words in common win, then earlier positions; each stored commitment
+ * continues at most one new one.
  */
 export function matchCommitments(stored: readonly Matchable[], incoming: readonly Matchable[]): (number | null)[] {
   const pairs: { i: number; j: number; score: number }[] = [];
   incoming.forEach((next, i) => {
     const a = words(next.text);
     stored.forEach((old, j) => {
-      if (!next.evidenceIds.some((id) => old.evidenceIds.includes(id))) return;
+      if (next.evidenceIds[0] === undefined || !old.evidenceIds.includes(next.evidenceIds[0])) return;
       const b = words(old.text);
       const shared = [...a].filter((w) => b.has(w)).length;
       pairs.push({ i, j, score: shared / (a.size + b.size - shared || 1) });

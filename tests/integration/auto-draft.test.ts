@@ -232,6 +232,63 @@ describe("automatic preparation on new evidence", () => {
   });
 });
 
+describe("one commitment per request", () => {
+  const OLDER = [
+    ["Alice, please send the AI Guides report by Friday.", "send the AI Guides report by Friday", "2026-11-20T17:00"],
+    ["Alice, please send the AI Guides summary by Thursday.", "send the AI Guides summary by Thursday", "2026-11-19T17:00"],
+    ["Alice, please send the AI Guides recap by Wednesday.", "send the AI Guides recap by Wednesday", "2026-11-18T17:00"],
+  ] as const;
+  const NEW = ["Alice, please send the AI Guides summary by tomorrow at 5 PM.", "send the AI Guides summary by tomorrow at 5 PM", "2026-11-15T17:00"] as const;
+
+  /** Three older similar requests, prepared once; `next` decides what the model says about the new mail. */
+  async function olderThenNew(next: (older: string[], fresh: string) => PreparationOutput["commitments"]) {
+    const s = setup();
+    await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const guides = await s.project("AI Guides");
+    const older: string[] = [];
+    let fresh = "";
+    const ask = (id: string, [, quote, dueAt]: readonly [string, string, string], text: string) => ({ ...dueCommitment(id, `Alice, please ${quote}`), text, dueAt });
+    const olderCommitments = () => OLDER.map((o, i) => ask(older[i]!, o, `Send the AI Guides ${["report", "summary", "recap"][i]}`));
+    stubModel(() =>
+      prepared({ evidenceIds: fresh ? [...older, fresh] : older, commitments: fresh ? next(older, fresh) : olderCommitments() }),
+    );
+    for (const [text] of OLDER) older.push((await s.evidence(guides, text)).id);
+    await s.settle();
+    const before = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
+    const counts = { nudges: (await s.all("nudges")).length, messages: (await s.all("threadMessages")).length };
+    fresh = (await s.evidence(guides, NEW[0])).id;
+    await s.settle();
+    return { ...s, guides, older, fresh, before, counts, olderCommitments, ask };
+  }
+
+  test("a_new_mail_like_earlier_ones_gets_its_own_commitment_due_time_nudge_message_and_draft", async () => {
+    const s = await olderThenNew((older, fresh) => [
+      ...OLDER.map((o, i) => ({ ...dueCommitment(older[i]!, `Alice, please ${o[1]}`), text: `Send the AI Guides ${["report", "summary", "recap"][i]}`, dueAt: o[2] })),
+      { ...dueCommitment(fresh, `Alice, please ${NEW[1]}`), text: "Send the AI Guides summary", dueAt: NEW[2] },
+    ]);
+    const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: s.guides })).filter((c) => c.ownership === "user");
+    expect(mine).toHaveLength(4);
+    const created = mine.find((c) => c.evidenceIds.includes(s.fresh))!;
+    expect([created.dueAt, created.evidenceIds]).toEqual(["2026-11-15T22:00:00.000Z", [s.fresh]]); // 17:00 New York
+    for (const old of s.before) expect(mine).toContainEqual(old); // untouched
+    expect((await s.all("nudges")).length).toBe(s.counts.nudges + 1);
+    expect((await s.all("threadMessages")).length).toBe(s.counts.messages + 1);
+    expect(await s.all("artifacts")).toHaveLength(1);
+    expect((await s.all("preparedWork"))[0]!.uncitedNewest).toBe(0);
+  });
+
+  test("a_model_that_still_folds_the_new_mail_into_an_old_request_invents_no_due_time_and_reports_it", async () => {
+    const s = await olderThenNew((older, fresh) => [
+      { ...dueCommitment(older[0]!, `Alice, please ${OLDER[0][1]}`), text: "Send the AI Guides report", dueAt: null, evidenceIds: [older[0]!, older[1]!, fresh] },
+    ]);
+    const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: s.guides })).filter((c) => c.ownership === "user");
+    expect(mine.some((c) => c.dueAt === "2026-11-15T22:00:00.000Z")).toBe(false);
+    expect(mine.find((c) => c.evidenceIds.includes(s.fresh))?.dueAt).toBeUndefined();
+    expect((await s.all("threadMessages")).length).toBe(s.counts.messages);
+    expect((await s.all("preparedWork"))[0]!.uncitedNewest).toBe(1);
+  });
+});
+
 describe("stable commitment identity across re-preparation", () => {
   const ASK = "Alice, please send the budget to Dana by 5pm";
   const DUE2 = "2026-11-14T23:00:00.000Z";
