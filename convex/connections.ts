@@ -1,6 +1,7 @@
 // Connector seam: connection rows, status, and the path from a provider item to `ingest`.
 // Credentials stay sealed here; only internal functions return a connection row.
 import { ConvexError, v } from "convex/values";
+import type { Mailbox } from "../packages/domain/src/delivery";
 import type { Evidence, SourceGrant } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
@@ -196,6 +197,9 @@ export type ProviderItem = {
   text: string;
   occurredAt: string; // ISO-8601 UTC
   sourceUrl?: string;
+  // Mail: from the provider's header fields only, validated.
+  from?: Mailbox;
+  subject?: string;
 };
 
 /** Ingest provider items under the stored grant. Returns the records now stored (new or duplicate), not denied ones. */

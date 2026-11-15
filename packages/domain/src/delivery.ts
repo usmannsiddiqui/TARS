@@ -24,6 +24,18 @@ export function parseMailbox(header: string): Mailbox | undefined {
   return name === "" ? { address } : { name: name.slice(0, MAX_NAME), address };
 }
 
+/** Evidence's mail fields from a provider's header values: a From header string or a structured sender. */
+export function mailFields(from: string | { name?: string; address: string } | undefined, subject: string | undefined) {
+  const box =
+    typeof from === "string"
+      ? parseMailbox(from)
+      : from !== undefined && isMailAddress(from.address)
+        ? { ...(oneLine(from.name ?? "") === "" ? {} : { name: oneLine(from.name!).slice(0, MAX_NAME) }), address: from.address }
+        : undefined;
+  const line = (subject ?? "").trim().slice(0, 1000);
+  return { ...(box === undefined ? {} : { from: box }), ...(line === "" ? {} : { subject: line }) };
+}
+
 /** The one sender of the cited mail (newest message's subject), or null when none or more than one. */
 export function requesterFrom(rows: { from?: Mailbox; subject?: string; occurredAt: string }[]): Requester | null {
   const mail = rows.filter((row) => row.from !== undefined).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
@@ -96,7 +108,7 @@ const RELS =
   '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
 
 /** A real .docx for one draft revision. Deterministic: fixed timestamps, fixed part order. */
-export function docx(title: string, text: string): Uint8Array {
+export function docx(title: string, text: string): Uint8Array<ArrayBuffer> {
   return storedZip([
     ["[Content_Types].xml", CONTENT_TYPES],
     ["_rels/.rels", RELS],
@@ -118,7 +130,7 @@ function crc32(bytes: Uint8Array): number {
 const DOS_DATE = 0x21; // 1980-01-01, time 00:00
 
 /** ZIP with method 0 (stored): local headers + data, central directory, end record. */
-function storedZip(files: [string, string][]): Uint8Array {
+function storedZip(files: [string, string][]): Uint8Array<ArrayBuffer> {
   const encoder = new TextEncoder();
   const entries = files.map(([name, text]) => ({ name: encoder.encode(name), data: encoder.encode(text) }));
   const size = entries.reduce((sum, e) => sum + 30 + e.name.length + e.data.length + 46 + e.name.length, 22);
