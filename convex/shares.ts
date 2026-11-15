@@ -1,15 +1,15 @@
 // Share one artifact revision as a read-only web page. Sharing is an outside act: only the three
-// user mutations below create, move or remove a share, each from the verified session. Nothing in
+// user functions below (the share action, two mutations) create, move or remove a share, each from the verified session. Nothing in
 // prepare, automatic runs, briefs, memory or model output calls them. The page shows a snapshot of
 // one revision, so edits, undo, suggestions and new preparations never reach it.
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { httpAction, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
+import { action, httpAction, internalMutation, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
 import { requireOwnedArtifact } from "./artifacts";
 import { requireOwnerId } from "./lib/auth";
 import { decryptSecret, encryptSecret } from "./lib/crypto";
-import { randomToken, requireEnv } from "./lib/providerAuth";
+import { requireEnv } from "./lib/providerAuth";
 import { NOT_FOUND_PAGE, pageResponse, renderSharedPage, tokenHash } from "./lib/sharePage";
 import { requireOwnedProject } from "./memory";
 
@@ -47,28 +47,48 @@ export const getShare = query({
   },
 });
 
-/** The user's explicit share of the current revision. An artifact already shared keeps its one link. */
-export const share = mutation({
+/**
+ * The user's explicit share of the current revision. An action, because the token must come from the
+ * runtime's real CSPRNG, not the seeded generator queries and mutations get. An artifact already shared
+ * keeps its one link.
+ */
+export const share = action({
   args: { artifactId: v.string(), revision: v.string() },
   returns: v.object({ link: v.string() }),
-  handler: async (ctx, { artifactId, revision }) => {
+  handler: async (ctx, { artifactId, revision }): Promise<{ link: string }> => {
     const ownerId = await requireOwnerId(ctx);
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const sealedToken: string = await ctx.runMutation(internal.shares.insertShare, {
+      ownerId,
+      artifactId,
+      revision,
+      tokenHash: await tokenHash(token),
+      sealedToken: await encryptSecret(token),
+    });
+    return { link: await linkFor(sealedToken) };
+  },
+});
+
+/** Ownership, current revision and the one-share rule in one transaction; returns the live share's sealed token. */
+export const insertShare = internalMutation({
+  args: { ownerId: v.string(), artifactId: v.string(), revision: v.string(), tokenHash: v.string(), sealedToken: v.string() },
+  returns: v.string(),
+  handler: async (ctx, { ownerId, artifactId, revision, tokenHash, sealedToken }) => {
     const { artifact, title } = await currentRevision(ctx, ownerId, artifactId, revision);
     const existing = await shareOf(ctx, artifact._id);
-    if (existing !== null) return { link: await linkFor(existing.sealedToken) };
-    const token = randomToken();
-    const sealedToken = await encryptSecret(token);
+    if (existing !== null) return existing.sealedToken;
     await ctx.db.insert("artifactShares", {
       ownerId,
       artifactId: artifact._id,
-      tokenHash: await tokenHash(token),
+      tokenHash,
       sealedToken,
       revision,
       title,
       text: artifact.text,
       sharedAt: Date.now(),
     });
-    return { link: await linkFor(sealedToken) };
+    return sealedToken;
   },
 });
 

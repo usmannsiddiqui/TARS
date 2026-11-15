@@ -332,7 +332,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const apply = useMutation(api.artifacts.applySuggestion);
   const dismiss = useMutation(api.artifacts.dismissSuggestion);
   const share = useQuery(api.shares.getShare, artifact ? { artifactId: artifact.id } : "skip");
-  const shareArtifact = useMutation(api.shares.share);
+  const shareArtifact = useAction(api.shares.share);
   const updateShare = useMutation(api.shares.updateShare);
   const stopSharing = useMutation(api.shares.stopSharing);
   const receipts = useQuery(api.actions.listReceipts, { projectId });

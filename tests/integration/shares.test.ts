@@ -57,7 +57,7 @@ describe("share an artifact by link", () => {
     const artifactId = await artifact(projectId);
     expect(await asAlice.query(api.shares.getShare, { artifactId })).toBeNull();
 
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION });
+    const { link } = await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION });
     const shared = await page(link);
     expect(shared.status).toBe(200);
     expect(shared.body).toContain("<h1>AVT pitch</h1>");
@@ -101,26 +101,26 @@ describe("share an artifact by link", () => {
   test("a_share_or_update_names_the_current_revision_or_nothing_changes", async () => {
     const { asAlice, project, artifact, page } = setup();
     const artifactId = await artifact(await project());
-    await expect(asAlice.mutation(api.shares.share, { artifactId, revision: "r-not-current" })).rejects.toThrow(/changed/);
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION });
+    await expect(asAlice.action(api.shares.share, { artifactId, revision: "r-not-current" })).rejects.toThrow(/changed/);
+    const { link } = await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION });
     const before = (await page(link)).body;
     await expect(asAlice.mutation(api.shares.updateShare, { artifactId, revision: "r-not-current" })).rejects.toThrow(/changed/);
     expect((await page(link)).body).toBe(before);
     // At most one live share per artifact: sharing again keeps the same link.
-    expect((await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION })).link).toBe(link);
+    expect((await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION })).link).toBe(link);
   });
 
   test("stop_kills_the_link_for_good_and_a_re_share_makes_a_new_one", async () => {
     const { asAlice, project, artifact, page, all } = setup();
     const artifactId = await artifact(await project());
-    const first = (await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION })).link;
+    const first = (await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION })).link;
     await asAlice.mutation(api.shares.stopSharing, { artifactId });
     expect(await all("artifactShares")).toEqual([]);
     expect(await asAlice.query(api.shares.getShare, { artifactId })).toBeNull();
     const stopped = await page(first);
     expect(stopped.status).toBe(404);
 
-    const second = (await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION })).link;
+    const second = (await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION })).link;
     expect(second).not.toBe(first);
     expect((await page(second)).status).toBe(200);
     expect((await page(first)).status).toBe(404);
@@ -138,7 +138,7 @@ describe("share an artifact by link", () => {
   test("tokens_are_stored_only_as_a_hash_and_a_sealed_copy", async () => {
     const { asAlice, project, artifact, all } = setup();
     const artifactId = await artifact(await project());
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION });
+    const { link } = await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION });
     const token = link.split("/p/")[1]!;
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 random bytes
     const [row] = await all("artifactShares");
@@ -146,11 +146,26 @@ describe("share an artifact by link", () => {
     expect(row!.tokenHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test("two_artifacts_get_different_tokens_and_a_second_share_returns_the_same_link", async () => {
+    const { asAlice, project, artifact, page, all } = setup();
+    const first = await artifact(await project("One"));
+    const second = await artifact(await project("Two"));
+    const a = (await asAlice.action(api.shares.share, { artifactId: first, revision: FIRST_REVISION })).link;
+    const b = (await asAlice.action(api.shares.share, { artifactId: second, revision: FIRST_REVISION })).link;
+    expect(a).not.toBe(b);
+    expect((await page(a)).body).toContain("<h1>One</h1>");
+    expect((await page(b)).body).toContain("<h1>Two</h1>");
+    expect((await asAlice.action(api.shares.share, { artifactId: first, revision: FIRST_REVISION })).link).toBe(a);
+    const rows = await all("artifactShares");
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.tokenHash)).size).toBe(2);
+  });
+
   test("another_owner_cannot_share_update_stop_or_read_state", async () => {
     const { asAlice, asBob, project, artifact, page } = setup();
     const artifactId = await artifact(await project());
-    await expect(asBob.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION })).rejects.toThrow(/not found/);
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION });
+    await expect(asBob.action(api.shares.share, { artifactId, revision: FIRST_REVISION })).rejects.toThrow(/not found/);
+    const { link } = await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION });
     const before = (await page(link)).body;
     await expect(asBob.query(api.shares.getShare, { artifactId })).rejects.toThrow(/not found/);
     await expect(asBob.mutation(api.shares.updateShare, { artifactId, revision: FIRST_REVISION })).rejects.toThrow(/not found/);
@@ -163,7 +178,7 @@ describe("share an artifact by link", () => {
     const { asAlice, project, artifact, page } = setup();
     const hostile = `<script>alert(1)</script>\n\n"><img src=x onerror=alert(1)>`;
     const artifactId = await artifact(await project(`<b>Title</b>`), hostile);
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId, revision: FIRST_REVISION });
+    const { link } = await asAlice.action(api.shares.share, { artifactId, revision: FIRST_REVISION });
     const { status, body, headers } = await page(link);
     expect(status).toBe(200);
     expect(body).not.toContain("<script");
@@ -251,7 +266,7 @@ describe("automatic preparation and sharing", () => {
     expect(draft).not.toBeNull(); // the automatic run drafted it ...
     expect(await all("artifactShares")).toEqual([]); // ... and shared nothing
 
-    const { link } = await asAlice.mutation(api.shares.share, { artifactId: draft.id, revision: draft.revision });
+    const { link } = await asAlice.action(api.shares.share, { artifactId: draft.id, revision: draft.revision });
     const before = (await page(link)).body;
     mailId = (await ingest("Illustrative follow-up: Dana needs the budget.")).id;
     await settle();
