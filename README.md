@@ -1,26 +1,85 @@
-# TARS
+<p align="center">
+  <img src="docs/media/tars-title.gif" alt="TARS, a robot made of four aluminium slabs, stands in a storm of loose cards. It opens its arms, the cards line up in rows behind it, and one navy card lands beside it." width="720">
+</p>
 
-A Mac desktop companion for entrepreneurs with ADHD. It carries the remembering: it reads the sources you choose,
-prepares the next piece of work, keeps your place when you switch projects, and helps you finish one real action.
-Built at HackUMass XIV (hacking period 13–15 November 2026).
+<h1 align="center">TARS</h1>
+
+<p align="center">
+  <b>A Mac desktop companion for entrepreneurs with ADHD.</b><br>
+  It carries the remembering, starts the work, and nudges gently. No streaks, scores or guilt.
+</p>
+
+<p align="center">Built at HackUMass XIV · hacking period 13–15 November 2026</p>
+
+---
+
+## The problem
+
+Have you ever opened your laptop to do one thing, and twenty minutes later you were doing something else, and the
+first thing still wasn't done?
+
+For a founder with ADHD that is a normal day. The work is spread over five apps, a new and louder thing keeps
+arriving, and a reminder does not help, because a reminder still leaves you alone with a blank page.
+
+| Measured | Source |
+| --- | --- |
+| 29% of entrepreneurs in one study reported ADHD, against 5% of the comparison group | [Freeman et al., Small Business Economics, 2019](https://ideas.repec.org/a/kap/sbusec/v53y2019i2d10.1007_s11187-018-0059-8.html) (self-reported, 242 entrepreneurs) |
+| 15.5 million U.S. adults had a current ADHD diagnosis in 2023 | [CDC, published October 2024](https://www.drugs.com/news/15-5-million-adults-had-current-adhd-diagnosis-2023-121850.html) |
+| About 22 days of work performance lost a year per worker with ADHD | [WHO World Mental Health Survey, 2008](https://www.fic.nih.gov/News/GlobalHealthMatters/Pages/ADHDLowersGlobalProductivity.aspx) |
+| More than 20 minutes to get back to a task after an interruption | [Gloria Mark, UC Irvine](https://ics.uci.edu/2016/07/25/quartz-neuroscientists-say-multitasking-literally-drains-the-energy-reserves-of-your-brain-mark-quoted/) (office workers in general) |
+
+## What TARS does
+
+```mermaid
+flowchart LR
+  A["A message arrives:<br>'Can you send the report tonight?'"] --> B["TARS adds a to-do<br>and gathers the context"]
+  B --> C["TARS starts the draft<br>on its own"]
+  C --> D["A gentle nudge,<br>repeated until it is due"]
+  D --> E["You finish it together<br>and say 'send it'"]
+  E --> F["TARS sends, verifies,<br>logs, and offers<br>'Stop for now'"]
+```
+
+Around that loop: a morning brief with one place to start, TARS's own calendar of what it did and plans to do,
+hold-a-key dictation into an editable box, and "What I remember", where you can correct TARS or tell it to forget.
+
+## Status: what is proven and what is not
+
+This table is kept honest on purpose. "Live" means seen working on a real account in the packaged app.
+
+| | State (as of 14 November, 23:10 EST) |
+| --- | --- |
+| Sign-in | **Live.** A real Auth0 sign-in from the packaged app; the backend accepted that identity |
+| Gmail through Composio | **Live.** A personal Gmail account connected from the packaged app |
+| Preparation | One real model run on illustrative data |
+| Notes folder, Claude Code and Codex excerpts | Proven on one Mac |
+| Automatic draft and gentle nudges on a new message | Built and tested against fixtures; **not yet seen live** |
+| Slack, Outlook mail and GitHub through Composio; share by read-only link; text nudges to your own phone | Built and tested against fixtures; **not yet seen live** |
+| Notion, Canvas and the direct connectors | Built and tested against fixtures; **not yet connected to a real account** |
+| Dictation, notifications, app observation, real sends, outcome log | Built; **never run live** |
+
+Tests: 288 unit, 216 integration, and an end-to-end suite that drives the packaged app.
+
+## How it is built
+
+```mermaid
+flowchart LR
+  subgraph Mac["Your Mac"]
+    Pet["Pet and panel"] --- App["Full app<br>(React, sandboxed)"]
+    App -->|"narrow, validated IPC"| Main["Electron main"]
+    Main --- Queue[("Encrypted SQLite<br>capture queue")]
+    Main --- Helpers["Swift helpers:<br>selected-app text,<br>hold-to-talk key"]
+  end
+  Main <-->|"subscriptions: pushed, never polled"| Convex["Convex backend<br>(owner-isolated)"]
+  Auth0["Auth0"] -->|"PKCE sign-in"| Main
+  Sources["Gmail · Slack · Outlook · GitHub<br>Notion · Canvas"] -->|"provider events"| Convex
+  Convex --> OpenAI["OpenAI:<br>drafts, transcription"]
+```
 
 Electron + React + TypeScript desktop app; Convex for owner-isolated cloud state and push subscriptions; Auth0 for
 native sign-in; OpenAI for preparation and transcription. Captures are saved first to an encrypted local SQLite
 queue, so they survive restarts and offline use. The renderer is sandboxed and talks to the main process only
 through a narrow, schema-validated IPC API. Nothing is polled on a timer: updates arrive through provider events,
 Convex subscriptions and native file events.
-
-## Status: what is proven and what is not
-
-| | State |
-| --- | --- |
-| Sign-in | One real Auth0 sign-in from the packaged app; the backend accepted that identity |
-| Preparation | One real model run on illustrative data |
-| Notes folder, Claude Code and Codex excerpts | Proven on one Mac |
-| Slack, Gmail, Notion, Outlook, Canvas connectors | Built and tested against fixtures; **not yet connected to a real account** |
-| Dictation, notifications, app observation, real sends, outcome log | Built; **never run live** |
-
-Tests: 226 unit, 177 integration, 20 end-to-end against the packaged app.
 
 ## The app
 
@@ -84,5 +143,9 @@ Brand marks in `apps/desktop/src/renderer/logos.tsx` identify the services and a
 Gmail, Notion, Canvas and Claude from Simple Icons (CC0); Slack's mark from slack.com; Outlook's icon from
 Microsoft's Fluent brand-icons CDN. The name TARS and the idea of a slab-shaped robot come from a film; the
 drawings here are original.
+
+External services: Composio hosts the Gmail, Slack, Outlook and GitHub connections and holds their OAuth tokens;
+Convex, Auth0 and OpenAI are used through their public APIs. The rakazo project (Apache-2.0) was studied for ideas;
+no code was copied.
 
 Standards followed (not code): RFC 8252 (OAuth for native apps), RFC 7636 (PKCE; its Appendix B test vector is used in `tests/unit/auth.test.ts`), OpenID Connect Core.
