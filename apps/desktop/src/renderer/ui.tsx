@@ -1,6 +1,6 @@
 // Small shared presentational pieces: honest state notes, the pet figure and formatting.
-import { useId, useState, type FormEvent, type ReactNode } from "react";
-import type { Honest, PetState } from "./model";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
+import type { Honest, NudgeChoice, NudgeOffer, PetState } from "./model";
 
 const time = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 export const formatWhen = (iso: string) => (Number.isNaN(Date.parse(iso)) ? "unknown time" : time.format(Date.parse(iso)));
@@ -147,6 +147,43 @@ export function StateTag({ state, id }: { state: Honest; id?: string }) {
       <Glyph kind={state.kind} />
       {HONEST_LABEL[state.kind]}
     </span>
+  );
+}
+
+/** One nudge for a due commitment: open its draft together, or not now (it comes back gently, later). */
+export function NudgeCard({ offer, className, onRespond, onShown }: { offer: NudgeOffer; className: string; onRespond(choice: NudgeChoice): Promise<void>; onShown(key: string): void }) {
+  const id = useId();
+  const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
+  // Shown here, so it is not also raised as a notification.
+  useEffect(() => {
+    if (!offer.delivered) onShown(offer.key);
+  }, [offer.key, offer.delivered, onShown]);
+  const respond = async (choice: NudgeChoice) => {
+    setState({ busy: true });
+    try {
+      await onRespond(choice);
+      setState({ busy: false });
+    } catch (err) {
+      setState({ busy: false, error: reason(err) });
+    }
+  };
+  return (
+    <section className={className} aria-labelledby={id}>
+      <h2 id={id} className="block-title">
+        {offer.title}
+      </h2>
+      <StateNote state={{ kind: "partial", detail: "A draft is waiting in the project" }} />
+      <p>{offer.body}</p>
+      <div className="actions">
+        <button type="button" className="primary" disabled={state.busy} onClick={() => respond("finish")}>
+          Finish it together
+        </button>
+        <button type="button" className="secondary" disabled={state.busy} onClick={() => respond("not-now")}>
+          Not now
+        </button>
+      </div>
+      {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
+    </section>
   );
 }
 

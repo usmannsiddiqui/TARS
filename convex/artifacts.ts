@@ -126,27 +126,33 @@ export const createFromPrepared = mutation({
   handler: async (ctx, { projectId }) => {
     const ownerId = await requireOwnerId(ctx);
     await requireOwnedProject(ctx, ownerId, projectId);
-    const existing = await ctx.db
-      .query("artifacts")
-      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-      .unique();
-    if (existing !== null) return existing._id;
-    const prepared = await ctx.db
-      .query("preparedWork")
-      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-      .unique();
-    if (prepared?.work === undefined) throw new ConvexError("No prepared work for this project yet");
-    const { body, evidenceIds } = prepared.work;
-    return await ctx.db.insert("artifacts", {
-      ownerId,
-      projectId,
-      revision: FIRST_REVISION,
-      text: body,
-      userEdited: false,
-      evidenceIds,
-    });
+    return (await createDraftFromPrepared(ctx, ownerId, projectId)).id;
   },
 });
+
+/** The one way a draft starts: from the project's PreparedWork, unless the project already has one. */
+export async function createDraftFromPrepared(ctx: MutationCtx, ownerId: string, projectId: string) {
+  const existing = await ctx.db
+    .query("artifacts")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+  if (existing !== null) return { id: existing._id, created: false };
+  const prepared = await ctx.db
+    .query("preparedWork")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+  if (prepared?.work === undefined) throw new ConvexError("No prepared work for this project yet");
+  const { body, evidenceIds } = prepared.work;
+  const id = await ctx.db.insert("artifacts", {
+    ownerId,
+    projectId,
+    revision: FIRST_REVISION,
+    text: body,
+    userEdited: false,
+    evidenceIds,
+  });
+  return { id, created: true };
+}
 
 /** The user's direct edit. Applies only on the current revision; otherwise conflict with current text. */
 export const saveEdit = mutation({

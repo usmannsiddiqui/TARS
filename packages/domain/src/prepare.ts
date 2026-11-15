@@ -59,7 +59,7 @@ export function selectEvidence(
 // shortcut: phrase patterns catch common injection and vague-ownership wording only; the real
 // guarantee is structural (this module creates no ActionIntent). Extend from observed misses.
 const ADDRESSED_TO_ASSISTANT =
-  /ignore (all |any )?(the )?(previous|prior|above|earlier) instructions|disregard (all |any )?(the )?(previous|prior|above|earlier)|system prompt|you are now|\b(assistant|ai|agent|bot)\s*:/i;
+  /ignore (all |any )?(the )?(previous|prior|above|earlier) instructions|disregard (all |any )?(the )?(previous|prior|above|earlier)|system prompt|you are now|\b(assistant|ai|agent|bot)\s*:|\btars\s*[,:]/i;
 const VAGUE_OWNERSHIP = /\b(someone|somebody|anyone|anybody|we should|we need to|it would be good)\b/i;
 const MAX_NEXT_ACTION = 200;
 const MAX_KEY = 80;

@@ -63,7 +63,47 @@ export function isQuietTime(nowMs: number, timezone: string, quiet: QuietHours |
   return start <= end ? now >= start && now < end : now >= start || now < end;
 }
 
-/** Key for a task-return invitation: changes only when the prepared work changes. */
+// ---- Gentle nudges for the user's own commitments with a due time.
+
+export const NUDGE_GAP_MS = 2 * HOUR;
+const DUE_SOON_MS = HOUR;
+
+/** The one scheduled reminder per commitment: an hour before it is due. */
+export const dueSoonAt = (dueAtMs: number) => dueAtMs - DUE_SOON_MS;
+
+export type NudgeInput = {
+  /** "return": the Mac woke/unlocked; "due-soon": the one job at dueSoonAt. */
+  trigger: "return" | "due-soon";
+  nowMs: number;
+  commitment: Pick<Commitment, "ownership" | "state" | "dueAt">;
+  /** When the last nudge was offered or the user said "Not now". */
+  lastNudgedAt?: number;
+  quiet: boolean;
+  meeting: boolean;
+  working: boolean;
+};
+
+/**
+ * Only the user's open commitments with a future due time, never in quiet hours, a meeting or
+ * active work. A return needs NUDGE_GAP_MS since the last nudge; the due-soon job does not.
+ */
+export function decideNudge(input: NudgeInput): boolean {
+  const { commitment } = input;
+  if (commitment.ownership !== "user" || commitment.state !== "open" || commitment.dueAt === undefined) return false;
+  if (input.nowMs >= Date.parse(commitment.dueAt)) return false;
+  if (input.quiet || input.meeting || input.working) return false;
+  if (input.trigger === "due-soon") return true;
+  return input.lastNudgedAt === undefined || input.nowMs - input.lastNudgedAt >= NUDGE_GAP_MS;
+}
+
+/** Plain and kind: no guilt, no counts, no streaks. */
+export function nudgeCopy({ text, startedForYou }: { text: string; startedForYou: boolean }): { title: string; body: string } {
+  return startedForYou
+    ? { title: "Started for you", body: `${text}. I started this for you, want to finish it together?` }
+    : { title: "When you're ready", body: `${text}. Your draft is here whenever you want it.` };
+}
+
+/** Key for a task-return invitation: `updatedAt` is that of the last preparation the user started. */
 export function invitationKey(work: { projectId: ProjectId; updatedAt: string }): string {
   return `task:${work.projectId}@${work.updatedAt}`;
 }

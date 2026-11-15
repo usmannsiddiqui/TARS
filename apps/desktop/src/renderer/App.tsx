@@ -98,6 +98,12 @@ export function App() {
         {...(today.error ? { briefError: today.error } : {})}
         onBriefShown={today.onBriefShown}
         onResolveTradeoff={today.onResolveTradeoff}
+        {...(today.nudge ? { nudge: today.nudge } : {})}
+        onNudge={async (choice) => {
+          if (!today.nudge) return;
+          const projectId = await today.onNudge(today.nudge.nudgeId, choice);
+          if (choice === "finish") open(projectId); // the user's click opens the project's draft
+        }}
         ideas={ideas}
         sessionWorking={session.state === "working"}
         onCaptured={() => void loadIdeas()}

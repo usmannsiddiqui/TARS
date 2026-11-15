@@ -2,8 +2,8 @@
 import { useEffect, useRef } from "react";
 import type { Transcript } from "../preload/index";
 import { Composer } from "./Composer";
-import type { HardItem, Honest, PetState, Receipt } from "./model";
-import { PET_LABEL, PetFigure, StateNote } from "./ui";
+import type { HardItem, Honest, NudgeChoice, NudgeOffer, PetState, Receipt } from "./model";
+import { NudgeCard, PET_LABEL, PetFigure, StateNote } from "./ui";
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const dayAndClock = new Intl.DateTimeFormat(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" });
@@ -27,6 +27,9 @@ export type PanelProps = {
   recap?: { key: string; items: string[]; delivered: boolean };
   /** The recap was actually shown, so it is never offered again. */
   onRecapShown(key: string): void;
+  /** One gentle nudge for a due commitment of yours, with its draft. */
+  nudge?: NudgeOffer;
+  onNudge(choice: NudgeChoice): Promise<void>;
   /** The focus project's newest instructed action. */
   receipt?: Receipt;
   note?: string;
@@ -127,6 +130,7 @@ export function Panel(props: PanelProps) {
               )}
             </section>
           )}
+          {props.nudge && <NudgeCard offer={props.nudge} className="panel-glance tradeoff" onRespond={props.onNudge} onShown={onRecapShown} />}
           {props.receipt && <ReceiptLine receipt={props.receipt} />}
           {props.note && <StateNote state={{ kind: "needs-retry", detail: props.note }} />}
           {/* Open app sits above the fold of the 420px panel; capture follows. Stopping is never the lesser choice. */}
