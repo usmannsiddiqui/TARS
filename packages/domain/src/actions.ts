@@ -6,6 +6,8 @@ import type { ActionIntent, Artifact } from "./types";
 // One plain address: no whitespace (so no CR/LF header injection), no lists, no display names.
 const MAIL_ADDRESS = /^[^\s@<>,;"()[\]\\]+@[^\s@<>,;"()[\]\\]+\.[^\s@<>,;"()[\]\\]+$/;
 const MAX_SUBJECT = 120;
+// One Slack conversation id (public/private channel or DM), never a name or a list.
+const SLACK_CHANNEL = /^[CGD][A-Z0-9]{8,}$/;
 
 /** SHA-256 hex of the exact text the user approved. */
 export async function contentHash(text: string): Promise<string> {
@@ -32,6 +34,9 @@ export function checkBinding(intent: Binding, current: Artifact, currentHash: st
   if (intent.kind === "send-mail" && !MAIL_ADDRESS.test(intent.destination)) {
     return { ok: false, reason: "Give one email address to send it to." };
   }
+  if (intent.kind === "post-message" && !SLACK_CHANNEL.test(intent.destination)) {
+    return { ok: false, reason: "Give one Slack channel ID to post it to." };
+  }
   if (intent.destination.trim().length === 0) return { ok: false, reason: "Say where it should go." };
   return { ok: true };
 }
@@ -54,7 +59,12 @@ export function outcomeLogEntry(outcome: {
   externalId?: string;
   verifiedAt?: string;
 }): string {
-  const what = outcome.kind === "send-mail" ? `Sent mail to ${outcome.destination}` : `Updated note ${outcome.destination}`;
+  const what =
+    outcome.kind === "send-mail"
+      ? `Sent mail to ${outcome.destination}`
+      : outcome.kind === "post-message"
+        ? `Posted to Slack channel ${outcome.destination}`
+        : `Updated note ${outcome.destination}`;
   const id = outcome.externalId === undefined ? "" : ` (provider id ${outcome.externalId})`;
   return `${outcome.verifiedAt ?? ""} ${what}${id}, verified. [${logMarker(outcome.actionId)}]`.trim();
 }

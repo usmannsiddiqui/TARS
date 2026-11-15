@@ -35,6 +35,7 @@ export const listConnections = query({
     v.object({
       sourceId: v.string(),
       provider: v.string(),
+      broker: v.optional(v.literal("composio")),
       availability,
       lastCheckedAt: v.optional(v.string()),
       lastError: v.optional(v.string()),
@@ -58,6 +59,7 @@ export const listConnections = query({
       out.push({
         sourceId: row.sourceId,
         provider: row.provider,
+        ...(row.broker === undefined ? {} : { broker: row.broker }),
         availability: row.availability,
         ...(row.lastCheckedAt === undefined ? {} : { lastCheckedAt: row.lastCheckedAt }),
         ...(row.lastError === undefined ? {} : { lastError: row.lastError }),
@@ -97,6 +99,7 @@ export const save = internalMutation({
     provider: v.string(),
     accountKey: v.string(),
     credential: v.string(),
+    broker: v.optional(v.literal("composio")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -114,7 +117,7 @@ export const save = internalMutation({
     if (connection === null) {
       await ctx.db.insert("connections", { ...args, availability: "connected" });
     } else {
-      await ctx.db.patch(connection._id, { ...args, availability: "connected", lastError: undefined });
+      await ctx.db.patch(connection._id, { ...args, broker: args.broker, availability: "connected", lastError: undefined });
     }
     return null;
   },

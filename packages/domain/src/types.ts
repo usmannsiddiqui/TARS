@@ -29,6 +29,7 @@ export const SourceKindSchema = z.enum([
   "canvas",
   "outlook-mail",
   "outlook-calendar",
+  "teams",
   "claude-code",
   "codex",
   "observation",
@@ -189,7 +190,7 @@ export type ActionIntent = {
   ownerId: OwnerId;
   projectId: ProjectId;
   taskId?: TaskId;
-  kind: "update-note" | "send-mail";
+  kind: "update-note" | "send-mail" | "post-message";
   destination: string;
   artifactId: ArtifactId;
   revision: RevisionId;

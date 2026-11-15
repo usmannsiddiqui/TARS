@@ -43,7 +43,7 @@ async function slackCall(method: string, token: string, params: Record<string, s
 const tsToIso = (ts: string) => new Date(Math.floor(Number(ts) * 1000)).toISOString();
 
 /** A human message (or thread broadcast) as a provider item; joins, bots and deletions are skipped. */
-function toItem(channel: string, message: SlackMessage | undefined): ProviderItem | null {
+export function toItem(channel: string, message: SlackMessage | undefined): ProviderItem | null {
   if (message === undefined || typeof message.text !== "string" || !TS.test(message.ts ?? "")) return null;
   if (message.subtype !== undefined && message.subtype !== "thread_broadcast") return null;
   const edited = message.edited?.ts;
