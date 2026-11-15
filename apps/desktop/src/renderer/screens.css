@@ -407,10 +407,69 @@
   margin-top: 14px;
 }
 
-/* Each source is its own near-opaque row inside the group's glass card, so rows read apart. */
+/* Connector cards: two columns of near-opaque cards inside the group's glass card. A card whose form or
+   confirmation is open takes the full width, so the consent wording keeps a readable measure. */
 .source-rows {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+
+.source-rows > .source:has(.confirm) {
+  grid-column: 1 / -1;
+}
+
+/* Logo tile, who and what, and the status square on the right. */
+.connector-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.logo-tile {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.connector-id > * + * {
+  margin-top: 3px;
+}
+
+.connector-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 24px;
+}
+
+.connector-desc {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* The plus is the Connect / Turn on control; the check is a state mark, not a control. */
+.connector-head .connector-square {
+  width: 36px;
+  min-height: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--r-control);
+}
+
+.connector-check {
+  display: grid;
+  place-items: center;
+  background: var(--well);
+  color: var(--ink);
 }
 
 .source-rows > .source {
@@ -472,14 +531,6 @@
 }
 
 /* ---------- Panel ---------- */
-
-.panel-actions > .primary {
-  flex: 1 1 auto;
-}
-
-.panel-actions + * {
-  margin-top: 8px;
-}
 
 .panel .tape-counter {
   font-size: 18px;
@@ -631,12 +682,67 @@
   color: var(--ink-2);
 }
 
+/* ---------- Source chips: where something came from ---------- */
+
+/* A soft off-white pill, the source's mark and the exact thing it names. Never a control. */
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 3px 12px 3px 8px;
+  border-radius: var(--r-pill);
+  background: var(--glass-solid);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  vertical-align: middle;
+  margin-block: 2px; /* room between wrapped lines when the chip sits in running text */
+}
+
+.source-logo {
+  flex: none;
+}
+
+.source-chip-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A cited item: its chip, when it happened, and its freshness as glyph and word. */
+.source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+}
+
+.provenance .source-chip {
+  margin: 0 2px;
+}
+
+.provenance .state-tag {
+  margin-left: 8px;
+}
+
+.provenance + .provenance {
+  margin-top: 6px;
+}
+
 /* ---------- Narrow windows ---------- */
 
 @media (max-width: 1100px) {
   .project-grid,
   .memory-grid,
   .calendar-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 960px) {
+  .source-rows {
     grid-template-columns: minmax(0, 1fr);
   }
 }

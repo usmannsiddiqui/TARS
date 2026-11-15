@@ -4,7 +4,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Act, type ActingActions, type LogDestinationView } from "./Act";
 import { segmentsOf, setSegment, type Commitment, type Evidence, type Honest, type Prepared, type Receipt } from "./model";
-import { formatWhen, reason, StateNote } from "./ui";
+import { UrlChip } from "./logos";
+import { formatWhen, reason, StateNote, StateTag } from "./ui";
 
 export type ArtifactView = {
   id: string;
@@ -227,11 +228,10 @@ export function ProjectView(props: ProjectViewProps) {
                             {e ? (
                               <>
                                 <q>{e.text.length > 160 ? `${e.text.slice(0, 160)}…` : e.text}</q>
-                                <span className="quiet">
-                                  {" "}
-                                  {e.sourceUrl && URL.canParse(e.sourceUrl) ? `${new URL(e.sourceUrl).host} · ` : ""}
-                                  {formatWhen(e.occurredAt)}
-                                  {e.freshness !== "current" && " · may be out of date"}
+                                <span className="source-meta">
+                                  <UrlChip url={e.sourceUrl} />
+                                  <span className="quiet small">{formatWhen(e.occurredAt)}</span>
+                                  {e.freshness !== "current" && <StateTag state={{ kind: "stale" }} />}
                                 </span>
                               </>
                             ) : (

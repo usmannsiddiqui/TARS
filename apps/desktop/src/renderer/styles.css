@@ -1160,7 +1160,7 @@ textarea {
 }
 
 .completion h2,
-.completion h1 {
+.panel-body.completion h1 {
   font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.025em;
@@ -1428,12 +1428,22 @@ html[data-view="panel"] body {
 .panel-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px 16px;
   border-radius: var(--r-card);
 }
 
-.panel-body h1 {
+/* Tight enough that both actions stay above the fold of the 420px panel. */
+.panel-glance {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.panel-project,
+.panel-body.completion h1 {
   font-size: 24px;
   line-height: 1.15;
   font-weight: 700;
@@ -1465,10 +1475,14 @@ html[data-view="pet"] body {
   border: 0;
   border-radius: var(--r-control);
   background: none;
+  cursor: grab;
+  touch-action: none; /* the press is a drag, never a scroll or zoom */
+  user-select: none;
   transition: transform 160ms var(--ease-out);
 }
 
 .pet:active {
+  cursor: grabbing;
   transform: scale(0.97);
 }
 

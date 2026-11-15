@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { preparedNote, type Brief, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
+import { SourceChip } from "./logos";
 import { formatWhen, NewProject, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
@@ -430,7 +431,14 @@ function HardList({ title, id, items, triage, empty, nameOf }: { title: string; 
               <span className="quiet">
                 {" "}
                 · {item.kind === "meeting" ? "meeting" : "due"} {formatWhen(item.dueAt)} · {nameOf(item.projectId) ?? "a project"}
-                {item.sourceKind ? ` · from ${SOURCE_NAME[item.sourceKind] ?? item.sourceKind}` : " · no linked source"}
+                {item.sourceKind ? (
+                  <>
+                    {" "}
+                    · from <SourceChip kind={item.sourceKind} label={SOURCE_NAME[item.sourceKind] ?? item.sourceKind} />
+                  </>
+                ) : (
+                  " · no linked source"
+                )}
               </span>
               <TriageNote triage={triage} id={item.commitmentId} />
               {item.sourceKind && !item.current && (

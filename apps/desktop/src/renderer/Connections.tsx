@@ -1,6 +1,7 @@
 // Connections, added progressively. Every source starts off. Turning cloud processing on, and
 // connecting a cloud account, both show the consent wording first. Presentational: rows and actions arrive as props.
 import { useId, useState, type FormEvent } from "react";
+import { kindOfName, SourceLogo } from "./logos";
 import type { CloudProvider, SourceRow } from "./model";
 import { reason, StateNote } from "./ui";
 
@@ -155,6 +156,63 @@ function ShortcutSetting({ status, onSet }: ConnectionsProps["shortcut"]) {
 
 const stateWord = (row: SourceRow) => ({ off: "Off", on: "On", paused: "Paused", unavailable: "Off" })[row.state];
 
+/** Who runs the service, as the connector card says it. */
+const BY: Record<CloudProvider, string> = {
+  slack: "by Slack",
+  gmail: "by Google",
+  notion: "by Notion",
+  canvas: "by Instructure",
+  "outlook-mail": "by Microsoft",
+  "outlook-calendar": "by Microsoft",
+};
+/** What TARS may do with it, from what the connect flow asks for: only Notion takes write targets, and mail sending is its own consent. */
+const CAN: Partial<Record<CloudProvider, string>> = { notion: "reads, and updates only pages you allow", gmail: "reads; sends only if you allow it", "outlook-mail": "reads; sends only if you allow it" };
+
+// Local rows carry no kind, but their names start with the kind's display name ("Notes folder: HackUmass vault").
+const kindOf = (row: SourceRow) => row.provider ?? (row.group === "optional" ? "observation" : kindOfName(row.name.split(": ")[0] ?? ""));
+
+/**
+ * A connector card's head: the logo tile, the name with its state plate, one line on what it reads, who runs
+ * it, and on the right the status square: `add` (the plus that starts connecting), or a check when connected.
+ */
+function CardHead({ row, add }: { row: SourceRow; add?: { label: string; disabled: boolean; onClick(): void } | undefined }) {
+  const connected = row.state === "on" || row.state === "paused";
+  return (
+    <div className="connector-head">
+      <span className="logo-tile">
+        <SourceLogo kind={kindOf(row) ?? ""} size={24} />
+      </span>
+      <div className="connector-id">
+        <p className="connector-title">
+          <span className="source-name">{row.name}</span>
+          <span className="source-state" data-state={row.state}>
+            {stateWord(row)}
+          </span>
+        </p>
+        <p className="quiet connector-desc">{row.coverage}</p>
+        <p className="quiet small">
+          {row.provider ? BY[row.provider] : "on this Mac"} · {(row.provider && CAN[row.provider]) ?? "read only"}
+        </p>
+      </div>
+      {add ? (
+        <button type="button" className="secondary connector-square" disabled={add.disabled} onClick={add.onClick} aria-label={add.label}>
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 2.5v11M2.5 8h11" fill="none" stroke="currentColor" strokeWidth="2" />
+          </svg>
+        </button>
+      ) : (
+        connected && (
+          <span className="connector-square connector-check" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 16 16">
+              <path d="m3 8.5 3.2 3.2L13 4.5" fill="none" stroke="currentColor" strokeWidth="2" />
+            </svg>
+          </span>
+        )
+      )}
+    </div>
+  );
+}
+
 function SourceItem(props: { row: SourceRow } & ConnectionsProps) {
   if (props.row.provider) return <CloudItem {...props} provider={props.row.provider} />;
   if (props.row.group === "optional" && props.row.state === "off") return <ObservationStart {...props} />;
@@ -185,13 +243,10 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
 
   return (
     <li className="source" data-state={row.state}>
-      <div className="source-head">
-        <span className="source-name">{row.name}</span>
-        <span className="source-state" data-state={row.state}>
-          {stateWord(row)}
-        </span>
-      </div>
-      <p className="quiet">{row.coverage}</p>
+      <CardHead
+        row={row}
+        add={row.state === "off" && local && step === "idle" ? { label: `Turn on ${row.name}`, disabled: addBlocked !== undefined, onClick: () => setStep("choose") } : undefined}
+      />
       {row.status && <StateNote state={row.status} />}
       {local && row.state !== "off" && (
         <p className="small">Cloud processing: {row.cloudProcessing ? "on" : "off, stays on this Mac"}</p>
@@ -199,14 +254,7 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
 
       {row.state === "unavailable" && <p className="quiet small">{row.unavailableReason}</p>}
 
-      {row.state === "off" && local && step === "idle" && (
-        <>
-          <button type="button" className="secondary" disabled={addBlocked !== undefined} onClick={() => setStep("choose")} aria-label={`Turn on ${row.name}`}>
-            Turn on…
-          </button>
-          {addBlocked && <p className="quiet small">{addBlocked}</p>}
-        </>
-      )}
+      {row.state === "off" && local && step === "idle" && addBlocked && <p className="quiet small">{addBlocked}</p>}
 
       {step === "choose" && (
         <div className="confirm" role="group" aria-label={`Turn on ${row.name}`}>
@@ -347,13 +395,7 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
 
   return (
     <li className="source" data-state={row.state}>
-      <div className="source-head">
-        <span className="source-name">{row.name}</span>
-        <span className="source-state" data-state={row.state}>
-          {stateWord(row)}
-        </span>
-      </div>
-      <p className="quiet">{row.coverage}</p>
+      <CardHead row={row} add={row.state === "off" && step === "idle" ? { label: `Connect ${row.name}`, disabled: blocked !== undefined, onClick: () => setStep("connect") } : undefined} />
       {row.status ? <StateNote state={row.status} /> : row.state === "off" && <p className="quiet small">Availability: not connected. Last checked: never.</p>}
       {row.selection && (
         <p className="small source-selection">
@@ -364,9 +406,6 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
 
       {row.state === "off" && step === "idle" && (
         <>
-          <button type="button" className="secondary" disabled={blocked !== undefined} onClick={() => setStep("connect")} aria-label={`Connect ${row.name}`}>
-            Connect…
-          </button>
           {blocked && <p className="quiet small">{blocked}</p>}
           {row.unavailableReason && <p className="quiet small">{row.unavailableReason}</p>}
         </>
@@ -551,20 +590,9 @@ function ObservationStart({ row, projects, addBlocked, observation }: { row: Sou
   const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   return (
     <li className="source" data-state={row.state}>
-      <div className="source-head">
-        <span className="source-name">{row.name}</span>
-        <span className="source-state" data-state={row.state}>
-          Off
-        </span>
-      </div>
-      <p className="quiet">{row.coverage}</p>
+      <CardHead row={row} add={open ? undefined : { label: `Turn on ${row.name}`, disabled: addBlocked !== undefined, onClick: () => setOpen(true) }} />
       {!open ? (
-        <>
-          <button type="button" className="secondary" disabled={addBlocked !== undefined} onClick={() => setOpen(true)} aria-label={`Turn on ${row.name}`}>
-            Turn on…
-          </button>
-          {addBlocked && <p className="quiet small">{addBlocked}</p>}
-        </>
+        addBlocked && <p className="quiet small">{addBlocked}</p>
       ) : (
         <form
           className="confirm consent connect-form"

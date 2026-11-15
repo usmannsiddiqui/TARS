@@ -2,7 +2,8 @@
 // Presentational: data and actions arrive as props.
 import { useId, useState } from "react";
 import type { Evidence, Fact, Honest, Withheld } from "./model";
-import { formatWhen, reason, StateNote } from "./ui";
+import { UrlChip } from "./logos";
+import { formatWhen, reason, StateNote, StateTag } from "./ui";
 
 export type MemoryViewProps = {
   projects: { id: string; name: string }[];
@@ -184,16 +185,22 @@ function FactRow({ fact, sources, onCorrect, onForget }: { fact: Fact; sources: 
       ) : (
         <p className="fact-value">{fact.value}</p>
       )}
-      <p className="quiet small">
-        {sources.length === 0
-          ? "You told me this."
-          : sources.map((s, i) => (
-              <span key={i}>
-                {i > 0 && " · "}
-                {s ? `From “${s.text.length > 70 ? `${s.text.slice(0, 70)}…` : s.text}”, ${formatWhen(s.occurredAt)}` : "From a source item that is no longer current"}
-              </span>
-            ))}
-      </p>
+      {sources.length === 0 ? (
+        <p className="quiet small">You told me this.</p>
+      ) : (
+        sources.map((s, i) => (
+          <p key={i} className="quiet small provenance">
+            {s ? (
+              <>
+                From <UrlChip url={s.sourceUrl} /> “{s.text.length > 70 ? `${s.text.slice(0, 70)}…` : s.text}”, {formatWhen(s.occurredAt)}
+                {s.freshness !== "current" && <StateTag state={{ kind: "stale" }} />}
+              </>
+            ) : (
+              "From a source item that is no longer current"
+            )}
+          </p>
+        ))
+      )}
       {mode === "forget" ? (
         <div className="confirm" role="group" aria-label={`Forget ${humanKey(fact.key)}?`}>
           <p>Forget this? I will not relearn it unless you allow it.</p>

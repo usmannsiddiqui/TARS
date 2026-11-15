@@ -1,7 +1,7 @@
 // Pure view derivations in the renderer: run-through segments, the observation permission status and
 // cloud connection rows. Illustrative values only.
 import { describe, expect, it } from "vitest";
-import { byDay, cloudRow, permissionMissing, segmentsOf, setSegment, tarsCalendar, type ProjectSummary } from "../../apps/desktop/src/renderer/model";
+import { byDay, cloudRow, kindFromUrl, permissionMissing, segmentsOf, setSegment, tarsCalendar, type ProjectSummary } from "../../apps/desktop/src/renderer/model";
 
 describe("segmentsOf", () => {
   const text = "Intro paragraph without a time.\n1. Welcome and why tools differ (2 min)\n2) Live demo: AI Studio (10 min)\n\nChoosing a tool (8 minutes)\nQuestions";
@@ -159,5 +159,30 @@ describe("tarsCalendar", () => {
   it("has no plan without a schedule and no past without events", () => {
     const empty = tarsCalendar({ now: NOW, schedule: null, briefs: [], projects: [], sources: [] });
     expect(empty).toEqual({ upcoming: [], done: [], attention: [] });
+  });
+
+  it("names the source of each source check, and only of those", () => {
+    const { done, attention } = tarsCalendar(input);
+    expect(done.map((e) => e.source)).toEqual([undefined, undefined, "Notion"]);
+    expect(attention.map((e) => e.source)).toEqual([undefined, "Canvas", "Gmail"]);
+  });
+});
+
+describe("kindFromUrl", () => {
+  it("recognises the providers' own hosts", () => {
+    expect(kindFromUrl("https://acme.slack.com/archives/C0123/p1")).toBe("slack");
+    expect(kindFromUrl("https://mail.google.com/mail/u/0/#inbox/1")).toBe("gmail");
+    expect(kindFromUrl("https://www.notion.so/Plan-8f2c")).toBe("notion");
+    expect(kindFromUrl("https://umass.instructure.com/courses/1182/assignments/4")).toBe("canvas");
+    expect(kindFromUrl("https://outlook.office.com/mail")).toBe("outlook-mail");
+    expect(kindFromUrl("https://outlook.office.com/calendar/item/1")).toBe("outlook-calendar");
+  });
+
+  it("does not guess from look-alike hosts, other schemes or bad input", () => {
+    expect(kindFromUrl("https://notion.so.example.com/x")).toBeUndefined();
+    expect(kindFromUrl("https://example.com/slack.com")).toBeUndefined();
+    expect(kindFromUrl("http://mail.google.com/")).toBeUndefined();
+    expect(kindFromUrl("not a url")).toBeUndefined();
+    expect(kindFromUrl(undefined)).toBeUndefined();
   });
 });

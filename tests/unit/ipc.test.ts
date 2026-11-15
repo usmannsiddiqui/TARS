@@ -69,6 +69,8 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     closePanel: () => void windowCalls.push(["closePanel"]),
     setPetVisible: (visible: boolean) => void windowCalls.push(["setPetVisible", visible]),
     petVisible: () => false,
+    dragPet: (senderId: number, dx: number, dy: number) => void windowCalls.push(["dragPet", senderId, dx, dy]),
+    pointerOver: (senderId: number, over: boolean) => void windowCalls.push(["pointerOver", senderId, over]),
   };
   const dictationCalls: unknown[][] = [];
   let finishError: unknown = null;
@@ -456,5 +458,39 @@ describe("ipc router: wired routes", () => {
     await expect(router.handle("pet:visible", trusted, { visible: true })).rejects.toBeInstanceOf(IpcRejected);
     await expect(router.handle("pet:visible", untrusted[0]!, undefined)).rejects.toBeInstanceOf(IpcRejected);
     expect(await router.handle("pet:visible", trusted, undefined)).toBe(false);
+  });
+
+  it("pet_drag_takes_only_bounded_integer_steps_from_a_known_window", async () => {
+    const { router, windowCalls } = setup(null);
+    for (const payload of [
+      { dx: 1.5, dy: 0 },
+      { dx: Number.NaN, dy: 0 },
+      { dx: Number.POSITIVE_INFINITY, dy: 0 },
+      { dx: 4001, dy: 0 },
+      { dx: 0, dy: -4001 },
+      { dx: "10", dy: 0 },
+      { dx: 10 },
+      { dx: 10, dy: 0, x: 0 },
+      undefined,
+    ]) {
+      await expect(router.handle("pet:dragBy", withSender, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("pet:dragBy", untrusted[0]!, { dx: 10, dy: 0 })).rejects.toBeInstanceOf(IpcRejected);
+    // Main decides which window moves: a frame without a sender id moves nothing.
+    await expect(router.handle("pet:dragBy", trusted, { dx: 10, dy: 0 })).rejects.toBeInstanceOf(IpcRejected);
+    expect(windowCalls).toEqual([]);
+    await router.handle("pet:dragBy", withSender, { dx: -4000, dy: 12 });
+    expect(windowCalls).toEqual([["dragPet", 7, -4000, 12]]);
+  });
+
+  it("pointer_hover_reports_only_a_boolean_and_main_knows_the_window", async () => {
+    const { router, windowCalls } = setup(null);
+    for (const payload of [{ over: "yes" }, { over: true, window: "panel" }, {}, undefined]) {
+      await expect(router.handle("window:hover", withSender, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    await expect(router.handle("window:hover", untrusted[0]!, { over: true })).rejects.toBeInstanceOf(IpcRejected);
+    await expect(router.handle("window:hover", trusted, { over: true })).rejects.toBeInstanceOf(IpcRejected);
+    await router.handle("window:hover", withSender, { over: true });
+    expect(windowCalls).toEqual([["pointerOver", 7, true]]);
   });
 });

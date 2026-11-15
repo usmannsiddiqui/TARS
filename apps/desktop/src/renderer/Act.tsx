@@ -3,6 +3,7 @@
 // no second confirmation. Receipts read honestly: an unknown outcome offers Check again, never a
 // resend, and the outcome log is retried on its own. Presentational: data and actions arrive as props.
 import { useId, useMemo, useState } from "react";
+import { SourceChip } from "./logos";
 import type { Receipt } from "./model";
 import { formatWhen, reason, StateNote } from "./ui";
 
@@ -196,7 +197,9 @@ function ReceiptView(props: { receipt: Receipt; busy: string | null; onCheck(): 
         </div>
         <div>
           <dt>Where</dt>
-          <dd>{destination}</dd>
+          <dd>
+            <SourceChip kind={kind === "update-note" ? "notion" : "mail"} label={destination} />
+          </dd>
         </div>
         <div>
           <dt>Revision</dt>

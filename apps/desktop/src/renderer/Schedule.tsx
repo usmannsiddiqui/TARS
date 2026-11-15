@@ -2,6 +2,7 @@
 // day, each with its source and how fresh that is. Suggestions are not deadlines and never appear here.
 // Presentational: data arrives as props.
 import { byDay, type HardItem, type Honest } from "./model";
+import { SourceChip } from "./logos";
 import { formatWhen, SOURCE_NAME, StateNote } from "./ui";
 
 export type ScheduleProps = {
@@ -64,7 +65,14 @@ export function Schedule({ brief, nextBriefAt, cloud, now, nameOf }: SchedulePro
                     <div className="agenda-body">
                       <p className="agenda-title">{item.text}</p>
                       <p className="quiet small">
-                        {item.kind === "meeting" ? "Meeting" : "Due"} · {nameOf(item.projectId) ?? "a project"} · {item.sourceKind ? `from ${SOURCE_NAME[item.sourceKind] ?? item.sourceKind}` : "no linked source"}
+                        {item.kind === "meeting" ? "Meeting" : "Due"} · {nameOf(item.projectId) ?? "a project"} ·{" "}
+                        {item.sourceKind ? (
+                          <>
+                            from <SourceChip kind={item.sourceKind} label={SOURCE_NAME[item.sourceKind] ?? item.sourceKind} />
+                          </>
+                        ) : (
+                          "no linked source"
+                        )}
                       </p>
                       {item.sourceKind && !item.current ? (
                         <StateNote state={{ kind: "stale", detail: `${item.lastCheckedAt ? `last checked ${formatWhen(item.lastCheckedAt)}` : "never checked"}; may have changed` }} />

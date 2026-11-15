@@ -1,6 +1,6 @@
 // Contact delivery: turns the backend's attention state into at most one OS notification per key.
 // The decision is the shared pure policy, evaluated with the live panel state only main knows.
-// Not wired yet: index.ts passes Electron's Notification, the panel window state, a Convex
+// index.ts passes Electron's Notification, the panel window state, a Convex
 // subscription to briefs.getAttentionState and the briefs.markDelivered mutation.
 import type { AttentionInput } from "@companion/domain";
 import { decideAttention } from "@companion/domain/attention";

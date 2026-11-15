@@ -645,43 +645,63 @@ function useCompanionContext(projectIdOverride: string | null) {
   // Working is real: an instructed action of the focus project is in flight right now.
   const working = receipt?.state === "pending" || receipt?.state === "running";
   const petState: PetState = working ? "working" : done ? "done" : "idle";
-  return { cloud, projectId, name: projects?.find((p) => p.id === projectId)?.name, prepared: toPrepared(prepared), done, receipt, petState };
+  // The saved next step belongs to the focus project only, not to a project the panel was opened for.
+  const step = projectId === focus?.projectId ? focus?.nextStep : undefined;
+  return { cloud, projectId, name: projects?.find((p) => p.id === projectId)?.name, prepared: toPrepared(prepared), done, receipt, petState, step };
+}
+
+/** Tells main when the pointer enters or leaves this whole window (the pet or the panel); main decides what opens. */
+function usePointerOver() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const enter = () => void window.companion.pointerOver(true);
+    const leave = () => void window.companion.pointerOver(false);
+    root.addEventListener("pointerenter", enter);
+    root.addEventListener("pointerleave", leave);
+    return () => {
+      root.removeEventListener("pointerenter", enter);
+      root.removeEventListener("pointerleave", leave);
+    };
+  }, []);
 }
 
 export function PetLive() {
   const { petState } = useCompanionContext(null);
-  return <Pet state={petState} onOpen={() => void window.companion.openPanel()} />;
+  usePointerOver();
+  return <Pet state={petState} onOpen={() => void window.companion.openPanel()} onMove={(dx, dy) => void window.companion.dragPet(dx, dy)} />;
 }
 
 export function PanelLive() {
   const [shown, setShown] = useState<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
   useEffect(() => window.companion.onPanelShow((projectId) => setShown({ projectId, at: Date.now() })), []);
+  usePointerOver();
   const ctx = useCompanionContext(shown.projectId);
   const work = ctx.prepared?.work;
   // Only the app window records a return; opening the panel must not move "since you were last here".
   const today = useToday({ recordReturn: false });
+  // Existing subscriptions (shared with Today and Schedule): when the user was last here, today's brief, the next brief.
+  const reentryRow = useQuery(api.briefs.getReentry, ctx.cloud.ready ? {} : "skip");
+  const morning = useQuery(api.briefs.getPendingBrief, ctx.cloud.ready ? { kind: "morning" } : "skip");
+  const schedule = useQuery(api.briefs.getSchedule, ctx.cloud.ready ? {} : "skip");
   const [note, setNote] = useState<string | null>(null);
   const record = useMutation(api.briefs.recordSessionEvent);
   // The evening recap is panel-only: it shows here when the user opens the panel, never as an alert.
   const recap = today.brief?.kind === "evening" ? today.brief : undefined;
   const state: Honest | undefined =
-    ctx.cloud.honest ??
-    (!ctx.projectId
-      ? { kind: "empty", detail: "Pick a project in the app to make it your focus." }
-      : ctx.prepared === undefined
-        ? { kind: "empty", detail: "Nothing prepared here yet." }
-        : ctx.prepared.status === "needs-retry"
-          ? { kind: "needs-retry", detail: "The last preparation failed." }
-          : undefined);
+    ctx.cloud.honest ?? (ctx.prepared?.status === "needs-retry" ? { kind: "needs-retry", detail: "The last preparation failed." } : undefined);
+  const step = ctx.step ?? work?.nextAction;
   const close = () => void window.companion.closePanel();
   return (
     <Panel
       key={shown.at}
       petState={ctx.petState}
+      now={Date.now()}
       {...(ctx.projectId ? { projectId: ctx.projectId } : {})}
-      {...(ctx.name ? { projectName: ctx.name } : {})}
-      {...(work?.title ? { context: work.title } : {})}
-      {...(work?.nextAction ? { nextAction: work.nextAction } : {})}
+      {...(ctx.name
+        ? { leftOff: { project: ctx.name, ...(work?.title ? { artifact: work.title } : {}), ...(step ? { step } : {}), ...(reentryRow?.since ? { at: reentryRow.since } : {}) } }
+        : {})}
+      {...(morning ? { today: { hard: morning.brief.hard, ...(morning.brief.recommendedAction ? { start: morning.brief.recommendedAction } : {}) } } : {})}
+      {...(schedule ? { nextBriefAt: schedule.morningAt } : {})}
       {...(state ? { state } : {})}
       {...(ctx.done ? { completion: { done: ctx.done, ...(work?.nextAction ? { next: work.nextAction } : {}) } } : {})}
       {...(recap ? { recap: { key: recap.key, items: recap.items, delivered: recap.delivered } } : {})}

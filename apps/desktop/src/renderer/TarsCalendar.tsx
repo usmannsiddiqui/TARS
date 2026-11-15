@@ -1,6 +1,7 @@
 // TARS's own calendar: what it will do on its own (only deadlines really scheduled), what it did (from
 // stored timestamps) and what needs a look. Presentational: the entries come from tarsCalendar().
 import { byDay, type CalendarEntry, type Honest } from "./model";
+import { kindOfName, SourceChip } from "./logos";
 import { formatWhen, StateNote, StateTag } from "./ui";
 
 export type TarsCalendarProps = {
@@ -12,6 +13,21 @@ export type TarsCalendarProps = {
 
 const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
+/** An entry's title with its source's name shown as that source's chip ("Checked [Notion]"). */
+function Title({ entry }: { entry: CalendarEntry }) {
+  const kind = entry.source && kindOfName(entry.source);
+  if (!entry.source || !kind) return <p className="agenda-title">{entry.title}</p>;
+  const at = entry.title.indexOf(entry.source);
+  if (at < 0) return <p className="agenda-title">{entry.title}</p>;
+  return (
+    <p className="agenda-title">
+      {entry.title.slice(0, at)}
+      <SourceChip kind={kind} label={entry.source} />
+      {entry.title.slice(at + entry.source.length)}
+    </p>
+  );
+}
+
 function Entries({ entries, withDay }: { entries: CalendarEntry[]; withDay?: boolean }) {
   return (
     <ul className="agenda inner">
@@ -19,7 +35,7 @@ function Entries({ entries, withDay }: { entries: CalendarEntry[]; withDay?: boo
         <li key={`${e.title}:${e.at}`} className="agenda-row">
           <span className="agenda-time num">{withDay ? formatWhen(new Date(e.at).toISOString()) : time.format(e.at)}</span>
           <div className="agenda-body">
-            <p className="agenda-title">{e.title}</p>
+            <Title entry={e} />
             {e.detail && <p className="quiet small">{e.detail}</p>}
           </div>
           <span className="agenda-state">
@@ -101,7 +117,7 @@ export function TarsCalendar({ calendar, cloud, now }: TarsCalendarProps) {
                 <ul className="plain">
                   {calendar.attention.map((e) => (
                     <li key={`${e.title}:${e.at}`}>
-                      <p className="agenda-title">{e.title}</p>
+                      <Title entry={e} />
                       <StateNote state={e.state} />
                     </li>
                   ))}

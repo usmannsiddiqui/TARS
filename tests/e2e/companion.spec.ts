@@ -2,10 +2,10 @@
 // Packaged-app tests drive the real app. No real sign-in exists yet, so a session is seeded and the
 // cloud never confirms it: anything needing live cloud projects runs against the TEST-ONLY harness
 // (tests/e2e/harness), which mounts the same presentational screens with illustrative props.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { freshProfile, launch, SHOTS, signedInProfile, startHarness, windowFor, type Harness } from "./packaged";
 
 type Bridge = {
@@ -209,23 +209,44 @@ test("panel_opens_without_focus_stealing_notification", async () => {
     await expect.poll(() => windowState("#pet")).toEqual({ focusable: false, focused: false, visible: true, onTop: true });
     // No panel exists until the user asks for it.
     expect(await windowState("#panel")).toBeUndefined();
+    const petButton = pet.getByRole("button", { name: /^Open companion panel\. (Idle|Working|Done)\.$/ });
+    const panelVisible = async () => (await windowState("#panel"))?.visible;
+    const appFocused = (await windowState(""))?.focused;
 
-    // A user click opens the panel with context, one next action and "Open app".
-    await pet.getByRole("button", { name: /^Open companion panel\. (Idle|Working|Done)\.$/ }).click();
+    // Resting the pointer on TARS shows the panel beside it; the app in front keeps keyboard focus.
+    await petButton.hover();
     const panel = await windowFor(app, "#panel");
-    await expect.poll(async () => (await windowState("#panel"))?.visible).toBe(true);
+    await expect.poll(panelVisible).toBe(true);
+    expect((await windowState("#panel"))?.focused).toBe(false);
+    expect((await windowState(""))?.focused).toBe(appFocused);
+    expect((await log()).focus).not.toContain("#panel");
     await expect(panel.getByRole("button", { name: "Open app" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "Stop for now" })).toBeVisible();
-    await expect(panel.getByRole("heading", { level: 1 })).toHaveText("No project chosen");
+    await expect(panel.getByRole("heading", { level: 1 })).toHaveText("Where you left off");
     await expect(panel.getByText("Not signed in")).toBeVisible();
 
-    // Escape closes it; "Open app" brings the full app forward, again only because the user asked.
+    // Moving from the pet into the panel keeps it open; leaving both closes it a moment later.
+    await pet.mouse.move(-40, -40);
+    await panel.getByRole("button", { name: "Open app" }).hover();
+    await panel.waitForTimeout(800);
+    expect(await panelVisible()).toBe(true);
+    await panel.mouse.move(-40, -40);
+    await expect.poll(panelVisible).toBe(false);
+
+    // A click pins it: it stays open after the pointer leaves, until Escape closes it.
+    await petButton.click();
+    await expect.poll(panelVisible).toBe(true);
+    await pet.mouse.move(-40, -40);
+    await pet.waitForTimeout(800);
+    expect(await panelVisible()).toBe(true);
     await panel.keyboard.press("Escape");
-    await expect.poll(async () => (await windowState("#panel"))?.visible).toBe(false);
-    await pet.getByRole("button", { name: /^Open companion panel/ }).click();
-    await expect.poll(async () => (await windowState("#panel"))?.visible).toBe(true);
+    await expect.poll(panelVisible).toBe(false);
+
+    // Enter on the pet opens it the same way; "Open app" brings the full app forward, only because the user asked.
+    await petButton.press("Enter");
+    await expect.poll(panelVisible).toBe(true);
     await panel.getByRole("button", { name: "Open app" }).click();
-    await expect.poll(async () => (await windowState("#panel"))?.visible).toBe(false);
+    await expect.poll(panelVisible).toBe(false);
     await expect.poll(async () => (await windowState(""))?.visible).toBe(true);
 
     const { focus, notifications } = await log();
@@ -235,6 +256,98 @@ test("panel_opens_without_focus_stealing_notification", async () => {
   } finally {
     rmSync(userData, { recursive: true, force: true });
   }
+});
+
+test("pet_drags_and_its_spot_survives_a_relaunch", async () => {
+  const userData = freshProfile();
+  const bounds = (app: ElectronApplication, hash: string) =>
+    app.evaluate(({ BrowserWindow }, hash) => {
+      const win = BrowserWindow.getAllWindows().find((w) => new URL(w.webContents.getURL()).hash === hash);
+      return win && { ...win.getBounds(), visible: win.isVisible() };
+    }, hash);
+  const spot = async (app: ElectronApplication) => {
+    const b = await bounds(app, "#pet");
+    return b && { x: b.x, y: b.y };
+  };
+  try {
+    let app = await launch(userData);
+    const pet = await windowFor(app, "#pet");
+    await expect.poll(async () => (await bounds(app, "#pet"))?.visible).toBe(true);
+    const start = (await spot(app))!;
+    const button = pet.getByRole("button", { name: /^Open companion panel/ });
+    const box = (await button.boundingBox())!;
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    await pet.mouse.move(x, y);
+    await pet.mouse.down();
+    await pet.mouse.move(x - 120, y - 80, { steps: 12 });
+    await pet.mouse.up();
+    await expect.poll(async () => {
+      const at = (await spot(app))!;
+      return at.x < start.x - 50 && at.y < start.y - 30;
+    }).toBe(true);
+    // The drag ends in a click event; it never opens the panel, nor does resting where it was dropped.
+    await pet.waitForTimeout(800);
+    expect((await bounds(app, "#panel"))?.visible ?? false).toBe(false);
+
+    // Arrow keys move it too; Shift takes a bigger step.
+    const dropped = (await spot(app))!;
+    await button.press("ArrowRight");
+    await expect.poll(() => spot(app)).toEqual({ x: dropped.x + 10, y: dropped.y });
+    await button.press("Shift+ArrowDown");
+    await expect.poll(() => spot(app)).toEqual({ x: dropped.x + 10, y: dropped.y + 50 });
+    const saved = (await spot(app))!;
+    await app.close();
+
+    // Relaunch: TARS is where the user left it.
+    app = await launch(userData);
+    await windowFor(app, "#pet");
+    await expect.poll(() => spot(app)).toEqual(saved);
+    const corner = await app.evaluate(({ screen }) => {
+      const { workArea: w } = screen.getPrimaryDisplay();
+      return { x: w.x + w.width - 184 - 24, y: w.y + w.height - 136 - 24 };
+    });
+    await app.close();
+
+    // A spot on a display that is no longer connected falls back to the default corner.
+    const prefs = join(userData, "prefs.json");
+    writeFileSync(prefs, JSON.stringify({ ...JSON.parse(readFileSync(prefs, "utf8")), petPosition: { x: -90000, y: -90000 } }));
+    app = await launch(userData);
+    await windowFor(app, "#pet");
+    await expect.poll(() => spot(app)).toEqual(corner);
+    await app.close();
+  } finally {
+    rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("panel_glance_left_off_then_today_then_actions", async () => {
+  const panel = await scene("panel", { size: { width: 360, height: 420 } });
+  const leftOff = panel.getByRole("region", { name: "Where you left off" });
+  await expect(leftOff).toContainText("AI Guides");
+  await expect(leftOff).toContainText("Presenter run-through for the co-presentation");
+  await expect(leftOff).toContainText("Next: Open slides 9–18 and time the demo section against 25 minutes.");
+  await expect(leftOff).toContainText(/Last here \w+/);
+  const today = panel.getByRole("region", { name: "Today" });
+  await expect(today).toContainText("2 meetings and due dates today. Next: Rehearsal call with the co-presenter at 11:59 PM.");
+  await expect(today).toContainText("Start with: Send the final slide order to the co-presenter");
+  const open = panel.getByRole("button", { name: "Open app" });
+  // Both actions sit above the fold of the 420px panel.
+  await expect(open).toBeInViewport({ ratio: 1 });
+  const stop = panel.getByRole("button", { name: "Stop for now" });
+  // In this order: where you left off, today, the two actions, then quick capture.
+  const tops = await Promise.all([leftOff, today, open, panel.getByLabel("Capture an idea")].map(async (l) => (await l.boundingBox())!.y));
+  expect(tops).toEqual([...tops].sort((a, b) => a - b));
+  // "Open app" is the one primary action; "Stop for now" is the same size beside it.
+  await expect(panel.locator(".primary")).toHaveCount(1);
+  const [a, b] = [(await open.boundingBox())!, (await stop.boundingBox())!];
+  expect(Math.abs(a.width - b.width)).toBeLessThan(1);
+  expect(Math.abs(a.height - b.height)).toBeLessThan(1);
+  await panel.close();
+  // Empty states say plainly what is true.
+  const empty = await scene("panel-empty", { size: { width: 360, height: 420 } });
+  await expect(empty.getByRole("region", { name: "Where you left off" })).toContainText("Nothing from yesterday");
+  await expect(empty.getByRole("region", { name: "Today" })).toContainText("No brief yet; the next one is at 9:00 AM");
+  await empty.close();
 });
 
 test("keyboard-only main path with visible focus", async () => {

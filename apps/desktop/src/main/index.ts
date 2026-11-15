@@ -34,6 +34,18 @@ import { appendLocalLog } from "./local-log";
 import { aesGcmCipher, openLocalStore, type LocalStore } from "./local-store";
 import { watchObservation } from "./observation";
 import { createLogSync } from "./outcome-log";
+import {
+  clampToWorkAreas,
+  HOVER_CLOSE_MS,
+  HOVER_INTENT_MS,
+  HOVER_START,
+  hoverNext,
+  panelBeside,
+  restorePetPosition,
+  type Hover,
+  type HoverEvent,
+  type Point,
+} from "./pet";
 import { createShortcut, DEFAULT_SHORTCUT } from "./shortcut";
 import { createLocalSources, watchSelected } from "./source-watch";
 
@@ -84,8 +96,12 @@ async function loadDataKey(vault: SecretVault): Promise<Buffer> {
   return key;
 }
 
-/** Small, non-sensitive choices kept on this Mac: the capture shortcut and whether the pet is shown. */
-const PrefsSchema = z.object({ shortcut: z.string().optional(), petVisible: z.boolean().optional() });
+/** Small, non-sensitive choices kept on this Mac: the capture shortcut, whether the pet is shown and where. */
+const PrefsSchema = z.object({
+  shortcut: z.string().optional(),
+  petVisible: z.boolean().optional(),
+  petPosition: z.object({ x: z.number().int(), y: z.number().int() }).optional(),
+});
 type Prefs = z.infer<typeof PrefsSchema>;
 function prefsFile(path: string) {
   let prefs: Prefs = {};
@@ -136,11 +152,14 @@ function newWindow(view: View, options: Electron.BrowserWindowConstructorOptions
   return win;
 }
 
+const workAreas = () => screen.getAllDisplays().map((d) => d.workArea);
+
 /**
  * Window policy: only a user action opens or focuses a window. The pet is never focusable and is
- * shown inactive; background changes reach windows as subscription updates, never as focus or a notification.
+ * shown inactive; resting the pointer on it shows the panel inactive too, so the app in front keeps
+ * focus. Background changes reach windows as subscription updates, never as focus or a notification.
  */
-function createWindows(petPref: { visible: boolean; save(visible: boolean): void }) {
+function createWindows(petPref: { visible: boolean; position?: Point; save(patch: Prefs): void }) {
   let main: BrowserWindow | null = null;
   let pet: BrowserWindow | null = null;
   let panel: BrowserWindow | null = null;
@@ -149,6 +168,36 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
   // Set when the shortcut opened the panel over another app: dismissing it hands focus back to that app.
   let returnFocusOnClose = false;
   const live = (win: BrowserWindow | null): win is BrowserWindow => win !== null && !win.isDestroyed();
+
+  // The one place the panel opens and closes: hover, click, key, shortcut and notification all go through here.
+  let hover = HOVER_START;
+  let hoverTimer: NodeJS.Timeout | undefined;
+  const isOpen = (mode: Hover["mode"]) => mode === "open" || mode === "closing" || mode === "pinned";
+  const dispatch = (event: HoverEvent) => {
+    const before = hover;
+    hover = hoverNext(before, event);
+    clearTimeout(hoverTimer);
+    // A one-shot UI delay (hover intent / grace), never a check for data.
+    const delay = hover.mode === "intent" ? HOVER_INTENT_MS : hover.mode === "closing" ? HOVER_CLOSE_MS : null;
+    if (delay !== null) hoverTimer = setTimeout(() => dispatch({ type: "timer" }), delay);
+    if (hover.mode === "open" && !isOpen(before.mode)) void showPanel(null, false);
+    if (!isOpen(hover.mode) && isOpen(before.mode) && live(panel)) panel.hide();
+  };
+
+  const showPanel = async (projectId: string | null, focus: boolean) => {
+    const { win, ready } = ensurePanel();
+    await ready;
+    if (!isOpen(hover.mode)) return; // the pointer left (or a drag began) while the window was loading
+    const anchor = live(pet) && pet.isVisible() ? pet.getBounds() : null;
+    const workArea = (anchor ? screen.getDisplayMatching(anchor) : screen.getPrimaryDisplay()).workArea;
+    const { x, y } = anchor
+      ? panelBeside(anchor, SIZES.panel, workArea)
+      : { x: workArea.x + workArea.width - SIZES.panel.width - 24, y: workArea.y + workArea.height - SIZES.panel.height - 24 };
+    win.setPosition(x, y);
+    win.webContents.send("panel:show", projectId);
+    if (focus) win.show(); // a user action (pet click or key, shortcut, notification click): the panel may take focus
+    else win.showInactive(); // hover: shown beside the pet, the app in front keeps focus
+  };
 
   const openMain = () => {
     if (live(main)) return main;
@@ -159,12 +208,23 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
     return win;
   };
 
+  const movePetTo = (to: Point) => {
+    if (!live(pet)) return;
+    const { x, y } = clampToWorkAreas({ ...to, ...SIZES.pet }, workAreas());
+    pet.setPosition(x, y);
+    return { x, y };
+  };
+
   const openPet = () => {
     const { workArea } = screen.getPrimaryDisplay();
-    pet = newWindow("pet", {
-      title: "TARS pet",
+    // Where the user last dropped it, while that spot is on a connected display; else the default corner.
+    const at = restorePetPosition(petPref.position, SIZES.pet, workAreas()) ?? {
       x: workArea.x + workArea.width - SIZES.pet.width - 24,
       y: workArea.y + workArea.height - SIZES.pet.height - 24,
+    };
+    pet = newWindow("pet", {
+      title: "TARS pet",
+      ...at,
       frame: false,
       transparent: true,
       resizable: false,
@@ -182,6 +242,11 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
     shown.once("ready-to-show", () => {
       if (petVisible) shown.showInactive();
     });
+    // A display unplugged or rearranged (an OS event): bring the pet back onto one. The saved spot is kept.
+    const onDisplays = () => live(pet) && movePetTo(pet.getBounds());
+    screen.on("display-added", onDisplays);
+    screen.on("display-removed", onDisplays);
+    screen.on("display-metrics-changed", onDisplays);
   };
 
   const ensurePanel = () => {
@@ -197,9 +262,11 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
       alwaysOnTop: true,
       backgroundColor: GROUND,
     });
+    // Clicking or typing inside the panel pins it: it no longer closes when the pointer wanders off.
+    win.on("focus", () => dispatch({ type: "pin" }));
     win.on("blur", () => {
       returnFocusOnClose = false; // focus already went where the user clicked
-      win.hide();
+      dispatch({ type: "close" });
     });
     panel = win;
     panelReady = new Promise((done) => win.once("ready-to-show", () => done()));
@@ -216,22 +283,13 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
      * takes focus, and nothing here starts the microphone: recording needs a Record click.
      */
     async openPanel(projectId?: string, capture = false) {
-      const { win, ready } = ensurePanel();
-      await ready;
-      const { workArea } = screen.getPrimaryDisplay();
-      const anchor = live(pet) && pet.isVisible() ? pet.getBounds() : null;
-      const x = anchor ? anchor.x + anchor.width - SIZES.panel.width : workArea.x + workArea.width - SIZES.panel.width - 24;
-      const y = anchor ? anchor.y - SIZES.panel.height - 8 : workArea.y + workArea.height - SIZES.panel.height - 24;
-      win.setPosition(Math.max(workArea.x, x), Math.max(workArea.y, y));
-      win.webContents.send("panel:show", projectId ?? null);
-      if (capture) {
-        returnFocusOnClose = BrowserWindow.getFocusedWindow() === null;
-        win.webContents.send("capture:open");
-      }
-      win.show(); // a user action (pet click, shortcut, notification click): the panel may take focus
+      dispatch({ type: "pin" });
+      if (capture) returnFocusOnClose = BrowserWindow.getFocusedWindow() === null;
+      await showPanel(projectId ?? null, true);
+      if (capture && live(panel)) panel.webContents.send("capture:open");
     },
     openApp(projectId?: string) {
-      if (live(panel)) panel.hide();
+      dispatch({ type: "close" });
       const win = openMain();
       if (win.isMinimized()) win.restore();
       win.show();
@@ -242,7 +300,7 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
     },
     closePanel() {
       if (!live(panel)) return;
-      panel.hide();
+      dispatch({ type: "close" });
       // Hiding the app (not focusing another of our windows) lets macOS return focus to the previous app.
       if (returnFocusOnClose && process.platform === "darwin") app.hide();
       returnFocusOnClose = false;
@@ -250,10 +308,24 @@ function createWindows(petPref: { visible: boolean; save(visible: boolean): void
     petVisible: () => petVisible,
     setPetVisible(visible: boolean) {
       petVisible = visible;
-      petPref.save(visible);
+      petPref.save({ petVisible: visible });
       if (!live(pet)) return;
       if (visible) pet.showInactive();
-      else pet.hide();
+      else {
+        pet.hide();
+        dispatch({ type: "pet", over: false });
+      }
+    },
+    dragPet(senderId: number, dx: number, dy: number) {
+      if (!live(pet) || senderId !== pet.webContents.id) return; // only the pet moves itself
+      dispatch({ type: "drag" });
+      const { x, y } = pet.getBounds();
+      const at = movePetTo({ x: x + dx, y: y + dy });
+      if (at) petPref.save({ petPosition: at });
+    },
+    pointerOver(senderId: number, over: boolean) {
+      if (live(pet) && senderId === pet.webContents.id) dispatch({ type: "pet", over });
+      else if (live(panel) && senderId === panel.webContents.id) dispatch({ type: "panel", over });
     },
   };
 }
@@ -359,7 +431,8 @@ async function start(): Promise<void> {
   await resumeOwner();
 
   const prefs = prefsFile(join(userData, "prefs.json"));
-  const windows = createWindows({ visible: prefs.get().petVisible ?? true, save: (petVisible) => prefs.set({ petVisible }) });
+  const { petVisible, petPosition } = prefs.get();
+  const windows = createWindows({ visible: petVisible ?? true, ...(petPosition ? { position: petPosition } : {}), save: (patch) => prefs.set(patch) });
 
   // Outcome log on this Mac: the cloud pushes the appends that are due; each is reported back.
   const logSync = createLogSync({

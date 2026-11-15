@@ -199,6 +199,28 @@ export function cloudRow(def: { provider: CloudProvider; name: string; coverage:
   };
 }
 
+const HOST_KIND: [host: string, kind: string][] = [
+  ["slack.com", "slack"],
+  ["mail.google.com", "gmail"],
+  ["notion.so", "notion"],
+  ["notion.site", "notion"],
+  ["instructure.com", "canvas"],
+  ["outlook.office.com", "outlook"],
+  ["outlook.office365.com", "outlook"],
+  ["outlook.live.com", "outlook"],
+];
+
+/**
+ * The source kind an item's https link points at, from its host (exact or a subdomain), so a chip can show
+ * where it came from. Unknown hosts (a Canvas on its own domain, say) are not guessed.
+ */
+export function kindFromUrl(url: string | undefined): string | undefined {
+  const u = url !== undefined && URL.canParse(url) ? new URL(url) : undefined;
+  if (u?.protocol !== "https:") return undefined;
+  const kind = HOST_KIND.find(([host]) => u.hostname === host || u.hostname.endsWith(`.${host}`))?.[1];
+  return kind === "outlook" ? (u.pathname.startsWith("/calendar") ? "outlook-calendar" : "outlook-mail") : kind;
+}
+
 /** A project's preparation as one honest state, for the rail, Today and the project index. */
 export function preparedNote(p: ProjectSummary): Honest {
   if (p.prepared === undefined) return { kind: "empty", detail: "Nothing prepared yet" };
@@ -228,7 +250,8 @@ export function byDay<T>(items: readonly T[], at: (item: T) => number, now: numb
   return days;
 }
 
-export type CalendarEntry = { at: number; title: string; detail?: string; state: Honest };
+/** `source`: the display name of the source a source check is about, for its chip. */
+export type CalendarEntry = { at: number; title: string; detail?: string; state: Honest; source?: string };
 export type CalendarInput = {
   now: number;
   /** briefs.getSchedule: the next scheduled deadlines, null until the timezone is set. */
@@ -272,7 +295,7 @@ export function tarsCalendar({ now, schedule, briefs, projects, sources }: Calen
   for (const s of sources) {
     const at = s.lastCheckedAt ? Date.parse(s.lastCheckedAt) : NaN;
     if (s.availability === "connected") {
-      if (!Number.isNaN(at)) done.push({ at, title: `Checked ${s.name}`, state: { kind: "done" } });
+      if (!Number.isNaN(at)) done.push({ at, title: `Checked ${s.name}`, state: { kind: "done" }, source: s.name });
     } else {
       // The state carries its own detail, so the screen shows it as one glyph-and-word note.
       const detail = s.lastError ? { detail: s.lastError } : {};
@@ -285,7 +308,7 @@ export function tarsCalendar({ now, schedule, briefs, projects, sources }: Calen
             ? { kind: "missing-access", ...detail }
             : { kind: "needs-retry", ...detail };
       const title = s.availability === "stale" ? `${s.name} may be out of date` : s.availability === "missing-access" ? `${s.name} needs access` : `${s.name} needs a retry`;
-      attention.push({ at: Number.isNaN(at) ? now : at, title, state });
+      attention.push({ at: Number.isNaN(at) ? now : at, title, state, source: s.name });
     }
   }
   return {

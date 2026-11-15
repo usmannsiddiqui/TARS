@@ -103,7 +103,9 @@ describe("local sources (Obsidian folders/files)", () => {
     renameSync(join(dir, "plans", "avt.md"), join(dir, "plans", "avt-final.md"));
     const renamed = await c.next((e) => e.externalId === "plans/avt-final.md");
     expect(renamed.version).toBe(edited.version);
-  });
+    // Three native file events in a row: FSEvents delivery is slow when the whole suite runs in parallel
+    // on a busy machine (timed out at the 5 s default there, never when run alone).
+  }, 20_000);
 
   it("atomic_replace_still_emits_once", async () => {
     const { alice } = makeOwners();

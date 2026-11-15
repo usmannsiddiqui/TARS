@@ -1,17 +1,25 @@
 // The compact panel the pet opens. Presentational: data and actions arrive as props.
 import { useEffect, useRef } from "react";
 import { Composer } from "./Composer";
-import type { Honest, PetState, Receipt } from "./model";
+import type { HardItem, Honest, PetState, Receipt } from "./model";
 import { PET_LABEL, PetFigure, StateNote } from "./ui";
+
+const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const dayAndClock = new Intl.DateTimeFormat(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" });
+const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
 export type PanelProps = {
   petState: PetState;
+  /** Render time, so "today" and "next" are decided once per showing. */
+  now: number;
   projectId?: string;
-  projectName?: string;
-  /** What is prepared there, in one line of context. */
-  context?: string;
-  /** The one next action for the current context. */
-  nextAction?: string;
+  /** Where you left off: the focus project, what is prepared there, its next step, and when you were last here. */
+  leftOff?: { project: string; artifact?: string; step?: string; at?: string };
+  /** Today's brief: the meetings and real due dates, and the one recommended start. */
+  today?: { hard: HardItem[]; start?: string };
+  /** When the next brief is due, said when there is none yet. */
+  nextBriefAt?: number;
+  /** The cloud's own state, or a failed preparation. */
   state?: Honest;
   completion?: { done: string; next?: string };
   /** Tonight's recap, shown only because the user opened the panel. */
@@ -26,7 +34,7 @@ export type PanelProps = {
   onClose(): void;
 };
 
-/** Current context, one next action and "Open app". Escape closes it. */
+/** At a glance: where you left off, what today holds, then "Open app" and "Stop for now", then capture. Escape closes it. */
 export function Panel(props: PanelProps) {
   const first = useRef<HTMLButtonElement>(null);
   const { onClose, onRecapShown } = props;
@@ -72,20 +80,46 @@ export function Panel(props: PanelProps) {
         </section>
       ) : (
         <>
-        <section className="panel-body panel-card" aria-labelledby="panel-h">
-          <p className="block-title">Now</p>
-          <h1 id="panel-h">{props.projectName ?? "No project chosen"}</h1>
-          {props.context && <p className="panel-context">{props.context}</p>}
-          {props.state && <StateNote state={props.state} />}
-          {props.nextAction && (
-            <p className="panel-next">
-              <span className="why">Next:</span> {props.nextAction}
-            </p>
+        <div className="panel-body panel-card">
+          <section className="panel-glance" aria-labelledby="panel-h">
+            <h1 id="panel-h" className="block-title">
+              Where you left off
+            </h1>
+            {props.state && <StateNote state={props.state} />}
+            {props.leftOff ? (
+              <>
+                <p className="panel-project">{props.leftOff.project}</p>
+                {props.leftOff.artifact && <p className="panel-context">{props.leftOff.artifact}</p>}
+                {props.leftOff.step && (
+                  <p className="panel-next">
+                    <span className="why">Next:</span> {props.leftOff.step}
+                  </p>
+                )}
+                {props.leftOff.at && <p className="quiet small">Last here {dayAndClock.format(new Date(props.leftOff.at))}</p>}
+              </>
+            ) : (
+              !props.state && <p className="quiet">Nothing from yesterday</p>
+            )}
+          </section>
+          {/* Without the cloud nothing is known about today; the state above already says why. */}
+          {(!props.state || props.state.kind === "needs-retry") && (
+            <section className="panel-glance" aria-labelledby="today-h">
+              <h2 id="today-h" className="block-title">
+                Today
+              </h2>
+              {props.today ? (
+                <TodayLines today={props.today} now={props.now} {...(props.leftOff?.step ? { step: props.leftOff.step } : {})} />
+              ) : (
+                <p className="quiet">
+                  {props.nextBriefAt ? `No brief yet; the next one is at ${clock.format(props.nextBriefAt)}` : "No brief yet"}
+                </p>
+              )}
+            </section>
           )}
           {props.receipt && <ReceiptLine receipt={props.receipt} />}
           {props.note && <StateNote state={{ kind: "needs-retry", detail: props.note }} />}
-          {/* Open app sits above the fold of the 420px panel; capture follows. */}
-          <div className="actions panel-actions">
+          {/* Open app sits above the fold of the 420px panel; capture follows. Stopping is never the lesser choice. */}
+          <div className="actions equal">
             <button type="button" className="primary" ref={first} onClick={props.onOpenApp}>
               Open app
             </button>
@@ -109,12 +143,33 @@ export function Panel(props: PanelProps) {
               )}
             </section>
           )}
-        </section>
+        </div>
         {/* Capture is its own card beside the context, never glass on glass. */}
         <Composer {...(props.projectId ? { projectId: props.projectId } : {})} />
         </>
       )}
     </main>
+  );
+}
+
+/** How many meetings and real due dates fall today, the next one still ahead, and the one recommended start (unless it is the step above). */
+function TodayLines({ today, now, step }: { today: { hard: HardItem[]; start?: string }; now: number; step?: string }) {
+  const day = new Date(now);
+  const todays = today.hard.filter((h) => sameDay(new Date(h.dueAt), day)).sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
+  const next = todays.find((h) => Date.parse(h.dueAt) >= now);
+  const n = todays.length;
+  return (
+    <>
+      <p>
+        {n === 0 ? "No meetings or due dates today." : `${n} ${n === 1 ? "meeting or due date" : "meetings and due dates"} today.`}
+        {next && ` Next: ${next.text} at ${clock.format(new Date(next.dueAt))}.`}
+      </p>
+      {today.start && today.start !== step && (
+        <p className="panel-next">
+          <span className="why">Start with:</span> {today.start}
+        </p>
+      )}
+    </>
   );
 }
 

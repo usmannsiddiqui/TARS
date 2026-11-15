@@ -52,13 +52,17 @@ export type IpcRouterDeps = {
   system: { openExternal(url: string): Promise<void>; openAccessibilitySettings(): Promise<void> };
   /** Event-driven hand-off of consented local evidence to the cloud. */
   cloud: { trigger(): Promise<void> };
-  /** Window control. Called only from the user's own clicks in the renderer; never on a timer or event. */
+  /** Window control. Called only from the user's own pointer and key input in the renderer; never on a timer. */
   windows: {
     openPanel(projectId?: string): void;
     openApp(projectId?: string): void;
     closePanel(): void;
     setPetVisible(visible: boolean): void;
     petVisible(): boolean;
+    /** Moves the pet by a step if `senderId` is the pet window; main clamps it onto a display. */
+    dragPet(senderId: number, dx: number, dy: number): void;
+    /** The pointer entered or left the calling window; main knows whether that is the pet or the panel. */
+    pointerOver(senderId: number, over: boolean): void;
   };
 };
 
@@ -120,6 +124,16 @@ async function dictationResult(run: Promise<{ text: string; recoveryId: string }
 
 const WindowTargetSchema = z.strictObject({ projectId: ProjectIdSchema.optional() });
 type WindowTarget = z.infer<typeof WindowTargetSchema>;
+// One pointer-move or key step, in px. Larger than any display, so a fast drag is never refused.
+const step = z.number().int().min(-4000).max(4000);
+const DragSchema = z.strictObject({ dx: step, dy: step });
+type Drag = z.infer<typeof DragSchema>;
+
+/** Window-bound requests: main checks which window sent them, never the renderer's say-so. */
+function requireSender(sender: IpcSender): number {
+  if (sender.senderId === undefined) throw new IpcRejected("Untrusted sender");
+  return sender.senderId;
+}
 
 // Payload schemas per channel. None accepts an ownerId: the main process supplies it.
 const routes = {
@@ -176,8 +190,7 @@ const routes = {
     payload: z.undefined(),
     run: async (deps: IpcRouterDeps, _: undefined, sender: IpcSender) => {
       requireOwner(deps);
-      if (sender.senderId === undefined) throw new IpcRejected("Untrusted sender");
-      return deps.dictation.begin(sender.senderId);
+      return deps.dictation.begin(requireSender(sender));
     },
   },
   "dictation:finish": {
@@ -252,6 +265,14 @@ const routes = {
   "pet:visible": {
     payload: z.undefined(),
     run: async (deps: IpcRouterDeps) => deps.windows.petVisible(),
+  },
+  "pet:dragBy": {
+    payload: DragSchema,
+    run: async (deps: IpcRouterDeps, { dx, dy }: Drag, sender: IpcSender) => deps.windows.dragPet(requireSender(sender), dx, dy),
+  },
+  "window:hover": {
+    payload: z.strictObject({ over: z.boolean() }),
+    run: async (deps: IpcRouterDeps, { over }: { over: boolean }, sender: IpcSender) => deps.windows.pointerOver(requireSender(sender), over),
   },
   "auth:idToken": {
     payload: z.strictObject({ forceRefresh: z.boolean() }),

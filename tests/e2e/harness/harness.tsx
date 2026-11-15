@@ -367,15 +367,32 @@ const routes: Record<string, Route> = {
 const [routeName = "today", variant = ""] = scene.split("-");
 const projectVariant = routeName === "project" && projects.some((p) => p.id === variant) ? variant : undefined;
 const guides = projects[0]!.prepared!.work!;
+// Today's meetings and due dates for the panel: one already past (midnight), one still ahead (late evening), one next week.
+const panelToday = [
+  { ...morning.hard[0]!, text: "Stand-up with the AV lead", dueAt: new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate(), 0, 0).toISOString() },
+  { ...morning.hard[0]!, text: "Rehearsal call with the co-presenter", dueAt: new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate(), 23, 59).toISOString() },
+  morning.hard[2]!,
+];
 const element = scene.startsWith("pet-") ? (
-  <Pet state={scene.slice(4) as PetState} onOpen={() => record("openPanel")} />
+  <Pet state={scene.slice(4) as PetState} onOpen={() => record("openPanel")} onMove={(dx, dy) => record("dragPet", dx, dy)} />
 ) : scene === "panel" ? (
-  <Panel petState="idle" projectName="AI Guides" context={guides.title} nextAction={guides.nextAction} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp", "guides")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
+  <Panel
+    petState="idle"
+    now={NOW.getTime()}
+    leftOff={{ project: "AI Guides", artifact: guides.title, step: guides.nextAction, at: inDays(-1, 18) }}
+    today={{ hard: panelToday, start: "Send the final slide order to the co-presenter" }}
+    onRecapShown={(key) => record("markDelivered", key, "panel")}
+    onOpenApp={() => record("openApp", "guides")}
+    onStop={() => record("closePanel")}
+    onClose={() => record("closePanel")}
+  />
+) : scene === "panel-empty" ? (
+  <Panel petState="idle" now={NOW.getTime()} nextBriefAt={new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + 1, 9).getTime()} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("closePanel")} onClose={() => record("closePanel")} />
 ) : scene === "panel-evening" ? (
   <Panel
     petState="idle"
-    projectName="AI Guides"
-    context={guides.title}
+    now={NOW.getTime()}
+    leftOff={{ project: "AI Guides", artifact: guides.title }}
     recap={{ key: evening.key, items: evening.items, delivered: false }}
     onRecapShown={(key) => record("markDelivered", key, "panel")}
     onOpenApp={() => record("openApp", "guides")}
@@ -383,7 +400,7 @@ const element = scene.startsWith("pet-") ? (
     onClose={() => record("closePanel")}
   />
 ) : scene === "panel-done" ? (
-  <Panel petState="done" projectName="AI Guides" completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
+  <Panel petState="done" now={NOW.getTime()} completion={{ done: "Sent the final slide order to the co-presenter.", next: "Time the demo section." }} onRecapShown={(key) => record("markDelivered", key, "panel")} onOpenApp={() => record("openApp")} onStop={() => record("stop")} onClose={() => record("closePanel")} />
 ) : (
   <AppScene initial={projectVariant ? { view: "project", projectId: projectVariant } : (routes[routeName] ?? { view: "today" })} variant={variant} />
 );

@@ -1,6 +1,6 @@
 // Auth0 Native sign-in (RFC 8252): authorization code + PKCE through the system browser,
 // fixed loopback redirect, state + nonce validation. Main process only; no Electron import so
-// the pure parts are unit-testable. Live sign-in against a real tenant is UNVERIFIED.
+// the pure parts are unit-testable. One live sign-in against a real tenant succeeded on 2026-11-14.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { z } from "zod";

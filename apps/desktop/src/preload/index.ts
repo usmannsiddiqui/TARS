@@ -49,6 +49,10 @@ const api = {
   setPetVisible: (visible: boolean): Promise<void> => invoke("pet:setVisible", { visible }),
   /** The persisted hide-pet choice. */
   petVisible: (): Promise<boolean> => invoke("pet:visible"),
+  /** Moves the pet by whole px (a drag step or an arrow key); main clamps it and remembers where it is. */
+  dragPet: (dx: number, dy: number): Promise<void> => invoke("pet:dragBy", { dx, dy }),
+  /** The pointer entered or left this window; main opens or closes the panel from that. */
+  pointerOver: (over: boolean): Promise<void> => invoke("window:hover", { over }),
   // Opens Google or Microsoft sign-in in the system browser; any other URL is refused by main.
   openExternalAuth: (url: string): Promise<void> => invoke("auth:openExternal", { url }),
   // Dictation: begin only on a Record click; the mic is allowed for this window only after begin.
