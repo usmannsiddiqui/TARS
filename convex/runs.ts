@@ -76,6 +76,19 @@ export const loadMessage = internalQuery({
   },
 });
 
+/** The owner's projects by name: what a run started by his own chat message may read. */
+export const listProjects = internalQuery({
+  args: { ownerId: v.string() },
+  returns: v.array(projectRef),
+  handler: async (ctx, { ownerId }) =>
+    (
+      await ctx.db
+        .query("projects")
+        .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+        .collect()
+    ).map((p) => ({ id: p._id as string, name: p.name })),
+});
+
 const projectState = v.object({
   openRequests: v.array(v.object({ text: v.string(), dueAt: v.optional(v.string()) })),
   draft: v.union(v.null(), v.object({ title: v.optional(v.string()), form: v.optional(v.string()), revision: v.string(), text: v.string() })),
@@ -182,7 +195,7 @@ export const announce = internalMutation({
 type Run = {
   ownerId: string;
   trigger: RunTrigger;
-  /** Projects this run may read and write: the arrived message's in-scope projects, or the chat's project. */
+  /** Projects this run may read: the arrived message's in-scope projects, or (he asked) all of the user's. It writes only in `projectId`. */
   projects: Map<string, string>;
   evidenceId?: string;
   timezone: string | null;
@@ -365,11 +378,12 @@ export async function answerChat(ctx: ActionCtx, ownerId: string, messageId: Id<
   const c = await ctx.runQuery(internal.thread.loadAnswerContext, { ownerId, messageId });
   const { projectName, timezone } = await ctx.runQuery(internal.prepare.loadPreparationContext, { ownerId, projectId: c.projectId });
   const state = await ctx.runQuery(internal.runs.loadProjectState, { ownerId, projectId: c.projectId, beforeMessage: messageId });
+  const projects = await ctx.runQuery(internal.runs.listProjects, { ownerId });
   const read: Step = { id: "read", label: "Reading your message", doneLabel: "Read your message", status: "running", startedAt: c.startedAt };
-  const run: Run = { ownerId, trigger: "chat", projects: new Map([[c.projectId, projectName]]), timezone, projectId: c.projectId, messageId, steps: [read], calls: [] };
+  const run: Run = { ownerId, trigger: "chat", projects: new Map(projects.map((p) => [p.id, p.name])), timezone, projectId: c.projectId, messageId, steps: [read], calls: [] };
   try {
     // His message is the last entry of the stored chat; it goes in `message`, the rest is context.
-    const said = await work(ctx, run, { project: { id: c.projectId, name: projectName }, chat: state.chat.slice(0, -1), draft: state.draft, message: c.text });
+    const said = await work(ctx, run, { project: { id: c.projectId, name: projectName }, projects, chat: state.chat.slice(0, -1), draft: state.draft, message: c.text });
     if (read.status === "running") Object.assign(read, { status: "done", endedAt: Date.now() });
     await show(ctx, run, said);
     log(run, "replied");

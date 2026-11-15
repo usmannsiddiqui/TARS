@@ -173,23 +173,26 @@ describe("he answers in the chat", () => {
     expect(blockOf((await s.thread()).at(-1)!, "approval")).toMatchObject({ recipient: "dana@example.com" });
   });
 
-  test("a_question_is_answered_from_this_project_only", async () => {
+  test("his_chat_question_may_read_his_other_projects_but_never_anyone_elses", async () => {
     const s = await setup();
     await s.opening();
     const outside = await s.quietMail(s.other, "Illustrative note in another project.");
-    stubModel([[call("read_project", { projectId: s.budget }), call("read_project", { projectId: s.other })], [says("Dana needs it by 5pm today.")]]);
+    const bobs = ProjectIdSchema.parse(await s.asBob.mutation(api.projects.createProject, { name: "Bob's" }));
+    stubModel([[call("read_project", { projectId: s.budget }), call("read_project", { projectId: s.other }), call("read_project", { projectId: bobs })], [says("Dana needs it by 5pm today.")]]);
     await s.asAlice.action(api.thread.sendMessage, { projectId: s.budget, text: "when does Dana need it?" });
 
     const answer = (await s.thread()).at(-1)!;
     expect(types(answer)).toEqual(["work", "say"]);
     expect(blockOf(answer, "say")).toEqual({ text: "Dana needs it by 5pm today." }); // his answer in plain words, no source chips
-    // Reading this project carries only its own items; the other project is refused.
-    const [own, refused] = requestInput(1)
+    // He asked, so the run is told his projects by name and may read any of them; another owner's is refused.
+    const first = JSON.parse(requestInput(0).input[0]!.content!) as { projects: { id: string; name: string }[] };
+    expect(first.projects.map((p) => p.name).sort()).toEqual(["Budget", "Other"]);
+    const [own, other, refused] = requestInput(1)
       .input.filter((item) => item.type === "function_call_output")
       .map((item) => JSON.parse(item.output!) as { items?: { id: string }[]; error?: string });
     expect(own!.items!.map((item) => item.id)).toEqual([s.mail()]);
+    expect(other!.items!.map((item) => item.id)).toEqual([outside.id]);
     expect(refused).toEqual({ error: expect.stringMatching(/not available/) });
-    expect(JSON.stringify(requestInput(1).input)).not.toContain(outside.id);
   });
 
   test("another_owner_sees_nothing_and_cannot_post", async () => {

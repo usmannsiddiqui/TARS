@@ -67,6 +67,8 @@ export const RUN_INSTRUCTIONS: Record<RunTrigger, string> = {
   chat: [
     ...SHARED,
     "The user has written to you in a project's chat (input.message). input.chat is the conversation so far, oldest first; use it to understand what they mean.",
+    "input.projects lists all of the user's projects. When this project's material cannot answer what they ask, read the project that can. Drafts are always saved in the project they wrote in.",
+    "Never ask the user for a screenshot or to paste something. If none of their projects holds what they ask about, say plainly what is missing and that connecting that source to a project would let you read it.",
     "If they ask for a change, save the full revised text with write_draft and say what changed. If they ask a question, answer from the project's material. If they say the draft is ready, looks good, or ask to send it, call propose_send. If you cannot tell what they want, ask one short question.",
   ].join("\n"),
 };
