@@ -30,6 +30,7 @@ export const SourceKindSchema = z.enum([
   "outlook-mail",
   "outlook-calendar",
   "teams",
+  "github",
   "claude-code",
   "codex",
   "observation",
