@@ -4,7 +4,6 @@
 // TARS at the front desk on the right. Below 1024px the right pane becomes an overlay that starts closed.
 import { createContext, useEffect, useState, type ReactNode } from "react";
 import { RECAP_EMPTY, type ClosingRecap, type RecapList } from "@companion/domain/recap";
-import type { SelfTextResult } from "../main/self-text";
 import { rowTime, type RowPreview, type SessionEvent, type SessionState } from "./model";
 import { Desk } from "./Desk";
 import { NewProject } from "./ui";
@@ -277,16 +276,6 @@ export function Shell({ route, today, projects, account, pet, session, title, su
   );
 }
 
-/** What happened to the recap text, in plain words. "off": Texts to me is off, so nothing is said. */
-export type RecapTextState = SelfTextResult | "off" | "sending";
-const TEXT_RESULT: Record<Exclude<RecapTextState, "off">, string> = {
-  sending: "Sending this to your phone…",
-  sent: "Sent to your phone.",
-  "not-permitted": "macOS did not allow TARS to use Messages.",
-  "no-messages-account": "There is no Messages account on this Mac.",
-  failed: "The text to your phone did not send.",
-};
-
 function RecapSection({ heading, list, empty }: { heading: string; list: RecapList; empty: string }) {
   const id = `recap-${heading.toLowerCase()}`;
   return (
@@ -313,14 +302,12 @@ export function Stopped({
   projectName,
   note,
   recap,
-  text,
   onResume,
 }: {
   projectName?: string;
   note?: string;
   /** undefined while it loads; absent lists are never invented. */
   recap?: ClosingRecap;
-  text?: { state: RecapTextState; onSendAgain(): void };
   onResume(): void;
 }) {
   return (
@@ -336,16 +323,6 @@ export function Stopped({
               <RecapSection heading="Parked" list={recap.parked} empty={RECAP_EMPTY.parked} />
               <RecapSection heading="Left" list={recap.left} empty={RECAP_EMPTY.left} />
             </>
-          )}
-          {text && text.state !== "off" && (
-            <p className="small" role="status">
-              {TEXT_RESULT[text.state]}{" "}
-              {text.state !== "sending" && (
-                <button type="button" className="text-button" onClick={text.onSendAgain}>
-                  Send again
-                </button>
-              )}
-            </p>
           )}
           <button type="button" className="secondary" onClick={onResume} autoFocus>
             Come back

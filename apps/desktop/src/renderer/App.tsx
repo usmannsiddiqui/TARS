@@ -2,37 +2,22 @@
 // connections and memory. Focus changes
 // only when the user picks a project here (switchProject with userInitiated: true).
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CaptureInput } from "@companion/domain";
-import type { ClosingRecap } from "@companion/domain/recap";
 import { api } from "../../../../convex/_generated/api";
 import { DeskPane } from "./Desk";
 import { Home } from "./Home";
 import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
 import { rowPreview, todayPreview, type PetState } from "./model";
-import { Shell, Stopped, type RecapTextState, type Route } from "./Shell";
+import { Shell, Stopped, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/**
- * Mounted only by the user's "Stop for now": shows today's recap and, when Texts to me is on, texts it
- * to their own phone once (the first recap that arrives). "Send again" is the only other send.
- */
+/** Mounted only by the user's "Stop for now": today's recap. The backend sends it to his linked WhatsApp on the stop event. */
 function StoppedLive({ ready, ...props }: { ready: boolean; projectName?: string; note?: string; onResume(): void }) {
   const recap = useQuery(api.recap.getClosingRecap, ready ? { timezone } : "skip");
-  const [text, setText] = useState<RecapTextState>();
-  const sentOnce = useRef(false);
-  const send = useCallback((r: ClosingRecap) => {
-    setText("sending");
-    window.companion.selfText.sendRecap(r).then(setText, () => setText("failed"));
-  }, []);
-  useEffect(() => {
-    if (recap === undefined || sentOnce.current) return;
-    sentOnce.current = true;
-    send(recap);
-  }, [recap, send]);
-  return <Stopped {...props} {...(recap ? { recap } : {})} {...(text && recap ? { text: { state: text, onSendAgain: () => send(recap) } } : {})} />;
+  return <Stopped {...props} {...(recap ? { recap } : {})} />;
 }
 
 export function App() {

@@ -2,8 +2,6 @@
 import { z } from "zod";
 import { CaptureInputSchema, ProjectIdSchema, type CaptureInput, type CaptureReceipt, type OwnerId } from "@companion/domain";
 import { DictationError } from "./dictation";
-import type { ClosingRecap } from "@companion/domain/recap";
-import { SelfTextSettingSchema, type SelfTextSetting } from "./self-text";
 
 /** Thrown for any request the main process refuses; the message is safe to show. */
 export class IpcRejected extends Error {
@@ -50,8 +48,6 @@ export type IpcRouterDeps = {
     listRecoverable(): Promise<unknown>;
   };
   shortcut: { status(): unknown; set(accelerator: string): unknown };
-  /** Nudge texts to the user's own number; the test text goes only to the saved handle. */
-  selfText: { get(): unknown; set(setting: SelfTextSetting): unknown; sendTest(): Promise<unknown>; sendRecap(recap: ClosingRecap): Promise<unknown> };
   /** OS hand-offs, each called only from a user's click. */
   system: { openExternal(url: string): Promise<void>; openAccessibilitySettings(): Promise<void>; openMicrophoneSettings(): Promise<void> };
   /** The held talk key (native helper): which key, and whether macOS lets it work. */
@@ -106,9 +102,6 @@ const RecoveryRefSchema = z.strictObject({ recoveryId: RECOVERY_ID });
 type RecoveryRef = z.infer<typeof RecoveryRefSchema>;
 const FinishSchema = z.strictObject({ bytes: z.instanceof(Uint8Array), mime: z.string().min(1).max(100) });
 type Finish = z.infer<typeof FinishSchema>;
-// The closing recap as getClosingRecap returns it: at most five short titles per list (recapText cleans each line).
-const RecapListSchema = z.strictObject({ items: z.array(z.string().max(300)).max(5), more: z.number().int().min(0).max(10_000) });
-const RecapSchema = z.strictObject({ done: RecapListSchema, parked: RecapListSchema, left: RecapListSchema });
 // A global shortcut must hold a modifier: a bare key would swallow ordinary typing in every app.
 const AcceleratorSchema = z.strictObject({
   accelerator: z
@@ -257,23 +250,6 @@ const routes = {
   "shortcut:set": {
     payload: AcceleratorSchema,
     run: async (deps: IpcRouterDeps, { accelerator }: { accelerator: string }) => deps.shortcut.set(accelerator),
-  },
-  "selfText:get": {
-    payload: z.undefined(),
-    run: async (deps: IpcRouterDeps) => deps.selfText.get(),
-  },
-  "selfText:set": {
-    payload: SelfTextSettingSchema,
-    run: async (deps: IpcRouterDeps, setting: SelfTextSetting) => deps.selfText.set(setting),
-  },
-  "selfText:test": {
-    payload: z.undefined(),
-    run: (deps: IpcRouterDeps) => deps.selfText.sendTest(),
-  },
-  // The user's "Stop for now" or "Send again": the recap they see, to the saved handle only.
-  "selfText:recap": {
-    payload: RecapSchema,
-    run: (deps: IpcRouterDeps, recap: ClosingRecap) => deps.selfText.sendRecap(recap),
   },
   "auth:openExternal": {
     payload: ExternalAuthSchema,
