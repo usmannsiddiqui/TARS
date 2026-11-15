@@ -1,104 +1,137 @@
-// Canvas: base URL + owner's user token. No webhook and no scheduled refresh: deadlines are read
-// at connect and whenever the user presses Refresh, and `lastCheckedAt` says how old they are.
+// Canvas: the user's private calendar feed link (Canvas → Calendar → Calendar Feed). No webhook and
+// no scheduled refresh: the feed is read at connect and whenever the user presses Refresh, and
+// `lastCheckedAt` says how old it is. The link is a capability: sealed, never logged, returned or stored as evidence.
 import { ConvexError, v } from "convex/values";
-import { z } from "zod";
-import type { Evidence, SourceGrant } from "../../packages/domain/src/types";
+import { canvasFeedUrl, readCalendar, type CalendarEvent } from "../../packages/domain/src/calendarFeed";
+import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import { action, type ActionCtx } from "../_generated/server";
 import { ingestItems, markChecked, markFailed, requireOwnedSource, type ProviderItem } from "../connections";
-import { openCredential, ProviderError, providerJson, sealCredential } from "../lib/providerAuth";
-import { evidenceFields } from "../schema";
+import { openCredential, ProviderError, providerResponse, sealCredential } from "../lib/providerAuth";
 
-const PLANNER_PAGE_SIZE = 50; // one page of upcoming items for the selected courses
-const IsoWithOffset = z.iso.datetime({ offset: true });
+const MAX_FEED_BYTES = 2 * 1024 * 1024; // a real feed is ~130 KB
+const KEEP_PAST_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_EVENTS = 200; // the soonest ones; the rest are counted as skipped
+const MAX_DESCRIPTION = 500;
+const MAX_LINE = 200;
 
-type PlannerItem = {
-  plannable_id?: number | string;
-  plannable_type?: string;
-  plannable_date?: string;
-  course_id?: number | string;
-  html_url?: string;
-  plannable?: { title?: string; due_at?: string | null; updated_at?: string };
-};
+const readResult = v.object({ stored: v.number(), skipped: v.number() });
+type ReadResult = { stored: number; skipped: number };
 
-function canvasGet(baseUrl: string, path: string, token: string): Promise<unknown> {
-  return providerJson(new URL(path, baseUrl).toString(), { headers: { authorization: `Bearer ${token}` } });
+const INVALID_LINK = "Paste the Canvas calendar feed link: https://….instructure.com/feeds/calendars/….ics";
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Upcoming planner items with a real due date in the selected courses (grant selectors = course ids). */
-async function readDeadlines(ctx: ActionCtx, grant: SourceGrant, baseUrl: string, token: string): Promise<Evidence[]> {
-  const params = new URLSearchParams({ start_date: new Date().toISOString(), per_page: String(PLANNER_PAGE_SIZE) });
-  for (const course of grant.selectors) params.append("context_codes[]", `course_${course}`);
-  const body = grant.selectors.length === 0 ? [] : await canvasGet(baseUrl, `/api/v1/planner/items?${params}`, token);
-  if (!Array.isArray(body)) throw new ProviderError("needs-retry", "unexpected_response");
-
-  const receivedAt = new Date().toISOString();
-  const items: ProviderItem[] = [];
-  for (const entry of body as PlannerItem[]) {
-    const due = entry.plannable?.due_at ?? entry.plannable_date;
-    if (!grant.selectors.includes(String(entry.course_id))) continue;
-    if (due == null || !IsoWithOffset.safeParse(due).success) continue; // not a hard deadline
-    const updated = entry.plannable?.updated_at;
-    const hasUpdated = updated !== undefined && IsoWithOffset.safeParse(updated).success;
-    items.push({
-      externalId: `${entry.plannable_type}:${entry.plannable_id}`,
-      version: `${due}@${updated ?? ""}`,
-      // Due date kept exactly as Canvas sent it, offset included.
-      text: `${entry.plannable_type} "${entry.plannable?.title ?? "Untitled"}" due ${due} (course ${entry.course_id})`,
-      occurredAt: hasUpdated ? new Date(updated).toISOString() : receivedAt,
-      ...(entry.html_url === undefined ? {} : { sourceUrl: new URL(entry.html_url, baseUrl).toString() }),
-    });
-  }
-  return ingestItems(ctx, grant, items);
-}
-
-/** Read and record status. A failure keeps stored deadlines and the previous lastCheckedAt. */
-async function refresh(ctx: ActionCtx, grant: SourceGrant, baseUrl: string, token: string): Promise<Evidence[]> {
+/** The feed body. Redirects are refused (never followed to another host); size is capped while reading. */
+async function fetchFeed(url: URL): Promise<string> {
+  const response = await providerResponse(url.toString(), { redirect: "manual" });
+  if (!/^text\/calendar\b/i.test(response.headers.get("content-type") ?? "")) throw new ProviderError("needs-retry", "unexpected_response");
+  if (Number(response.headers.get("content-length") ?? 0) > MAX_FEED_BYTES) throw new ProviderError("needs-retry", "too_large");
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = "";
   try {
-    const records = await readDeadlines(ctx, grant, baseUrl, token);
+    for (;;) {
+      const { done, value } = (await reader?.read()) ?? { done: true, value: undefined };
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_FEED_BYTES) {
+        await reader!.cancel();
+        throw new ProviderError("needs-retry", "too_large");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch (error) {
+    if (error instanceof ProviderError) throw error;
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    throw new ProviderError("needs-retry", timedOut ? "timeout" : "network");
+  }
+  return text + decoder.decode();
+}
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** Same host as the feed and not a feed path, so an event link can never carry a feed secret. */
+function eventLink(raw: string | undefined, feed: URL): string | undefined {
+  if (raw === undefined || !URL.canParse(raw)) return undefined;
+  const url = new URL(raw);
+  return url.protocol === "https:" && url.host === feed.host && !url.pathname.startsWith("/feeds/") ? url.toString() : undefined;
+}
+
+async function toItem(event: CalendarEvent, feed: URL, receivedAt: string): Promise<ProviderItem> {
+  // A due time is written as an ISO instant (or a date for all-day): the form preparation reads as a due date.
+  const when = event.allDay
+    ? `due ${event.start} (all day)`
+    : event.end === undefined || event.end === event.start
+      ? `due ${event.start}`
+      : `from ${event.start} to ${event.end}`;
+  const text = [
+    `Canvas calendar: "${clip(event.summary, MAX_LINE)}" ${when}`,
+    ...(event.location === undefined ? [] : [`Location: ${clip(event.location, MAX_LINE)}`]),
+    ...(event.description === undefined ? [] : [clip(event.description, MAX_DESCRIPTION)]),
+  ].join("\n");
+  const sourceUrl = eventLink(event.url, feed);
+  return {
+    externalId: `event:${event.uid}`,
+    // Content hash: an edit is a new revision, an unchanged event is a duplicate.
+    version: (await sha256Hex(JSON.stringify([event.summary, event.start, event.end ?? null, event.description ?? null]))).slice(0, 16),
+    text,
+    occurredAt: receivedAt, // DTSTAMP is the feed's render time, not the event's change time
+    ...(sourceUrl === undefined ? {} : { sourceUrl }),
+  };
+}
+
+/** Read and record status. A failure stores nothing and keeps the previous lastCheckedAt. */
+async function refresh(ctx: ActionCtx, grant: SourceGrant, feed: URL): Promise<ReadResult> {
+  try {
+    const calendar = readCalendar(await fetchFeed(feed));
+    if (calendar === null) throw new ProviderError("needs-retry", "unexpected_response");
+    const now = Date.now();
+    const kept = calendar.events
+      .filter((event) => Date.parse(event.end ?? event.start) >= now - KEEP_PAST_MS)
+      .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
+      .slice(0, MAX_EVENTS);
+    const receivedAt = new Date(now).toISOString();
+    const items = await Promise.all(kept.map((event) => toItem(event, feed, receivedAt)));
+    const stored = await ingestItems(ctx, grant, items);
     await markChecked(ctx, grant.id);
-    return records;
+    return { stored: stored.length, skipped: calendar.skipped + calendar.events.length - kept.length };
   } catch (error) {
     throw new ConvexError((await markFailed(ctx, grant.id, error)).message);
   }
 }
 
 export const connect = action({
-  args: { sourceId: v.string(), baseUrl: v.string(), token: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { sourceId, baseUrl, token }): Promise<null> => {
+  args: { sourceId: v.string(), feedLink: v.string() },
+  returns: readResult,
+  handler: async (ctx, { sourceId, feedLink }): Promise<ReadResult> => {
     const { ownerId, grant } = await requireOwnedSource(ctx, sourceId, "canvas");
-    const url = URL.canParse(baseUrl) ? new URL(baseUrl) : null;
-    if (url === null || url.protocol !== "https:" || url.username !== "" || url.password !== "") {
-      throw new ConvexError("Canvas base URL must be an https URL");
-    }
-    let userId: string;
-    try {
-      userId = String(((await canvasGet(url.origin, "/api/v1/users/self", token)) as { id?: unknown }).id);
-    } catch (error) {
-      if (error instanceof ProviderError) throw new ConvexError(error.message);
-      throw error;
-    }
+    const feed = canvasFeedUrl(feedLink);
+    if (feed === null) throw new ConvexError(INVALID_LINK); // never echoes what was pasted
     await ctx.runMutation(internal.connections.save, {
       ownerId,
       sourceId,
       provider: "canvas",
-      accountKey: `${url.origin}/users/${userId}`,
-      credential: await sealCredential({ baseUrl: url.origin, token }),
+      accountKey: `${feed.origin}/feeds/${(await sha256Hex(feed.toString())).slice(0, 32)}`,
+      credential: await sealCredential({ feedUrl: feed.toString() }),
     });
-    await refresh(ctx, grant, url.origin, token);
-    return null;
+    return refresh(ctx, grant, feed);
   },
 });
 
-/** User-triggered only. Returns the deadlines this refresh read and holds as stored evidence. */
+/** User-triggered only. Says how many events this read stored and how many it skipped. */
 export const refreshByUser = action({
   args: { sourceId: v.string() },
-  returns: v.array(v.object(evidenceFields)),
-  handler: async (ctx, { sourceId }): Promise<Evidence[]> => {
+  returns: readResult,
+  handler: async (ctx, { sourceId }): Promise<ReadResult> => {
     const { grant, connection } = await requireOwnedSource(ctx, sourceId, "canvas");
     if (connection === null) throw new ConvexError("Source is not connected");
-    const { baseUrl, token } = await openCredential(connection.credential);
-    return refresh(ctx, grant, baseUrl!, token!);
+    const feed = canvasFeedUrl((await openCredential(connection.credential)).feedUrl ?? "");
+    if (feed === null) throw new ConvexError("Connect Canvas again with its calendar feed link");
+    return refresh(ctx, grant, feed);
   },
 });

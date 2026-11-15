@@ -151,8 +151,8 @@ export function availabilityForStatus(status: number): Availability {
   return status === 401 || status === 403 || status === 404 ? "missing-access" : "needs-retry";
 }
 
-/** GET/POST JSON with a timeout. Non-2xx and timeouts throw ProviderError. */
-export async function providerJson(url: string, init: RequestInit = {}): Promise<unknown> {
+/** One request with a timeout. Non-2xx and timeouts throw ProviderError; the body is the caller's to read. */
+export async function providerResponse(url: string, init: RequestInit = {}): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -161,6 +161,12 @@ export async function providerJson(url: string, init: RequestInit = {}): Promise
     throw new ProviderError("needs-retry", timedOut ? "timeout" : "network");
   }
   if (!response.ok) throw new ProviderError(availabilityForStatus(response.status), failureCode(response));
+  return response;
+}
+
+/** GET/POST JSON with a timeout. Non-2xx and timeouts throw ProviderError. */
+export async function providerJson(url: string, init: RequestInit = {}): Promise<unknown> {
+  const response = await providerResponse(url, init);
   // 204, and Graph's 202 from message send, carry no body.
   const text = await response.text();
   if (text.length === 0) return null;

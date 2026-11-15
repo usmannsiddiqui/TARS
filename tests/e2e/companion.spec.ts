@@ -761,9 +761,11 @@ test("cloud_connections_start_off_and_need_consent", async () => {
   expect((await calls(page)).at(-1)).toEqual(["connect", "gmail", { projectId: "guides", selectors: ["Label_42"], writeTargets: [] }]);
   await expect(source("Gmail")).toContainText("Finish in your browser. Gmail turns on here when Composio confirms it.");
   await expect(source("Gmail").locator(".source-state")).toHaveText("Off");
-  // Canvas asks for its address too.
+  // Canvas asks for one thing: its calendar feed link, and says that the link itself grants reading.
   await source("Canvas").getByRole("button", { name: "Connect Canvas" }).click();
-  await expect(page.getByRole("form", { name: "Connect Canvas" }).getByLabel("Your Canvas address (https://…)")).toBeVisible();
+  const canvasForm = page.getByRole("form", { name: "Connect Canvas" });
+  await expect(canvasForm.getByLabel("Canvas calendar feed link")).toBeVisible();
+  await expect(canvasForm).toContainText("Anyone with this link can read your Canvas calendar.");
   // Selected-app reading: off, named apps only, consent first.
   const before = (await calls(page)).length;
   await source("Selected apps").getByRole("button", { name: "Turn on Selected apps" }).click();

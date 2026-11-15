@@ -54,7 +54,7 @@ export type ObservationActions = {
 export const observationConsent =
   "Only visible text from the apps and sites you name is read, while they are in front. No screenshots and no keystrokes. The text stays on this Mac until you turn on cloud processing for it. Pausing stops reading; it does not erase what was kept, which Delete kept text does.";
 
-export type ConnectForm = { projectId: string; credential?: string; baseUrl?: string; selectors: string[]; writeTargets: string[] };
+export type ConnectForm = { projectId: string; credential?: string; selectors: string[]; writeTargets: string[] };
 
 export type CloudActions = {
   /** Why cloud accounts cannot be connected right now (signed out, no projects yet). */
@@ -497,7 +497,12 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
 
 type Fields = {
   credential?: string;
-  selectors: string;
+  /** One line under the credential field saying where to find it. */
+  credentialHelp?: string;
+  /** Replaces the default line about how the token is kept. */
+  credentialNote?: string;
+  /** Absent: the credential itself decides what is read (Canvas's feed is the whole calendar). */
+  selectors?: string;
   /** One line under the selector field saying where to find what it asks for. */
   help?: string;
   /** The selector rule; without one, any non-empty comma list is accepted. */
@@ -505,7 +510,6 @@ type Fields = {
   /** Gmail: a choice between the inbox (default) and named labels, the labels field shown only for the second. */
   inbox?: true;
   writeTargets?: string;
-  baseUrl?: string;
   /** OAuth: whose sign-in page opens. */
   signIn?: string;
 };
@@ -521,7 +525,12 @@ const FIELDS: Record<CloudProvider, Fields> = {
     selectors: "Page IDs to read, separated by commas",
     writeTargets: "Page IDs TARS may write to, separated by commas (optional, for updates and the outcome log)",
   },
-  canvas: { baseUrl: "Your Canvas address (https://…)", credential: "Canvas access token", selectors: "Course IDs to read, separated by commas" },
+  canvas: {
+    credential: "Canvas calendar feed link",
+    credentialHelp: "In Canvas: Calendar → Calendar Feed (bottom right) → copy the link",
+    credentialNote:
+      "Anyone with this link can read your Canvas calendar. It is sent once to the cloud and kept sealed there, never shown again and never kept on this Mac.",
+  },
   gmail: { selectors: "Label IDs to read, separated by commas", inbox: true, signIn: "Composio" },
   "outlook-mail": { selectors: "Mail folder IDs to read, separated by commas", signIn: "Composio" },
   "outlook-calendar": { selectors: "Calendar IDs to read, separated by commas", signIn: "Microsoft" },
@@ -557,7 +566,7 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
       {row.status ? <StateNote state={row.status} /> : row.state === "off" && <p className="quiet small">Availability: not connected. Last checked: never.</p>}
       {row.selection && (
         <p className="small source-selection">
-          <span className="why">Reads:</span> {row.selection.selectors.join(", ")} <span className="quiet">· for {row.selection.projects.join(", ")}</span>
+          <span className="why">Reads:</span> {row.selection.selectors.join(", ") || "your whole calendar feed"} <span className="quiet">· for {row.selection.projects.join(", ")}</span>
         </p>
       )}
       {row.state === "paused" && <p className="small">Paused: nothing new is read until you resume. What was read stays stored.</p>}
@@ -640,9 +649,8 @@ function CloudConnectForm(props: {
   onCancel(): void;
   onSubmit(form: ConnectForm): void;
 }) {
-  const ids = { project: useId(), base: useId(), credential: useId(), selectors: useId(), write: useId(), help: useId(), error: useId() };
+  const ids = { project: useId(), credential: useId(), credentialHelp: useId(), selectors: useId(), write: useId(), help: useId(), error: useId() };
   const [projectId, setProjectId] = useState(props.projects[0]?.id ?? "");
-  const [baseUrl, setBaseUrl] = useState("");
   const [credential, setCredential] = useState("");
   const [selectors, setSelectors] = useState("");
   const [labels, setLabels] = useState(false);
@@ -650,15 +658,17 @@ function CloudConnectForm(props: {
   const { fields } = props;
   const parsed: ParsedSelectors = fields.inbox
     ? gmailSelectors(labels ? "labels" : "inbox", selectors)
-    : fields.parse
-      ? fields.parse(selectors)
-      : list(selectors).length > 0
-        ? { selectors: list(selectors) }
-        : { error: "" };
+    : fields.selectors === undefined
+      ? { selectors: [] }
+      : fields.parse
+        ? fields.parse(selectors)
+        : list(selectors).length > 0
+          ? { selectors: list(selectors) }
+          : { error: "" };
   // Say what is wrong once there is something to correct (or a label choice to finish), not on an untouched field.
   const error = "error" in parsed && parsed.error !== "" && (selectors.trim() !== "" || labels) ? parsed.error : null;
-  const showSelectors = !fields.inbox || labels;
-  const ready = projectId !== "" && (!props.fields.credential || credential.trim() !== "") && "selectors" in parsed && (!props.fields.baseUrl || baseUrl.trim() !== "");
+  const showSelectors = fields.selectors !== undefined && (!fields.inbox || labels);
+  const ready = projectId !== "" && (!props.fields.credential || credential.trim() !== "") && "selectors" in parsed;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!("selectors" in parsed) || !ready) return;
@@ -667,7 +677,6 @@ function CloudConnectForm(props: {
       selectors: parsed.selectors,
       writeTargets: list(writeTargets),
       ...(props.fields.credential ? { credential: credential.trim() } : {}),
-      ...(props.fields.baseUrl ? { baseUrl: baseUrl.trim() } : {}),
     });
   };
   return (
@@ -682,16 +691,23 @@ function CloudConnectForm(props: {
           ))}
         </select>
       </div>
-      {props.fields.baseUrl && (
-        <div className="field">
-          <label htmlFor={ids.base}>{props.fields.baseUrl}</label>
-          <input id={ids.base} type="url" value={baseUrl} autoComplete="off" onChange={(e) => setBaseUrl(e.target.value)} />
-        </div>
-      )}
       {props.fields.credential && (
         <div className="field">
           <label htmlFor={ids.credential}>{props.fields.credential}</label>
-          <input id={ids.credential} type="password" value={credential} autoComplete="off" spellCheck={false} onChange={(e) => setCredential(e.target.value)} />
+          <input
+            id={ids.credential}
+            type="password"
+            value={credential}
+            autoComplete="off"
+            spellCheck={false}
+            aria-describedby={fields.credentialHelp ? ids.credentialHelp : undefined}
+            onChange={(e) => setCredential(e.target.value)}
+          />
+          {fields.credentialHelp && (
+            <p id={ids.credentialHelp} className="hint">
+              {fields.credentialHelp}
+            </p>
+          )}
         </div>
       )}
       {fields.inbox && (
@@ -741,7 +757,7 @@ function CloudConnectForm(props: {
           ? `Composio's sign-in page opens in your browser. Composio holds your ${props.name} sign-in for TARS; TARS keeps only which account it is. Reading only; sending is a separate permission asked for later.`
           : props.fields.signIn
           ? `${props.fields.signIn}'s sign-in page opens in your browser. Reading only; sending is a separate permission asked for later.`
-          : "The token is sent once to the cloud, sealed there, and never kept on this Mac."}
+          : (props.fields.credentialNote ?? "The token is sent once to the cloud, sealed there, and never kept on this Mac.")}
       </p>
       <button type="submit" className="secondary" disabled={!ready || props.busy}>
         {props.busy ? "Connecting…" : props.fields.signIn ? `Continue to ${props.fields.signIn} sign-in` : `Connect ${props.name}`}

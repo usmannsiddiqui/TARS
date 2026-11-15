@@ -20,7 +20,7 @@ const MODEL_KEY = "sk-illustrative-model-key";
 const SLACK_SECRET = "illustrative-slack-signing-secret";
 const NOTION_TOKEN = "ntn_illustrative_integration_token";
 const NOTION_VERIFICATION = "secret_illustrative_verification_token";
-const CANVAS_TOKEN = "illustrative-canvas-user-token";
+const CANVAS_FEED = "https://illustrative.instructure.com/feeds/calendars/user_IllustrativeAliceFeedToken.ics";
 const GOOGLE_REFRESH = "1//illustrative-google-refresh-token";
 const PAGE = "1f2e3d4c5b6a47898abcdef012345678";
 const LOG_PAGE = "1f0aaaaabbbbccccddddeeeeffff0001";
@@ -250,7 +250,7 @@ describe("disconnect", () => {
     await s.asAlice.mutation(api.evidence.setGrant, grantFor(sourceId, kind, s.projectId));
     const secrets: Record<string, Record<string, string>> = {
       notion: { token: NOTION_TOKEN },
-      canvas: { baseUrl: "https://canvas.illustrative.edu", token: CANVAS_TOKEN },
+      canvas: { feedUrl: CANVAS_FEED },
       gmail: { refreshToken: GOOGLE_REFRESH },
     };
     await s.t.mutation(internal.connections.save, {

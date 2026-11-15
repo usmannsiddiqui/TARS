@@ -25,7 +25,7 @@ const modules = import.meta.glob("../../convex/**/*.*s");
 const SITE = "https://illustrative.convex.site";
 const SLACK_SECRET = "illustrative-slack-signing-secret";
 const NOTION_VERIFICATION = "secret_illustrative_verification_token";
-const CANVAS_BASE = "https://canvas.illustrative.edu";
+const CANVAS_FEED = "https://illustrative.instructure.com/feeds/calendars/user_IllustrativeAliceFeedToken.ics";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
 const MS_TOKEN = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
@@ -35,7 +35,7 @@ const CHECKED = "2026-11-14T08:00:00.000Z"; // the last good read before each fa
 const TOKENS = {
   slack: "xoxb-illustrative-bot-token",
   notion: "ntn_illustrative_integration_token",
-  canvas: "illustrative-canvas-user-token",
+  canvas: "user_IllustrativeAliceFeedToken",
   gmail: "1//illustrative-google-refresh-token",
   outlook: "M.illustrative-microsoft-refresh-token",
   access: "illustrative-access-token",
@@ -92,7 +92,7 @@ const KIND: Record<Name, SourceKind> = { slack: "slack", notion: "notion", canva
 const SECRETS: Record<Name, Record<string, string>> = {
   slack: { botToken: TOKENS.slack },
   notion: { token: TOKENS.notion },
-  canvas: { baseUrl: CANVAS_BASE, token: TOKENS.canvas },
+  canvas: { feedUrl: CANVAS_FEED },
   gmail: { refreshToken: TOKENS.gmail },
   outlook: { refreshToken: TOKENS.outlook, clientState: "illustrative-client-state", subscriptions: JSON.stringify({ "sub-1": "AAMkFolderAVT" }) },
 };
@@ -134,7 +134,7 @@ type Ctx = Awaited<ReturnType<typeof setup>>;
 
 /**
  * Each connector's user-triggered read: the routes that succeed before the failing call, the URL
- * prefix of the read that fails, and the action. Slack, Notion and Canvas re-read on connect.
+ * prefix of the read that fails, and the action. Slack and Notion re-read on connect; Canvas on Refresh.
  */
 const CONNECTORS: { name: Name; ok: Record<string, Stub>; read: string; run: (ctx: Ctx) => Promise<unknown> }[] = [
   {
@@ -151,9 +151,9 @@ const CONNECTORS: { name: Name; ok: Record<string, Stub>; read: string; run: (ct
   },
   {
     name: "canvas",
-    ok: { [`${CANVAS_BASE}/api/v1/users/self`]: () => json({ id: 7 }) },
-    read: `${CANVAS_BASE}/api/v1/planner/items`,
-    run: (c) => c.asAlice.action(api.connectors.canvas.connect, { sourceId: c.sourceId, baseUrl: CANVAS_BASE, token: TOKENS.canvas }),
+    ok: {},
+    read: CANVAS_FEED,
+    run: (c) => c.asAlice.action(api.connectors.canvas.refreshByUser, { sourceId: c.sourceId }),
   },
   {
     name: "gmail",
