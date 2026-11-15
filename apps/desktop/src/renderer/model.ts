@@ -16,7 +16,10 @@ export type Honest =
   | { kind: "empty"; detail: string }
   | { kind: "done"; detail?: string }
   /** Something TARS will really do at a set time (a scheduled brief deadline). */
-  | { kind: "scheduled"; detail?: string };
+  | { kind: "scheduled"; detail?: string }
+  /** A draft only the user can see, or one anyone with its read-only link can open. */
+  | { kind: "private"; detail?: string }
+  | { kind: "shared"; detail?: string };
 
 export type PreparedStatus = "ready" | "needs-retry" | "invalidated" | "empty";
 

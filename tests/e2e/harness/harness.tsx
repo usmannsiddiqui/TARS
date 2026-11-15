@@ -281,6 +281,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           editor={editor}
           receipt={receipt}
           acting={acting}
+          sharing={{ state: null, share: async (r) => record("share", r), update: async (r) => record("updateShare", r), stop: async () => record("stopSharing") }}
           onReportDone={async (taskId) => record("reportDone", taskId)}
           onMakeFocus={() => pick(project.id)}
           onPrepare={async () => record("prepare", project.id)}

@@ -13,7 +13,7 @@ import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
 import type { ActingActions } from "./Act";
-import { ProjectView, type EditorActions, type RevisionOutcome } from "./ProjectView";
+import { ProjectView, type EditorActions, type RevisionOutcome, type Sharing } from "./ProjectView";
 import { Schedule } from "./Schedule";
 import { TarsCalendar } from "./TarsCalendar";
 import { reason, SOURCE_NAME, StateNote } from "./ui";
@@ -328,6 +328,10 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const undo = useMutation(api.artifacts.undoRevision);
   const apply = useMutation(api.artifacts.applySuggestion);
   const dismiss = useMutation(api.artifacts.dismissSuggestion);
+  const share = useQuery(api.shares.getShare, artifact ? { artifactId: artifact.id } : "skip");
+  const shareArtifact = useMutation(api.shares.share);
+  const updateShare = useMutation(api.shares.updateShare);
+  const stopSharing = useMutation(api.shares.stopSharing);
   const receipts = useQuery(api.actions.listReceipts, { projectId });
   const executeIntent = useAction(api.actions.executeIntent);
   const reconcile = useAction(api.actions.reconcileAction);
@@ -397,6 +401,13 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
     dismissSuggestion: async (suggestionId) => void (await dismiss({ suggestionId })),
   };
 
+  const sharing: Sharing = {
+    state: share,
+    share: async (revision) => void (await shareArtifact({ artifactId: artifact!.id, revision })),
+    update: async (revision) => void (await updateShare({ artifactId: artifact!.id, revision })),
+    stop: async () => void (await stopSharing({ artifactId: artifact!.id })),
+  };
+
   const loadedPrepared = toPrepared(prepared);
   return (
     <ProjectView
@@ -412,6 +423,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
       receipt={receipts === undefined ? undefined : (receipts.at(-1) ?? null)}
       acting={acting}
       logDestination={logDestination}
+      sharing={sharing}
       onReportDone={async (taskId) => void (await reportDone({ taskId }))}
       onMakeFocus={props.onMakeFocus}
       onPrepare={async () => void (await prepare({ projectId }))}
