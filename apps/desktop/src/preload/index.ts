@@ -5,6 +5,7 @@ import { DICTATION_LIMITS } from "../main/dictation-limits";
 import type { DictationErrorCode, Recoverable } from "../main/dictation";
 import type { HoldKeyStatus } from "../main/hold-key";
 import type { IpcChannel } from "../main/ipc";
+import type { SelfTextResult, SelfTextSetting } from "../main/self-text";
 import type { ShortcutStatus } from "../main/shortcut";
 import type { LocalSourceKind, LocalSourceView, SourceStatus } from "../main/source-watch";
 
@@ -35,6 +36,8 @@ const showingOf = (value: unknown): PanelShowing => {
   return { projectId: projectIdOf(v["projectId"]), capture: v["capture"] === true, ...(transcript ? { transcript } : {}) };
 };
 export type { HoldKeyStatus };
+/** The saved setting (handle "" until the user saves one) and how this run's last nudge text went. */
+export type SelfTextView = { enabled: boolean; handle: string; lastNudge?: SelfTextResult };
 
 const api = {
   saveCapture: (input: CaptureInput): Promise<CaptureReceipt> => invoke("capture:save", input),
@@ -95,6 +98,13 @@ const api = {
   shortcut: {
     status: (): Promise<ShortcutStatus> => invoke("shortcut:status"),
     set: (accelerator: string): Promise<ShortcutStatus> => invoke("shortcut:set", { accelerator }),
+  },
+  // Nudge texts to the user's own number through Messages; the saved handle is the only recipient.
+  selfText: {
+    get: (): Promise<SelfTextView> => invoke("selfText:get"),
+    set: (setting: SelfTextSetting): Promise<SelfTextSetting> => invoke("selfText:set", setting),
+    /** Call only from the user's click: sends a fixed sentence to the saved handle. */
+    sendTest: (): Promise<SelfTextResult> => invoke("selfText:test"),
   },
   // Outcome log: main opens the file dialog; the result names the note only by an opaque id.
   designateLogNote: (sourceId: string): Promise<{ sourceId: string; target: string; name: string } | null> =>

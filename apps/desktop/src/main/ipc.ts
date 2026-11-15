@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { CaptureInputSchema, ProjectIdSchema, type CaptureInput, type CaptureReceipt, type OwnerId } from "@companion/domain";
 import { DictationError } from "./dictation";
+import { SelfTextSettingSchema, type SelfTextSetting } from "./self-text";
 
 /** Thrown for any request the main process refuses; the message is safe to show. */
 export class IpcRejected extends Error {
@@ -48,6 +49,8 @@ export type IpcRouterDeps = {
     listRecoverable(): Promise<unknown>;
   };
   shortcut: { status(): unknown; set(accelerator: string): unknown };
+  /** Nudge texts to the user's own number; the test text goes only to the saved handle. */
+  selfText: { get(): unknown; set(setting: SelfTextSetting): unknown; sendTest(): Promise<unknown> };
   /** OS hand-offs, each called only from a user's click. */
   system: { openExternal(url: string): Promise<void>; openAccessibilitySettings(): Promise<void>; openMicrophoneSettings(): Promise<void> };
   /** The held talk key (native helper): which key, and whether macOS lets it work. */
@@ -250,6 +253,18 @@ const routes = {
   "shortcut:set": {
     payload: AcceleratorSchema,
     run: async (deps: IpcRouterDeps, { accelerator }: { accelerator: string }) => deps.shortcut.set(accelerator),
+  },
+  "selfText:get": {
+    payload: z.undefined(),
+    run: async (deps: IpcRouterDeps) => deps.selfText.get(),
+  },
+  "selfText:set": {
+    payload: SelfTextSettingSchema,
+    run: async (deps: IpcRouterDeps, setting: SelfTextSetting) => deps.selfText.set(setting),
+  },
+  "selfText:test": {
+    payload: z.undefined(),
+    run: (deps: IpcRouterDeps) => deps.selfText.sendTest(),
   },
   "auth:openExternal": {
     payload: ExternalAuthSchema,

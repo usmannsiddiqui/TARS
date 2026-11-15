@@ -340,6 +340,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           }}
           shortcut={{ status: { accelerator: "CommandOrControl+Shift+Space", registered: false, error: "another app already uses it" }, onSet: async (a) => record("shortcut.set", a) }}
           talkKey={{ status: { key: "Right Option (⌥)", state: "permission-missing" }, onOpenAccessibility: async () => record("talk.openAccessibilitySettings") }}
+          selfText={{ setting: { enabled: false, handle: "" }, onSave: async (s) => record("selfText.set", s), onTest: async () => (record("selfText.test"), "sent" as const) }}
           projects={projects}
           onAdd={async (kind, projectId) => record("chooseSource", kind, projectId)}
           onPause={async (id) => record("pause", id)}

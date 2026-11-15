@@ -4,6 +4,7 @@
 // subscription to briefs.getAttentionState and the briefs.markDelivered mutation.
 import type { AttentionInput } from "@companion/domain";
 import { decideAttention } from "@companion/domain/attention";
+import type { SelfTextResult } from "./self-text";
 
 /** The shape briefs.getAttentionState returns. */
 export type AttentionState = { input: AttentionInput; key: string; title: string; body: string } | null;
@@ -13,6 +14,8 @@ export type AttentionDeps = {
   isPanelOpen: () => boolean;
   subscribe: (onState: (state: AttentionState) => void) => () => void;
   markDelivered: (receipt: { key: string; channel: "notification" }) => Promise<void>;
+  /** Texts a notified nudge to the user's own number when they turned that on; "off" otherwise. */
+  textNudge: (body: string) => Promise<SelfTextResult | "off">;
 };
 
 export function startAttentionDelivery(deps: AttentionDeps) {
@@ -31,6 +34,11 @@ export function startAttentionDelivery(deps: AttentionDeps) {
     }
     // shortcut: if this receipt write fails, a later process could notify this key once more.
     await deps.markDelivered({ key: state.key, channel: "notification" });
+    // After the receipt and behind the same once-per-key guard: at most one text per nudge, never retried.
+    if (state.key.startsWith("nudge:")) {
+      const text = await deps.textNudge(state.body);
+      if (text !== "sent" && text !== "off") console.error("nudge text not sent:", text);
+    }
     return "notified";
   }
 

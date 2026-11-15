@@ -6,7 +6,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
 import type { HoldKeyStatus, PanelShowing } from "../preload/index";
-import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
+import { Connections, type CloudActions, type LocalKind, type SelfTextActions, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
 import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
@@ -511,6 +511,8 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
   const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
   const talkKey = useTalkKey();
+  const [selfText, setSelfText] = useState<SelfTextActions["setting"]>(null);
+  useEffect(() => void window.companion.selfText.get().then(setSelfText, () => setSelfText({ enabled: false, handle: "" })), []);
   useEffect(() => {
     window.companion.shortcut.status().then(setShortcut, (err: unknown) => setShortcut({ accelerator: "The shortcut", registered: false, error: reason(err) }));
   }, []);
@@ -646,6 +648,11 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       }}
       shortcut={{ status: shortcut, onSet: async (accelerator) => setShortcut(await window.companion.shortcut.set(accelerator)) }}
       talkKey={{ status: talkKey, onOpenAccessibility: () => window.companion.talk.openAccessibilitySettings() }}
+      selfText={{
+        setting: selfText,
+        onSave: async (setting) => setSelfText(await window.companion.selfText.set(setting)),
+        onTest: () => window.companion.selfText.sendTest(),
+      }}
       projects={projects ?? []}
       {...(addBlocked ? { addBlocked } : {})}
       onAdd={(kind, projectId) => after(window.companion.chooseSource(kind, [projectId]))}

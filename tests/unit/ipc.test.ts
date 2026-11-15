@@ -109,6 +109,12 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     openMicrophoneSettings: async () => void systemCalls.push(["openMicrophoneSettings"]),
   };
   const talkKey = { status: () => ({ key: "Right Option (⌥)", state: "permission-missing" }) };
+  const selfTextCalls: unknown[][] = [];
+  const selfText = {
+    get: () => ({ enabled: false, handle: "" }),
+    set: (setting: unknown) => (selfTextCalls.push(["set", setting]), setting),
+    sendTest: async (...args: unknown[]) => (selfTextCalls.push(["sendTest", ...args]), "sent"),
+  };
   const router = createIpcRouter({
     appOrigin: APP_ORIGIN,
     auth,
@@ -120,9 +126,11 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     shortcut,
     system,
     talkKey,
+    selfText,
   });
   return {
     router,
+    selfTextCalls,
     calls,
     sourceCalls,
     windowCalls,
@@ -381,6 +389,33 @@ describe("ipc router: wired routes", () => {
     expect(await router.handle("shortcut:status", trusted, undefined)).toEqual({ accelerator: "CommandOrControl+Shift+Space", registered: true });
     expect(await router.handle("shortcut:set", trusted, { accelerator: "Alt+Shift+K" })).toEqual({ accelerator: "Alt+Shift+K", registered: true });
     expect(shortcutCalls).toEqual(["Alt+Shift+K"]);
+  });
+
+  it("texts to self: a validated own handle, a test with no recipient, from the app origin only", async () => {
+    const { router, selfTextCalls } = setup(null);
+    for (const payload of [
+      { enabled: true, handle: "5551234567" },
+      { enabled: true, handle: "+15551234567", recipient: "+15557654321" },
+      { enabled: "on", handle: "+15551234567" },
+      { enabled: true },
+      "+15551234567",
+    ]) {
+      await expect(router.handle("selfText:set", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    // The test text takes no payload, so no recipient can be named.
+    for (const payload of [{ handle: "+15557654321" }, "+15557654321", { text: "hi" }]) {
+      await expect(router.handle("selfText:test", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    for (const sender of untrusted) {
+      for (const [channel, payload] of [["selfText:get", undefined], ["selfText:set", { enabled: true, handle: "+15551234567" }], ["selfText:test", undefined]] as const) {
+        await expect(router.handle(channel, sender, payload)).rejects.toBeInstanceOf(IpcRejected);
+      }
+    }
+    expect(selfTextCalls).toEqual([]);
+    expect(await router.handle("selfText:get", trusted, undefined)).toEqual({ enabled: false, handle: "" });
+    await router.handle("selfText:set", trusted, { enabled: true, handle: "me@icloud.com" });
+    expect(await router.handle("selfText:test", trusted, undefined)).toBe("sent");
+    expect(selfTextCalls).toEqual([["set", { enabled: true, handle: "me@icloud.com" }], ["sendTest"]]);
   });
 
   it("observation takes only bundle ids or bundle|origin selectors chosen by the user; never a path or owner", async () => {
