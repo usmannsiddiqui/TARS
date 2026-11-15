@@ -1,6 +1,5 @@
 // Electron main process: window lifecycle, app:// protocol, IPC wiring, encrypted local store, sign-in.
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -50,7 +49,6 @@ import {
   type HoverEvent,
   type Point,
 } from "./pet";
-import { createSelfText, SelfTextSettingSchema } from "./self-text";
 import { createShortcut, DEFAULT_SHORTCUT } from "./shortcut";
 import { createLocalSources, watchSelected } from "./source-watch";
 
@@ -106,7 +104,6 @@ const PrefsSchema = z.object({
   shortcut: z.string().optional(),
   petVisible: z.boolean().optional(),
   petPosition: z.object({ x: z.number().int(), y: z.number().int() }).optional(),
-  selfText: SelfTextSettingSchema.optional(), // the user's own number for nudge texts: this Mac only, never Convex
 });
 type Prefs = z.infer<typeof PrefsSchema>;
 function prefsFile(path: string) {
@@ -470,7 +467,6 @@ async function start(): Promise<void> {
   live.onUpdate(api.actions.pendingLocalLogs, {}, (items) => void logSync.handle(items).catch(logError("outcome log")), logError("log subscription"));
 
   // Quiet contact: at most one OS notification per prepared item, decided by the shared policy.
-  const selfText = createSelfText({ run: promisify(execFile), load: () => prefs.get().selfText, save: (selfText) => prefs.set({ selfText }) });
   const shown = new Set<Notification>(); // held until closed, so the click handler survives GC
   startAttentionDelivery({
     showNotification({ title, body, opens }) {
@@ -485,7 +481,6 @@ async function start(): Promise<void> {
     subscribe: (onState) =>
       live.onUpdate(api.briefs.getAttentionState, {}, (state) => onState(state as AttentionState), logError("attention subscription")),
     markDelivered: async (receipt) => void (await live.mutation(api.briefs.markDelivered, receipt)),
-    textNudge: (body) => selfText.sendNudge(body),
   });
 
   // Waking or unlocking is a return to the Mac, never proof the user is available.
@@ -561,7 +556,6 @@ async function start(): Promise<void> {
       listRecoverable: () => dictation.listRecoverable(),
     },
     shortcut,
-    selfText,
     talkKey,
     system: {
       openExternal: (url) => shell.openExternal(url),
