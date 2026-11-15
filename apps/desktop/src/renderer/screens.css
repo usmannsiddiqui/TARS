@@ -1446,10 +1446,13 @@
   border-radius: 0;
   background: none;
   box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
-.pane-project > :first-child {
-  border-top: 0;
+.pane-project > .open-items {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
 }
 
 .pane-head {
@@ -1462,4 +1465,14 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+}
+
+/* A row with only a name is one line tall and centred; a row with a second line keeps its icon at the top. */
+.row {
+  align-items: center;
+  min-height: 40px;
+}
+
+.row:has(.row-preview) {
+  align-items: flex-start;
 }

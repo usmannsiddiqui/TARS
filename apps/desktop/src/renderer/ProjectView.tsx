@@ -135,8 +135,8 @@ export function ProjectView(props: ProjectViewProps) {
             <StateNote state={{ kind: "loading", detail: "Reading this project's conversation…" }} />
           ) : props.thread.length === 0 ? (
             <div className="thread-empty">
-              <p className="say-text">Nothing here yet. When a message asks you for something with a deadline, I start the work and write to you here first.</p>
-              <p className="quiet">You can also ask me about this project now, or tell me what to draft.</p>
+              <p className="say-text">Nothing here yet.</p>
+              <p className="quiet">I write here when someone asks you for something. You can also ask me, or tell me what to draft.</p>
               {work === undefined && (
                 <button type="button" className="secondary" onClick={() => void prepare()} disabled={preparing.busy}>
                   {preparing.busy ? "Preparing…" : prepared?.status === "needs-retry" ? "Try preparing again" : "Prepare from my sources"}
