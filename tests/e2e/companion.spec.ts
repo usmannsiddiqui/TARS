@@ -705,9 +705,16 @@ test("the window never scrolls: only the thread does, after a new message and at
       const page = await scene(name, { size });
       const frameHolds = async (when: string) => {
         const at = await page.evaluate(() => {
-          const head = document.querySelector(".head")!.getBoundingClientRect();
-          const composer = document.querySelector(".composer-pill")!.getBoundingClientRect();
-          return { scroll: document.scrollingElement!.scrollTop, app: document.querySelector(".app3")!.scrollTop, headTop: head.top, composerBottom: composer.bottom, height: innerHeight };
+          type Box = { scrollTop: number; getBoundingClientRect(): { top: number; bottom: number } };
+          const g = globalThis as unknown as { innerHeight: number; document: { scrollingElement: Box; querySelector(s: string): Box } };
+          const doc = g.document;
+          return {
+            scroll: doc.scrollingElement.scrollTop,
+            app: doc.querySelector(".app3").scrollTop,
+            headTop: doc.querySelector(".head").getBoundingClientRect().top,
+            composerBottom: doc.querySelector(".composer-pill").getBoundingClientRect().bottom,
+            height: g.innerHeight,
+          };
         });
         const where = `${name} ${size.width}x${size.height} ${when}`;
         expect(at.scroll, where).toBe(0);
