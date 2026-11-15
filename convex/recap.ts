@@ -10,7 +10,6 @@ import {
   type ClosingRecap,
   type RecapInput,
 } from "../packages/domain/src/recap";
-import type { ProjectId } from "../packages/domain/src/types";
 import { query, type QueryCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 
@@ -103,10 +102,7 @@ export async function buildRecap(ctx: Pick<QueryCtx, "db">, ownerId: string, tim
         const c = commitments.find(
           (row) =>
             row.ownership === "user" &&
-            commitmentKey({
-              projectId: row.projectId as ProjectId,
-              text: row.text,
-            }) === nudge.key,
+            commitmentKey(row) === nudge.key,
         );
         if (c?.state === "open")
           input.parked.push({ text: c.text, at: nudge.parkedAt });

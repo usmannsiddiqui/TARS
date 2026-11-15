@@ -21,7 +21,7 @@ import {
 import { SortedDump, type BrainDumpProps } from "./BrainDump";
 import { SourceChip, SourceLogo } from "./logos";
 import { rowTime, type ThreadMessage } from "./model";
-import { AllowSending, formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
+import { AllowSending, formatWhen, reason, scrollWithin, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type ApproveArgs = { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string };
 /** Each screen passes the actions its blocks can emit; a block whose action is absent offers nothing to press. */
@@ -71,7 +71,7 @@ export function Thread({ messages, actions, label = "Conversation with TARS" }: 
   const last = messages.at(-1);
   // Opened from a notification or a card: at the latest message. New messages bring it into view.
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" }); // braces: Chromium's scrollIntoView returns a Promise, not a cleanup
+    scrollWithin(end.current, ".chat-scroll", "end");
   }, [messages.length, last?.blocks.length]);
   const views = messages.map((m) => ({ ...m, views: m.blocks.map(viewBlock) }));
   // What was already there when the thread opened just renders; only what arrives later opens its space.
@@ -89,7 +89,7 @@ export function Thread({ messages, actions, label = "Conversation with TARS" }: 
           data-new={shown.has(m.id) ? undefined : ""}
           ref={m === views.at(-1) ? end : undefined}
           onAnimationEnd={(e) => {
-            if (e.currentTarget === end.current && e.animationName === "helper-open") e.currentTarget.scrollIntoView({ block: "end" });
+            if (e.currentTarget === end.current && e.animationName === "helper-open") scrollWithin(e.currentTarget, ".chat-scroll", "end");
           }}
         >
           {times.has(m.id) && (

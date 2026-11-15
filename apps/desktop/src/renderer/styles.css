@@ -72,6 +72,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden; /* the window never scrolls; the thread, the list and the pane scroll inside themselves */
 }
 
 body {
@@ -1388,8 +1389,9 @@ html[data-view="pet"] body {
   position: relative;
   display: grid;
   grid-template-columns: 264px minmax(420px, 1fr) 340px;
+  grid-template-rows: minmax(0, 1fr); /* one row at the window's height; an auto row grows with the thread */
   height: 100%;
-  overflow: hidden;
+  overflow: clip; /* clip, not hidden: a clipped box is no scroll container, so nothing can scroll the frame */
 }
 
 .app3[data-pane="none"],
@@ -1573,6 +1575,7 @@ html[data-view="pet"] body {
   flex-direction: column;
   min-width: 0;
   height: 100%;
+  overflow: clip;
 }
 
 .head {
@@ -1664,6 +1667,7 @@ html[data-view="pet"] body {
 }
 
 .chat-scroll {
+  position: relative; /* the offset parent its messages are scrolled to */
   flex: 1;
   min-height: 0;
   overflow-y: auto;
