@@ -1,26 +1,29 @@
 // @vitest-environment edge-runtime
-// A second request in a project that already has a draft gets its own fresh draft, as the next revision,
-// unless the user edited the current one and has not sent it: then it becomes a suggestion. Nothing is sent.
+// A second request in a project that already has a draft gets its own fresh draft from its run, as the
+// next revision (an edited or sent one stays in the versions, so Undo brings it back). Nothing is sent.
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ProjectIdSchema, type Evidence, type ProjectId } from "@companion/domain";
 import { api, internal } from "../../convex/_generated/api";
 import schema from "../../convex/schema";
 import { tokenHash } from "../../convex/lib/sharePage";
-import type { PreparationOutput } from "../../packages/domain/src/prepare";
 import { makeEvidence, makeOwners } from "../fixtures";
 
 const modules = import.meta.glob("../../convex/**/*.*s");
 const NOW = "2026-11-14T15:00:00.000Z"; // Saturday 10:00 in New York
-const DUE = "2026-11-14T22:00:00.000Z";
 const FIRST_BODY = "Budget for Dana\n\n## Summary\n- The budget Dana asked for.";
 const SECOND_BODY = "Q3 summary for Dana\n\n## Summary\n[Needs from you: Q3 numbers]";
+const SECOND_SAY = "Dana asked for the Q3 summary by 5 PM. I drafted it as a new revision; tell me what to change.";
 const TOKEN = "A".repeat(43);
 
-const completed = (output: unknown) => ({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] });
+let callSeq = 0;
+const call = (name: string, args: unknown) => ({ type: "function_call", call_id: `call-${++callSeq}`, name, arguments: JSON.stringify(args) });
+const says = (text: string) => ({ type: "message", content: [{ type: "output_text", text }] });
 let fetchMock: ReturnType<typeof vi.fn>;
-function stubModel(output: () => PreparationOutput) {
-  fetchMock = vi.fn(async () => new Response(JSON.stringify(completed(output())), { status: 200 }));
+/** Model turns answer in order; each is the list of output items of one response. The last repeats. */
+function stubModel(turns: unknown[][]) {
+  let n = 0;
+  fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "completed", output: turns[Math.min(n++, turns.length - 1)] }), { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
 }
 
@@ -43,49 +46,41 @@ async function setup() {
   await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
   const projectId: ProjectId = ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name: "Budget" }));
   let sourceId: string | undefined;
-  const mails: Evidence[] = [];
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(5);
+      await t.finishInProgressScheduledFunctions();
+    }
+  };
   const mail = async (text: string) => {
     const record = makeEvidence(alice.ownerId, [projectId], { text, ...(sourceId ? { sourceId: sourceId as Evidence["sourceId"] } : {}) });
     if (sourceId === undefined) {
       sourceId = record.sourceId;
       await asAlice.mutation(api.evidence.setGrant, { id: sourceId, kind: "gmail", selectors: ["illustrative-label"], projectIds: [projectId], read: true, writeTargets: [], cloudProcessing: true, version: 1, state: "active" });
     }
-    mails.push(record);
     expect(await t.mutation(internal.evidence.ingest, { ownerId: alice.ownerId, sourceId, record })).toBe("accepted");
-    for (let i = 0; i < 5; i++) {
-      await vi.advanceTimersByTimeAsync(5);
-      await t.finishInProgressScheduledFunctions();
-    }
+    await settle();
+    return record;
   };
-  const ask = (text: string, quote: string) => ({ text, holder: "user" as const, holderName: null, explicit: true, quote, dueAt: DUE, evidenceIds: [mails.at(-1)!.id as string] });
-  const first = () => ({
-    title: "Budget for Dana",
-    body: FIRST_BODY,
-    evidenceIds: mails.map((m) => m.id as string),
-    gaps: [],
-    nextAction: "Read the draft.",
-    commitments: [{ ...ask("Send the budget to Dana", "Alice, please send the budget to Dana"), evidenceIds: [mails[0]!.id as string] }],
-    facts: [],
-  });
-  const second = () => ({
-    ...first(),
-    title: "Q3 summary for Dana",
-    body: SECOND_BODY,
-    commitments: [...first().commitments, ask("Send Dana the Q3 summary", "Alice, please send me the Q3 summary")],
-  });
+  /** The run's steps for one request: record it, draft it, then speak. */
+  const request = (text: string, title: string, body: string, say: string) => [
+    [call("start_request", { projectId, request: text, dueLocal: "2026-11-14T17:00" })],
+    [call("write_draft", { title, form: "document", text: body, changeSummary: `Started for: ${text}` })],
+    [says(say)],
+  ];
   const opening = async () => {
-    stubModel(first);
-    await mail("Alice, please send the budget to Dana by 5pm today.");
+    stubModel(request("Send the budget to Dana", "Budget for Dana", FIRST_BODY, "Dana asked for the budget by 5 PM. I drafted it; tell me what to change."));
+    return mail("Alice, please send the budget to Dana by 5pm today.");
   };
   const secondRequest = async () => {
-    stubModel(second);
-    await mail("Alice, please send me the Q3 summary by 5pm today.");
+    stubModel(request("Send Dana the Q3 summary", "Q3 summary for Dana", SECOND_BODY, SECOND_SAY));
+    return mail("Alice, please send me the Q3 summary by 5pm today.");
   };
   const artifact = async () => (await asAlice.query(api.artifacts.getArtifact, { projectId }))!;
   const thread = () => asAlice.query(api.thread.listThread, { projectId });
   const all = <T extends keyof typeof schema.tables>(table: T) => t.run((ctx) => ctx.db.query(table).collect());
   const say = (message: { blocks: { type: string; props: unknown }[] }) => (message.blocks.find((b) => b.type === "say")?.props as { text: string }).text;
-  return { t, alice, asAlice, projectId, mail, opening, secondRequest, artifact, thread, all, say, second };
+  return { t, alice, asAlice, projectId, mail, opening, secondRequest, artifact, thread, all, say };
 }
 
 test("a_tars_written_draft_gets_the_new_request_as_the_next_revision_and_undo_restores_it", async () => {
@@ -100,8 +95,8 @@ test("a_tars_written_draft_gets_the_new_request_as_the_next_revision_and_undo_re
   const messages = await s.thread();
   expect(messages).toHaveLength(2);
   const document = messages[1]!.blocks.find((b) => b.type === "document")?.props;
-  expect(document).toMatchObject({ artifactId: now.id, revision: "2", title: "Q3 summary for Dana" });
-  expect(s.say(messages[1]!)).toMatch(/fresh draft/i);
+  expect(document).toMatchObject({ artifactId: now.id, revision: "2", title: "Q3 summary for Dana", undoRevision: "1" });
+  expect(s.say(messages[1]!)).toBe(SECOND_SAY); // the run's own words, no fixed sentence
   expect(await s.all("actions")).toEqual([]);
 
   const undone = await s.asAlice.mutation(api.artifacts.undoRevision, { artifactId: now.id, expectedCurrent: "2", undoRevision: "1" });
@@ -147,7 +142,7 @@ test("an_already_sent_revision_keeps_its_document_and_the_new_request_gets_the_n
   expect(await s.all("actions")).toHaveLength(1); // only the earlier send
 });
 
-test("a_user_edited_unsent_draft_is_left_alone_and_the_new_start_is_a_suggestion", async () => {
+test("a_user_edited_unsent_draft_gets_the_new_request_as_the_next_revision_and_undo_restores_his_words", async () => {
   const s = await setup();
   await s.opening();
   const before = await s.artifact();
@@ -156,24 +151,29 @@ test("a_user_edited_unsent_draft_is_left_alone_and_the_new_start_is_a_suggestion
   await s.secondRequest();
 
   const now = await s.artifact();
-  expect(now).toMatchObject({ revision: "2", text: "My own words.", userEdited: true });
-  expect(now.suggestions).toEqual([expect.objectContaining({ kind: "source", text: SECOND_BODY, baseRevision: "2", changeSummary: "Started for: Send Dana the Q3 summary" })]);
-  const messages = await s.thread();
-  expect(messages).toHaveLength(2);
-  expect(s.say(messages[1]!)).toMatch(/left your edited draft as it is/i);
+  expect(now).toMatchObject({ revision: "3", text: SECOND_BODY, userEdited: false });
+  expect(await s.all("artifactSuggestions")).toEqual([]);
   expect(await s.all("actions")).toEqual([]);
+  const undone = await s.asAlice.mutation(api.artifacts.undoRevision, { artifactId: now.id, expectedCurrent: "3", undoRevision: "2" });
+  expect(undone.artifact.text).toBe("My own words.");
 });
 
-test("the_same_request_seen_again_changes_nothing", async () => {
+test("the_same_message_run_again_changes_nothing", async () => {
   const s = await setup();
   await s.opening();
-  await s.secondRequest();
-  const [artifact, messages, suggestions] = [await s.artifact(), await s.thread(), await s.all("artifactSuggestions")];
+  const record = await s.secondRequest();
+  const [artifact, messages, commitments] = [await s.artifact(), await s.thread(), await s.all("commitments")];
 
-  stubModel(() => ({ ...s.second(), body: "A third body that must not land." }));
-  await s.mail("Reminder: the Q3 summary, please.");
+  // The model tries to start the same request again and write over the draft.
+  stubModel([
+    [call("start_request", { projectId: s.projectId, request: "Send Dana the Q3 summary", dueLocal: "2026-11-14T17:00" })],
+    [call("write_draft", { title: "Q3 summary for Dana", form: "document", text: "A third body that must not land.", changeSummary: "Again." })],
+    [says("Done again.")],
+  ]);
+  await s.t.action(internal.runs.onMessage, { ownerId: s.alice.ownerId, evidenceId: record.id });
 
   expect(await s.artifact()).toMatchObject({ revision: artifact.revision, text: artifact.text });
-  expect(await s.thread()).toHaveLength(messages.length);
-  expect(await s.all("artifactSuggestions")).toEqual(suggestions);
+  expect(await s.thread()).toEqual(messages);
+  expect(await s.all("commitments")).toEqual(commitments);
+  expect(await s.asAlice.query(api.briefs.listNudgeOffers, {})).toHaveLength(1);
 });

@@ -191,6 +191,7 @@ type Run = {
   messageId?: Id<"threadMessages">;
   key?: string;
   steps: Step[];
+  calls: string[]; // tool names in the order the model called them, for the one log line
   document?: Block;
   approval?: Block;
 };
@@ -306,14 +307,19 @@ async function work(ctx: ActionCtx, run: Run, first: unknown): Promise<string> {
     for (const call of turn.calls) {
       const result = await runCall(ctx, run, call, earlier, Date.now() - startedAt);
       earlier.push({ name: call.name, args: call.args });
+      run.calls.push(call.name);
       input.push(toolResult(call.callId, result));
     }
   }
 }
 
+/** One line per run: what started it, the tools it called, how it ended. Never any source or model text. */
+const log = (run: Run, outcome: string) => console.info(`run ${run.trigger}: ${run.calls.join(",") || "no tools"} -> ${outcome}`);
+
 /** A failed model request ends the run where it is: the step that was waiting on it reads failed. */
 async function stopOnModelError(ctx: ActionCtx, run: Run, error: unknown, retry: boolean) {
   if (!(error instanceof ModelError)) throw error;
+  log(run, `model request failed (${error.code})`);
   if (run.messageId === undefined) return;
   const now = Date.now();
   const steps = run.steps.length > 0 ? run.steps : [{ id: "think", label: "Thinking", status: "running" as const, startedAt: now }];
@@ -334,15 +340,19 @@ export const onMessage = internalAction({
   handler: async (ctx, { ownerId, evidenceId }): Promise<null> => {
     const c = await ctx.runQuery(internal.runs.loadMessage, { ownerId, evidenceId });
     if (c === null || c.projects.length === 0) return null;
-    const run: Run = { ownerId, trigger: "message", projects: new Map(c.projects.map((p) => [p.id, p.name])), evidenceId, timezone: c.timezone, steps: [] };
+    const run: Run = { ownerId, trigger: "message", projects: new Map(c.projects.map((p) => [p.id, p.name])), evidenceId, timezone: c.timezone, steps: [], calls: [] };
     const now = new Date();
     const localNow = c.timezone ? new Intl.DateTimeFormat("sv-SE", { timeZone: c.timezone, dateStyle: "short", timeStyle: "short" }).format(now) : now.toISOString();
     try {
       const said = await work(ctx, run, { now: localNow, timezone: c.timezone, user: c.user, projects: c.projects, message: c.message });
-      if (run.messageId === undefined || run.projectId === undefined || run.key === undefined) return null; // it asked the user for nothing
+      if (run.messageId === undefined || run.projectId === undefined || run.key === undefined) {
+        log(run, "nothing asked of the user");
+        return null;
+      }
       await show(ctx, run, said);
       const title = run.document?.type === "document" ? run.document.props.title : "Your request";
       await ctx.runMutation(internal.runs.announce, { ownerId, projectId: run.projectId, key: run.key, title });
+      log(run, "started a request");
     } catch (error) {
       await stopOnModelError(ctx, run, error, false);
     }
@@ -356,12 +366,13 @@ export async function answerChat(ctx: ActionCtx, ownerId: string, messageId: Id<
   const { projectName, timezone } = await ctx.runQuery(internal.prepare.loadPreparationContext, { ownerId, projectId: c.projectId });
   const state = await ctx.runQuery(internal.runs.loadProjectState, { ownerId, projectId: c.projectId, beforeMessage: messageId });
   const read: Step = { id: "read", label: "Reading your message", doneLabel: "Read your message", status: "running", startedAt: c.startedAt };
-  const run: Run = { ownerId, trigger: "chat", projects: new Map([[c.projectId, projectName]]), timezone, projectId: c.projectId, messageId, steps: [read] };
+  const run: Run = { ownerId, trigger: "chat", projects: new Map([[c.projectId, projectName]]), timezone, projectId: c.projectId, messageId, steps: [read], calls: [] };
   try {
     // His message is the last entry of the stored chat; it goes in `message`, the rest is context.
     const said = await work(ctx, run, { project: { id: c.projectId, name: projectName }, chat: state.chat.slice(0, -1), draft: state.draft, message: c.text });
     if (read.status === "running") Object.assign(read, { status: "done", endedAt: Date.now() });
     await show(ctx, run, said);
+    log(run, "replied");
   } catch (error) {
     await stopOnModelError(ctx, run, error, true);
   }

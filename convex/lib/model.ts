@@ -33,6 +33,14 @@ const jsonSchemaOf = (schema: z.ZodType) => {
   return jsonSchema;
 };
 
+/** Strict tool schemas reject string length limits; ours are still enforced when the arguments are parsed. */
+const withoutLengths = (schema: unknown): unknown =>
+  Array.isArray(schema)
+    ? schema.map(withoutLengths)
+    : typeof schema === "object" && schema !== null
+      ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "minLength" && key !== "maxLength").map(([key, value]) => [key, withoutLengths(value)]))
+      : schema;
+
 /** One request; returns the completed response's output items. Env is read per request so a missing value fails that request. */
 async function request(body: Record<string, unknown>) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -96,7 +104,7 @@ export async function respond(args: { instructions: string; input: readonly unkn
     input: args.input,
     ...(args.tools.length === 0
       ? {}
-      : { tools: args.tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: jsonSchemaOf(tool.args), strict: true })) }),
+      : { tools: args.tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: withoutLengths(jsonSchemaOf(tool.args)), strict: true })) }),
   });
   const calls = output.flatMap((item) =>
     item.type === "function_call" && item.call_id !== undefined && item.name !== undefined ? [{ callId: item.call_id, name: item.name, args: item.arguments ?? "{}" }] : [],

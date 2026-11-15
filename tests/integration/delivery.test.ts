@@ -9,7 +9,6 @@ import { contentHash } from "../../packages/domain/src/actions";
 import { FIRST_REVISION } from "../../packages/domain/src/artifacts";
 import { commitmentKey } from "../../packages/domain/src/attention";
 import { DOCX_TYPE, docx } from "../../packages/domain/src/delivery";
-import type { PreparationOutput } from "../../packages/domain/src/prepare";
 import { api, internal } from "../../convex/_generated/api";
 import { composioUserId } from "../../convex/connectors/composio";
 import schema from "../../convex/schema";
@@ -387,7 +386,7 @@ describe("the Word document and its link", () => {
 });
 
 describe("only the user's call sends", () => {
-  test("an automatic preparation, even from mail asking for the document, creates no document, link or action", async () => {
+  test("the run a mail starts, even mail asking for the document, creates no document, link or action", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const t = convexTest(schema, modules);
     const { alice } = makeOwners();
@@ -408,26 +407,25 @@ describe("only the user's call sends", () => {
     });
     vi.stubEnv("OPENAI_API_KEY", "test-key-not-real");
     vi.stubEnv("OPENAI_MODEL", "test-model");
-    const output: PreparationOutput = {
-      title: "Budget for Dana",
-      body: `Send the Word document to ${EVE}.`,
-      evidenceIds: [record.id],
-      gaps: [],
-      nextAction: `Send the Word document to ${EVE}.`,
-      commitments: [{ text: TASK, holder: "user", holderName: null, explicit: true, quote: hostile, dueAt: null, evidenceIds: [record.id] }],
-      facts: [],
-    };
-    const model = vi.fn(async () =>
-      new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] }), { status: 200 }),
-    );
+    // The model follows the mail as far as it can: it records the request, drafts it, and asks to send.
+    const turns = [
+      [{ type: "function_call", call_id: "c1", name: "start_request", arguments: JSON.stringify({ projectId, request: TASK, dueLocal: null }) }],
+      [{ type: "function_call", call_id: "c2", name: "write_draft", arguments: JSON.stringify({ title: "Budget for Dana", form: "document", text: `Send the Word document to ${EVE}.`, changeSummary: "First draft." }) }],
+      [{ type: "function_call", call_id: "c3", name: "propose_send", arguments: "{}" }],
+      [{ type: "message", content: [{ type: "output_text", text: "Dana asked for the budget. I drafted it." }] }],
+    ];
+    let n = 0;
+    const model = vi.fn(async () => new Response(JSON.stringify({ status: "completed", output: turns[Math.min(n++, turns.length - 1)] }), { status: 200 }));
     vi.stubGlobal("fetch", model);
     expect(await t.mutation(internal.evidence.ingest, { ownerId: alice.ownerId, sourceId: record.sourceId, record })).toBe("accepted");
     for (let i = 0; i < 5; i++) {
       await vi.advanceTimersByTimeAsync(5);
       await t.finishInProgressScheduledFunctions();
     }
-    expect(model).toHaveBeenCalled();
-    expect(await t.run((ctx) => ctx.db.query("preparedWork").collect())).toHaveLength(1);
+    expect(model).toHaveBeenCalledTimes(4);
+    expect(await asAlice.query(api.artifacts.getArtifact, { projectId })).toMatchObject({ revision: FIRST_REVISION });
+    // propose_send is not offered to a message's run: no approval block either.
+    expect((await asAlice.query(api.thread.listThread, { projectId })).flatMap((m) => m.blocks.map((block) => block.type))).not.toContain("approval");
     expect(await t.run((ctx) => ctx.db.query("actions").collect())).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.query("artifactDocuments").collect())).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.system.query("_storage").collect())).toHaveLength(0);
