@@ -2,6 +2,7 @@
 // and for behaviour that needs cloud data no test can sign in to yet. Never part of the product
 // bundle (it lives under tests/ and is served only by the e2e spec's own Vite server).
 import { record } from "./bridge"; // first: the Composer reads the bridge when it loads
+import { chatActions, useChatThread } from "./chat";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ActingActions } from "../../../apps/desktop/src/renderer/Act";
@@ -210,7 +211,6 @@ function useEditor(): { artifact: ArtifactView; editor: EditorActions } {
     editor: {
       create: async () => record("create"),
       save: async (text, base) => (record("save", base), step(text, "Saved your edits.")),
-      revise: async (instruction, base) => (record("revise", instruction, base), step(artifact.text.replace("(10 min)", "(7 min)"), "Shortened the live demo to 7 minutes.")),
       undo: async (expected, undoRevision) => (record("undo", expected, undoRevision), step(artifact.text.replace("(7 min)", "(10 min)"), `Restored revision ${undoRevision}.`)),
       applySuggestion: async (id, base) => (record("applySuggestion", id, base), setArtifact({ ...artifact, suggestions: [] }), { status: "applied" as const, changeSummary: "Moved the demo after the exercise.", revision: artifact.revision }),
       dismissSuggestion: async (id) => (record("dismissSuggestion", id), setArtifact({ ...artifact, suggestions: [] })),
@@ -318,6 +318,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const [stopped, setStopped] = useState(false);
   const [pet, setPet] = useState(true);
   const { artifact, editor } = useEditor();
+  const [thread, setThread] = useChatThread(variant, NOW.getTime());
   const pick = (id: string) => {
     if (id === focus) return; // as App.tsx: picking the current focus changes nothing
     record("switchProject", { targetProjectId: id, userInitiated: true });
@@ -366,12 +367,14 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
       {project && route.view === "project" && (
         <ProjectView
           key={project.id}
+          projectId={project.id}
           name={project.name}
           logDestination={variant === "unknown" ? null : { kind: "notion", label: "8f2c…a41" }}
           isFocus={project.id === focus}
           {...(route.mode ? { mode: route.mode } : {})}
           {...(project.prepared ? { prepared: project.prepared } : {})}
-          evidence={evidence}
+          thread={project.id === "guides" ? thread : []}
+          chat={chatActions(thread, setThread, record)}
           commitments={project.commitments}
           artifact={project.id === "guides" ? artifact : null}
           editor={editor}

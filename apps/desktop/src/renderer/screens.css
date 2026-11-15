@@ -1007,6 +1007,10 @@
   display: grid;
   grid-template-rows: 1fr;
   min-width: 0;
+}
+
+.msg[data-new],
+.block-slot[data-new] {
   animation: helper-open 260ms var(--ease-out);
 }
 
@@ -1284,5 +1288,58 @@
   .work-fold[data-open],
   .work-chevron {
     transition: none;
+  }
+}
+
+/* The docked chat composer: the box, then the tape deck and Send on one row, so the newest message stays in view. */
+.chat-composer.capture {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  padding: 12px 14px;
+}
+
+.chat-composer.capture > * + * {
+  margin-top: 0;
+}
+
+.chat-composer > :not(.tape-deck, .capture-foot) {
+  grid-column: 1 / -1;
+}
+
+.chat-composer .capture-foot {
+  align-self: center;
+}
+
+.chat-composer .capture-foot .hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.chat-composer .capture-status:empty {
+  display: none;
+}
+
+/* "At the latest message" means above the docked composer, not under it. */
+.msg {
+  scroll-margin-bottom: 230px;
+}
+
+.approval-row {
+  display: contents;
+}
+
+/* A step's duration arrives when it ends: it swaps in like the label, never pops. */
+.work-step-time {
+  animation: helper-swap 200ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .work-step-time {
+    animation: none;
   }
 }

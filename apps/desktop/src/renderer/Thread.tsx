@@ -23,14 +23,27 @@ export function Thread({ messages, actions }: { messages: ThreadMessage[]; actio
   const end = useRef<HTMLLIElement>(null);
   const last = messages.at(-1);
   // Opened from a notification or a card: at the latest message. New messages bring it into view.
-  useEffect(() => end.current?.scrollIntoView({ block: "end" }), [messages.length, last?.blocks.length]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" }); // braces: Chromium's scrollIntoView returns a Promise, not a cleanup
+  }, [messages.length, last?.blocks.length]);
   const views = messages.map((m) => ({ ...m, views: m.blocks.map(viewBlock) }));
+  // What was already there when the thread opened just renders; only what arrives later opens its space.
+  const [shown] = useState(() => new Set(views.flatMap((m) => [m.id, ...m.views.map((b) => `${m.id}/${b.id}`)])));
   // ⌘↵ approves only the newest open approval, and only from outside a text box with words in it.
   const open = views.findLast((m) => m.views.some((b) => b.type === "approval" && b.props.state === "open"));
   return (
     <ol className="thread" aria-label="Conversation with TARS" aria-live="polite" aria-relevant="additions text">
       {views.map((m) => (
-        <li key={m.id} className="msg" data-role={m.role} ref={m === views.at(-1) ? end : undefined}>
+        <li
+          key={m.id}
+          className="msg"
+          data-role={m.role}
+          data-new={shown.has(m.id) ? undefined : ""}
+          ref={m === views.at(-1) ? end : undefined}
+          onAnimationEnd={(e) => {
+            if (e.currentTarget === end.current && e.animationName === "helper-open") e.currentTarget.scrollIntoView({ block: "end" });
+          }}
+        >
           {m.role === "user" ? (
             <p className="msg-user inner">
               <span className="sr-only">You: </span>
@@ -40,7 +53,7 @@ export function Thread({ messages, actions }: { messages: ThreadMessage[]; actio
             <div className="msg-tars">
               <span className="sr-only">TARS: </span>
               {m.views.map((b) => (
-                <BlockSlot key={b.id} block={b} messageId={m.id} actions={actions} hotkey={m === open} />
+                <BlockSlot key={b.id} block={b} messageId={m.id} actions={actions} hotkey={m === open} arrived={!shown.has(`${m.id}/${b.id}`)} />
               ))}
             </div>
           )}
@@ -50,9 +63,9 @@ export function Thread({ messages, actions }: { messages: ThreadMessage[]; actio
   );
 }
 
-function BlockSlot({ block, messageId, actions, hotkey }: { block: BlockView; messageId: string; actions: ThreadActions; hotkey: boolean }) {
+function BlockSlot({ block, messageId, actions, hotkey, arrived }: { block: BlockView; messageId: string; actions: ThreadActions; hotkey: boolean; arrived: boolean }) {
   return (
-    <div className="block-slot" data-type={block.type}>
+    <div className="block-slot" data-type={block.type} data-new={arrived ? "" : undefined}>
       {block.type === "work" ? (
         <WorkBlock props={block.props} onRetry={() => actions.onRetry(messageId)} />
       ) : block.type === "document" ? (
