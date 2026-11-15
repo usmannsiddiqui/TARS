@@ -42,7 +42,8 @@
         "dir"
       ],
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "TARS uses the microphone only while you are recording a dictation you started with Record. The audio is transcribed into text you can edit before saving."
+        "NSMicrophoneUsageDescription": "TARS uses the microphone only while you are recording a dictation you started with Record. The audio is transcribed into text you can edit before saving.",
+        "NSAppleEventsUsageDescription": "TARS uses Messages only to send nudges you turned on to your own number. It never reads your messages or chats."
       }
     },
     "extraResources": [
