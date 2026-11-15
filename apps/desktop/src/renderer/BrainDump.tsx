@@ -13,6 +13,8 @@ export type BrainDumpProps = {
   cloud: boolean;
   projects: { id: string; name: string }[];
   view?: DumpView;
+  /** The words of the capture being sorted and when he saved them (Today shows them as his message). */
+  said?: { text: string; at: number };
   /** The capture is durably on this Mac: sort it (once). */
   onSaved(captureId: string, text: string): void;
   onRetry(): void;

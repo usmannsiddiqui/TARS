@@ -1,6 +1,7 @@
 // View-model: what the presentational screens take as props, and the pure derivations onto them.
 // Containers in live.tsx map Convex subscription results onto these; the test-only harness passes
 // illustrative values.
+import type { BlockProps } from "@companion/domain/thread";
 
 /** An honest state that is never confused with Empty or Done. */
 export type Honest =
@@ -408,4 +409,201 @@ export function tarsCalendar({ now, schedule, briefs, projects, sources }: Calen
     done: done.filter((e) => e.at <= now).sort((a, b) => b.at - a.at),
     attention,
   };
+}
+
+// ---- The three-pane shell: Today as one thread, the left list's previews and the right pane's routines.
+
+/** One message in a thread: TARS's blocks (the catalog in packages/domain/src/thread.ts) or the user's words. `createdAt` only when stored. */
+export type ThreadMessage = { id: string; role: "tars" | "user"; text?: string; blocks: unknown[]; createdAt?: number };
+type DumpView = BlockProps<"sorted">["view"];
+type StartItem = BlockProps<"start">["items"][number];
+
+export type TodayInput = {
+  now: number;
+  /** undefined while loading, null when none is prepared yet. */
+  brief: Brief | null | undefined;
+  briefError?: string;
+  /** The morning brief's local time (briefSchedule), only once the schedule exists. */
+  schedule?: { at: string };
+  reentry?: Reentry;
+  helpers: HelperRun[];
+  nudge?: NudgeOffer;
+  tradeoff?: Tradeoff;
+  /** Captures still on this Mac (no stored time). */
+  ideas: CapturedIdea[];
+  /** The brain dump saved in this window, when he saved it, and its sort. */
+  dump?: { text: string; at: number; view?: DumpView };
+  projects: ProjectSummary[];
+};
+
+const say = (id: string, text: string) => ({ id, type: "say", props: { text } });
+const tars = (id: string, blocks: unknown[], createdAt?: number): ThreadMessage => ({ id, role: "tars", blocks, ...(createdAt === undefined ? {} : { createdAt }) });
+const VERB = /^(Looked over|Went through|\S+) (.+)$/;
+
+function startBlock(id: string, items: BriefListItem[], projects: ProjectSummary[], reason: string | undefined) {
+  const named: StartItem[] = items.map(({ dueAt, ...item }) => {
+    const projectName = projects.find((p) => p.id === item.projectId)?.name;
+    return { ...item, ...(dueAt ? { dueAt } : {}), ...(projectName ? { projectName } : {}) };
+  });
+  const recommended = named.find((i) => i.recommended);
+  return { id, type: "start", props: { items: named, ...(reason ? { reason } : {}), ...(recommended ? { projectId: recommended.projectId } : {}) } };
+}
+
+const STAGES = ["reading", "drafting", "saving"] as const;
+
+function helperMessage(run: HelperRun): ThreadMessage {
+  const id = `run:${run.projectId}`;
+  const name = run.projectName;
+  if (run.state === "failed") {
+    return tars(id, [
+      {
+        id: "ask",
+        type: "ask",
+        props: { id, title: `Could not prepare ${name}`, text: "The last preparation failed; the earlier version is kept.", choices: [{ id: "retry", label: "Try again" }, { id: "dismiss", label: "Dismiss" }] },
+      },
+    ]);
+  }
+  const items = run.sources.reduce((n, s) => n + s.count, 0);
+  const current = run.state === "pending" || run.stage === undefined ? -1 : STAGES.indexOf(run.stage);
+  const words: Record<(typeof STAGES)[number], [string, string]> = {
+    reading: [`Reading sources for ${name}`, `Read sources for ${name}`],
+    drafting: [`Drafting ${name}${current >= 1 ? ` from ${items} ${items === 1 ? "item" : "items"}` : ""}`, `Drafted ${name}`],
+    saving: [`Checking and saving ${name}`, `Checked and saved ${name}`],
+  };
+  const steps = STAGES.map((stage, i) => ({
+    id: stage,
+    label: words[stage][0],
+    doneLabel: words[stage][1],
+    status: i < current ? "done" : i === current ? "running" : "waiting",
+    ...(stage === "drafting" && run.sources.length > 0 && current >= 1 ? { sources: run.sources } : {}),
+  }));
+  return tars(id, [{ id: "work", type: "work", props: { steps } }]);
+}
+
+/**
+ * Today as one thread, built from subscriptions that already exist: re-entry or the brief, each helper run,
+ * the open nudge and tradeoff, then his captures and the latest sort. Nothing new is stored or invented.
+ */
+export function todayThread(t: TodayInput): ThreadMessage[] {
+  if (t.projects.length === 0) return [tars("first", [say("first", "Name the first thing you are working on. You can add the others later.")])];
+  const out: ThreadMessage[] = [];
+  if (t.briefError) out.push(tars("brief-error", [say("error", `Could not read today's brief: ${t.briefError}`)]));
+  if (t.reentry) {
+    const r = t.reentry;
+    const changed = r.changed.map((c) => ({ id: c.evidenceId, text: c.text }));
+    if (r.changedCount > r.changed.length) changed.push({ id: "more", text: `and ${r.changedCount - r.changed.length} more in your sources` });
+    const urgent = r.urgent.map((h): BriefListItem => ({ text: h.text, projectId: h.projectId, kind: h.kind, dueAt: h.dueAt, recommended: h.text === r.recommendedAction }));
+    out.push(
+      tars(
+        "reentry",
+        [
+          say("welcome", `Welcome back. Since ${formatTime(Date.parse(r.since))}, nothing was moved, deleted or sent.`),
+          ...(changed.length ? [{ id: "changed", type: "results", props: { items: changed } }] : [say("changed", "Nothing new arrived from your sources.")]),
+          ...(urgent.length ? [startBlock("urgent", [...urgent.filter((i) => i.recommended), ...urgent.filter((i) => !i.recommended)], t.projects, r.reason)] : []),
+        ],
+        t.now,
+      ),
+    );
+  } else if (t.brief === undefined) {
+    out.push(tars("brief", [say("loading", "Reading today's brief…")]));
+  } else if (t.brief === null) {
+    out.push(tars("brief", [say("none", t.schedule ? `No brief yet. The first one comes at ${t.schedule.at}.` : "No brief yet.")]));
+  } else if (t.brief.kind === "evening") {
+    const b = t.brief;
+    const recap = b.items.length ? { id: "recap", type: "results", props: { items: b.items.map((text, i) => ({ id: String(i), text })) } } : say("empty", "Nothing finished or parked today. That is fine.");
+    out.push(tars(b.key, [recap, say("tonight", "Nothing else is needed tonight.")], b.preparedAt));
+  } else {
+    const b = t.brief;
+    const read = readRows(b.read).map((r) => {
+      const [, verb, text] = VERB.exec(r.text) ?? [];
+      return { id: r.kind, kind: r.kind, ...(verb && text ? { verb, text } : { text: r.text }) };
+    });
+    const items = briefList(b);
+    out.push(
+      tars(
+        b.key,
+        [
+          ...(read.length ? [{ id: "read", type: "results", props: { items: read } }] : []),
+          items.length ? startBlock("start", items, t.projects, b.reason) : say("nothing", "Nothing is due and nothing is suggested yet."),
+          ...b.stale.map((s) => say(`stale:${s.name}`, `${s.name} may be out of date, ${s.lastCheckedAt ? `last checked ${formatTime(Date.parse(s.lastCheckedAt))}` : "never checked"}.`)),
+        ],
+        b.preparedAt,
+      ),
+    );
+  }
+  out.push(...t.helpers.map(helperMessage));
+  if (t.nudge) {
+    const id = `nudge:${t.nudge.nudgeId}`;
+    out.push(tars(id, [{ id: "ask", type: "ask", props: { id, title: t.nudge.title, text: t.nudge.body, choices: [{ id: "finish", label: "Finish it" }, { id: "not-now", label: "Not now" }], primaryId: "finish" } }]));
+  }
+  if (t.tradeoff) {
+    const id = `tradeoff:${t.tradeoff.commitmentId}`;
+    const choices = [{ id: "keep", label: "Keep both" }, { id: "defer", label: "Defer the new one" }, { id: "renegotiate", label: "Renegotiate a deadline" }];
+    out.push(tars(id, [{ id: "ask", type: "ask", props: { id, title: "A new commitment competes", text: t.tradeoff.text, choices, note: "Your choice is recorded once. Nothing is moved, rescheduled or sent." } }]));
+  }
+  t.ideas.forEach((idea, i) => {
+    if (idea.text !== t.dump?.text) out.push({ id: `idea:${i}`, role: "user", text: idea.text, blocks: [] });
+  });
+  if (t.dump) {
+    out.push({ id: "dump", role: "user", text: t.dump.text, blocks: [], createdAt: t.dump.at });
+    if (t.dump.view) out.push(tars("sorted", [{ id: "sorted", type: "sorted", props: { view: t.dump.view } }]));
+  }
+  return out;
+}
+
+const clockFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "long" });
+const shortDayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+const shortDueFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" });
+const monthDayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+
+/** A row's time: the clock today, "Yesterday", the weekday within the week, else "Nov 3". */
+export function rowTime(ms: number, now: number): string {
+  const days = Math.round((Date.parse(dayKey(now)) - Date.parse(dayKey(ms))) / 864e5);
+  return days <= 0 ? clockFmt.format(ms) : days === 1 ? "Yesterday" : days < 7 ? weekdayFmt.format(ms) : monthDayFmt.format(ms);
+}
+
+export type RowPreview = { text: string; time?: number; warn?: boolean };
+
+/** A project row's second line: first match wins, from stored data only. */
+export function rowPreview(p: ProjectSummary, ctx: { helpers: HelperRun[]; nudgeProjectId?: string }): RowPreview {
+  const updated = p.prepared ? Date.parse(p.prepared.updatedAt) : NaN;
+  const time = Number.isNaN(updated) ? {} : { time: updated };
+  const run = ctx.helpers.find((h) => h.projectId === p.id);
+  if (run && run.state !== "failed") return { text: run.state === "pending" ? "Waiting in line…" : "Working…", ...time };
+  if (run?.state === "failed" || p.prepared?.status === "needs-retry") return { text: "Needs retry", warn: true, ...time };
+  if (ctx.nudgeProjectId === p.id) return { text: "Needs an answer", ...time };
+  const open = p.commitments.filter((c) => c.state === "open" || c.state === "waiting");
+  const next = (list: Commitment[]) => list.flatMap((c) => (c.dueAt ? [Date.parse(c.dueAt)] : [])).sort((a, b) => a - b)[0];
+  if (p.prepared?.status === "ready" && p.prepared.work) {
+    const due = next(open.filter((c) => c.ownership === "user"));
+    return { text: due === undefined ? "Draft ready" : `Draft ready · due ${shortDueFmt.format(due)}`, ...time };
+  }
+  if (open.length > 0) {
+    const due = next(open);
+    return { text: `${open.length} open${due === undefined ? "" : `, next due ${shortDayFmt.format(due)}`}`, ...time };
+  }
+  return { text: "Nothing prepared yet", ...time };
+}
+
+/** The Today row's second line, from the brief's real state. */
+export function todayPreview(brief: Brief | null | undefined, schedule: { at: string } | undefined, projects: ProjectSummary[]): RowPreview {
+  if (brief === undefined) return { text: "Reading today's brief…" };
+  if (brief === null) return { text: schedule ? `No brief yet. First one at ${schedule.at}` : "No brief yet" };
+  if (brief.kind === "evening") return { text: `Recap ready. ${brief.items.length} ${brief.items.length === 1 ? "thing" : "things"} today`, time: brief.preparedAt };
+  const items = briefList(brief);
+  const start = projects.find((p) => p.id === items.find((i) => i.recommended)?.projectId)?.name;
+  return { text: `Brief ready. ${items.length} ${items.length === 1 ? "item" : "items"}${start ? `, start with ${start}` : ""}`, time: brief.preparedAt };
+}
+
+export type RoutineRow = { id: "morning" | "evening"; name: string; summary: string };
+
+/** The right pane's routines, schedule first (briefs.getSchedule): undefined while loading, null before the timezone is set. */
+export function routineRows(schedule: { timezone: string; morningAt: number; eveningAt: number } | null | undefined): RoutineRow[] {
+  const when = (ms: number) =>
+    schedule ? `Every day, ${new Intl.DateTimeFormat("en-US", { timeZone: schedule.timezone, hour: "numeric", minute: "2-digit" }).format(ms)}` : schedule === null ? "No schedule yet" : "Reading the schedule…";
+  return [
+    { id: "morning", name: "Morning brief", summary: when(schedule?.morningAt ?? 0) },
+    { id: "evening", name: "Evening recap", summary: when(schedule?.eveningAt ?? 0) },
+  ];
 }
