@@ -95,6 +95,7 @@ export function App() {
         {...(cloud.honest ? { cloud: cloud.honest } : {})}
         {...(focusId ? { focusProjectId: focusId } : {})}
         brief={today.brief}
+        {...(today.schedule ? { schedule: today.schedule } : {})}
         {...(today.reentry ? { reentry: today.reentry } : {})}
         {...(today.tradeoff ? { tradeoff: today.tradeoff } : {})}
         {...(today.error ? { briefError: today.error } : {})}

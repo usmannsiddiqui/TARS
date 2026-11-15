@@ -104,6 +104,13 @@ const keyboard = (
   </>
 );
 const GLYPH: Record<string, ReactNode> = {
+  // Your open commitments: a checklist.
+  commitments: (
+    <>
+      <path d="m3.5 6.5 1.8 1.8 3-3.3M3.5 15.5l1.8 1.8 3-3.3" />
+      <path d="M11 7.5h9.5M11 16.5h9.5" />
+    </>
+  ),
   mail: envelope,
   // The notes folder: any folder of Markdown notes (often an Obsidian vault).
   obsidian: (

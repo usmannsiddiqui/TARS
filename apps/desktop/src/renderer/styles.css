@@ -983,6 +983,223 @@ textarea {
   align-self: end;
 }
 
+/* The morning brief, after the user's reference: greeting, routine card, what it read, the numbered brief, next run.
+   Built from TARS's parts: the frosted card, the state tag, source logos, hairline rows. */
+/* The brief is taller than one sentence: TARS sits at the top of the column, beside the routine card, so the desk is
+   on the first screen; the floor runs under the desk (scene units 250..330 of 330) to the window's edge. */
+.brief {
+  align-items: start;
+}
+
+.brief .start-figure {
+  align-self: start;
+}
+
+.brief::after {
+  top: calc(var(--scene-w) * 250 / 460);
+  bottom: auto;
+  left: calc(100% - var(--scene-w));
+}
+
+.brief .start-body {
+  gap: 12px;
+  align-items: stretch;
+}
+
+.brief-greet {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.brief-greet span {
+  margin-left: 6px;
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--ink-2);
+}
+
+.brief-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  border-radius: var(--r-card);
+}
+
+.brief-icon,
+.brief-read-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--glass-inner);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.brief-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.brief-name {
+  flex: 1 0 auto;
+}
+
+.brief-name p {
+  white-space: nowrap;
+}
+
+.brief-name h2 {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.brief-name p,
+.brief-when,
+.brief-tail,
+.brief-next {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.brief-card > * + * {
+  margin-top: 0;
+}
+
+.brief-state {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.brief-state .state-tag {
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 1;
+  color: var(--ink);
+}
+
+/* Needs retry on the black plate, as every problem state. */
+.brief-state .state-tag[data-kind="needs-retry"] {
+  padding: 1px 7px 1px 5px;
+  border-radius: var(--r-tag);
+  background: var(--black);
+  color: var(--on-black);
+}
+
+.brief-reads {
+  list-style: none;
+  padding: 0;
+  animation: rise 400ms var(--ease-out) 200ms both;
+}
+
+.brief-reads li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 4px 4px 4px 2px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 15px;
+}
+
+.brief-read-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.brief-read-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.brief-read-check {
+  flex: none;
+  color: var(--ink);
+}
+
+.brief-body {
+  margin-top: 6px;
+}
+
+.brief-body h3 {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.brief-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 22px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.brief-list li {
+  padding-left: 4px;
+  overflow-wrap: anywhere;
+}
+
+.brief-list li::marker {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The recommended start: TARS's black label, its typed sentence, the reason and the one navy action. */
+.brief-start-tag {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 8px;
+  border-radius: var(--r-tag);
+  background: var(--black);
+  color: var(--on-black);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.brief-step {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  max-width: 34ch;
+  text-wrap: balance;
+}
+
+.brief-reason {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  max-width: 52ch;
+}
+
+.brief .actions {
+  margin: 10px 0 4px;
+}
+
+.brief-next {
+  margin-top: 2px;
+}
+
 .desk {
   display: block;
   width: 100%;

@@ -9,7 +9,7 @@ import type { HoldKeyStatus, PanelShowing } from "../preload/index";
 import { Connections, type CloudActions, type LocalKind, type SelfTextActions, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
 import type { HelperActions } from "./Helpers";
-import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
+import { briefSchedule, cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
@@ -154,7 +154,8 @@ type BriefRow = {
   kind: "morning" | "evening";
   preparedAt: number;
   delivered: boolean;
-  brief: Omit<Brief, "key" | "kind" | "preparedAt" | "delivered" | "stale"> & { staleSourceIds: string[] };
+  brief: Omit<Brief, "key" | "kind" | "preparedAt" | "delivered" | "stale" | "read"> & { staleSourceIds: string[] };
+  read?: Brief["read"];
   tradeoffs: Tradeoff[];
 };
 
@@ -167,7 +168,7 @@ const toBrief = (row: BriefRow, connections: Connection[] | undefined): Brief =>
     const entry = c ? { name: SOURCE_NAME[c.provider] ?? c.provider, ...(c.lastCheckedAt ? { lastCheckedAt: c.lastCheckedAt } : {}) } : { name: "A source on this Mac" };
     stale.set(entry.name, entry);
   }
-  return { ...brief, key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: row.delivered, stale: [...stale.values()] };
+  return { ...brief, key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: row.delivered, stale: [...stale.values()], ...(row.read ? { read: row.read } : {}) };
 };
 
 // shortcut: "days away" is a fixed two days since the previous visit; tune from use.
@@ -189,6 +190,7 @@ export function useToday({ recordReturn }: { recordReturn: boolean }) {
   const markDelivered = useMutation(api.briefs.markDelivered);
   const resolveTradeoff = useMutation(api.briefs.resolveTradeoff);
   const nudges = useQuery(api.briefs.listNudgeOffers, args);
+  const schedule = useQuery(api.briefs.getSchedule, args);
   const respondToNudge = useMutation(api.briefs.respondToNudge);
   const [returned, setReturned] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -229,6 +231,8 @@ export function useToday({ recordReturn }: { recordReturn: boolean }) {
   const onBriefShown = useCallback((key: string) => void markDelivered({ key, channel: "panel" }).catch((err: unknown) => setError(reason(err))), [markDelivered]);
   return {
     brief,
+    /** The morning brief's routine and next run in words, from the real schedule; undefined until the timezone is set. */
+    schedule: schedule ? briefSchedule(schedule.morningAt, schedule.timezone, Date.now()) : undefined,
     reentry,
     tradeoff,
     nudge: nudges?.[0],
