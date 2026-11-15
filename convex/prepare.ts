@@ -315,11 +315,13 @@ export const persistPreparation = internalMutation({
       .query("preparedWork")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .unique();
+    const updatedAt = new Date().toISOString();
     const next = {
       work,
       factKeys: [...new Set([...usedFactKeys, ...learnedKeys])],
       status: "ready" as const,
-      updatedAt: new Date().toISOString(),
+      updatedAt,
+      ...(automatic ? {} : { invitedAt: updatedAt }),
     };
     if (row === null) await ctx.db.insert("preparedWork", { ownerId, projectId, ...next });
     else await ctx.db.patch(row._id, { ...next, lastError: undefined });

@@ -236,8 +236,10 @@ async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"atten
       .query("preparedWork")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .unique();
-    if (prepared?.status === "ready" && prepared.work !== undefined) {
-      const key = invitationKey({ projectId: projectId as ProjectId, updatedAt: prepared.updatedAt });
+    // Only a preparation the user started (invitedAt) raises this invitation; automatic runs reach
+    // the user through nudge offers alone.
+    if (prepared?.status === "ready" && prepared.work !== undefined && prepared.invitedAt !== undefined) {
+      const key = invitationKey({ projectId: projectId as ProjectId, updatedAt: prepared.invitedAt });
       const dismissed = await ctx.db
         .query("dismissedInvitations")
         .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))

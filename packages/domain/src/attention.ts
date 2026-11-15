@@ -103,7 +103,7 @@ export function nudgeCopy({ text, startedForYou }: { text: string; startedForYou
     : { title: "When you're ready", body: `${text}. Your draft is here whenever you want it.` };
 }
 
-/** Key for a task-return invitation: changes only when the prepared work changes. */
+/** Key for a task-return invitation: `updatedAt` is that of the last preparation the user started. */
 export function invitationKey(work: { projectId: ProjectId; updatedAt: string }): string {
   return `task:${work.projectId}@${work.updatedAt}`;
 }

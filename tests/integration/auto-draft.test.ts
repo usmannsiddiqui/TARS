@@ -225,6 +225,39 @@ describe("automatic preparation on new evidence", () => {
   });
 });
 
+describe("ready-when-you-are invitation", () => {
+  test("automatic_runs_never_re_raise_a_dismissed_invitation_but_a_user_started_preparation_does", async () => {
+    const { asAlice, project, evidence, settle, all } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const budget = await project("Budget");
+    await asAlice.mutation(api.projects.switchProject, { targetProjectId: budget, userInitiated: true });
+    const ids: string[] = [];
+    stubModel(() => prepared({ evidenceIds: ids.slice(0, 1) })); // no due commitment: nothing to nudge
+    ids.push((await evidence(budget, "Illustrative note 0.")).id);
+    await settle();
+
+    expect(await asAlice.action(api.prepare.prepareProject, { projectId: budget })).toEqual({ status: "ready" });
+    const first = await asAlice.query(api.briefs.getAttentionState, {});
+    expect(first?.key).toMatch(/^task:/);
+    await asAlice.mutation(api.briefs.dismissInvitation, { key: first!.key });
+
+    for (let burst = 0; burst < 3; burst++) {
+      vi.setSystemTime(Date.now() + 60_000); // each run stores a newer updatedAt
+      for (let i = 0; i < 2; i++) ids.push((await evidence(budget, `Illustrative burst ${burst} note ${i}.`)).id);
+      await settle();
+      expect(await asAlice.query(api.briefs.getAttentionState, {})).toBeNull();
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(5); // first auto run, the manual run, three automatic bursts
+    expect(await all("deliveryReceipts")).toEqual([]);
+
+    vi.setSystemTime(Date.now() + 60_000);
+    expect(await asAlice.action(api.prepare.prepareProject, { projectId: budget })).toEqual({ status: "ready" });
+    const again = await asAlice.query(api.briefs.getAttentionState, {});
+    expect(again?.key).toMatch(/^task:/);
+    expect(again!.key).not.toBe(first!.key);
+  });
+});
+
 describe("gentle nudges", () => {
   async function startedOffer() {
     const s = setup();
