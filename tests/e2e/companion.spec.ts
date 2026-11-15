@@ -696,6 +696,39 @@ test("the composer is docked under the thread: the last message ends above it", 
   }
 });
 
+test("the window never scrolls: only the thread does, after a new message and at either end", async () => {
+  for (const size of [
+    { width: 1200, height: 800 },
+    { width: 960, height: 640 },
+  ]) {
+    for (const name of ["today-dump", "project-long"]) {
+      const page = await scene(name, { size });
+      const frameHolds = async (when: string) => {
+        const at = await page.evaluate(() => {
+          const head = document.querySelector(".head")!.getBoundingClientRect();
+          const composer = document.querySelector(".composer-pill")!.getBoundingClientRect();
+          return { scroll: document.scrollingElement!.scrollTop, app: document.querySelector(".app3")!.scrollTop, headTop: head.top, composerBottom: composer.bottom, height: innerHeight };
+        });
+        const where = `${name} ${size.width}x${size.height} ${when}`;
+        expect(at.scroll, where).toBe(0);
+        expect(at.app, where).toBe(0);
+        expect(at.headTop, where).toBeGreaterThanOrEqual(0);
+        expect(at.headTop, where).toBeLessThan(20);
+        expect(at.composerBottom, where).toBeLessThanOrEqual(at.height);
+      };
+      await page.locator(".composer-pill textarea").fill("Call the venue about the second mic tomorrow");
+      await page.keyboard.press("Enter");
+      await expect(page.locator(".thread > .msg").last()).toBeVisible();
+      await frameHolds("after a new message");
+      await page.locator(".chat-scroll").evaluate((el) => el.scrollTo({ top: 0 }));
+      await frameHolds("thread at the top");
+      await page.locator(".chat-scroll").evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+      await frameHolds("thread at the bottom");
+      await page.close();
+    }
+  }
+});
+
 test("stop_for_now_starts_nothing", async () => {
   const page = await scene("today");
   const session = page.getByRole("group", { name: "Work session" });

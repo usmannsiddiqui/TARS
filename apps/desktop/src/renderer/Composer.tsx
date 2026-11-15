@@ -65,8 +65,8 @@ export function Composer({
     if (!autoFocus || !el) return;
     el.focus({ preventScroll: true });
     el.setSelectionRange(el.value.length, el.value.length);
-    el.closest("form")?.scrollIntoView({ block: "end" }); // the whole card: box, Save and the status line
-  }, [autoFocus]);
+    if (!pill) el.closest("form")?.scrollIntoView({ block: "end" }); // the panel's card: box, Save and the status line (the pill is docked, always in view)
+  }, [autoFocus, pill]);
 
   // Recordings left from a crash or an earlier failure: offer them, never transcribe on our own.
   useEffect(() => {
@@ -203,7 +203,7 @@ export function Composer({
   const busy = voice.kind === "starting" || voice.kind === "transcribing";
   const returnSubmits = send !== undefined || pill === true;
   return (
-    <form className={pill ? "capture composer-pill" : send ? "capture chat-composer" : "capture"} onSubmit={save} aria-label={send || pill ? "Message TARS" : "Capture"}>
+    <form className={pill ? "capture composer-pill" : "capture"} onSubmit={save} aria-label={send || pill ? "Message TARS" : "Capture"}>
       <label htmlFor={id} className={send || pill ? "sr-only" : "block-title"}>
         {send || pill ? "Message TARS" : "Capture an idea"}
       </label>

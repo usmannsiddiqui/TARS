@@ -5,6 +5,17 @@ import type { Honest, NudgeChoice, NudgeOffer, PetState } from "./model";
 const time = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 export const formatWhen = (iso: string) => (Number.isNaN(Date.parse(iso)) ? "unknown time" : time.format(Date.parse(iso)));
 
+/**
+ * Brings `el` into view by scrolling only its own scroller (the nearest `scroller` ancestor, its offset
+ * parent), never the window: scrollIntoView would also scroll every ancestor, the document included.
+ */
+export function scrollWithin(el: HTMLElement | null | undefined, scroller: string, at: "start" | "end", smooth = false) {
+  const box = el?.closest<HTMLElement>(scroller);
+  if (!el || !box) return;
+  const behavior = smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto";
+  box.scrollTo({ top: at === "end" ? box.scrollHeight : el.offsetTop - 12, behavior });
+}
+
 /** Electron prefixes rejected invoke() errors and Convex wraps server errors; show only the message. */
 export const reason = (err: unknown) => {
   if (err && typeof err === "object" && "data" in err) {
