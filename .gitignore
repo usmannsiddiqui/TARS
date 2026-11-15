@@ -17,3 +17,6 @@ HACKATHON_PRODUCT_HANDOFF.md
 
 # Swift build output
 native/observer/.build/
+
+# Design reference screenshots belong to their owners: never committed
+design/*/refs/
