@@ -1,11 +1,11 @@
 // One project, chat first: the thread with TARS (generative-UI messages) and the composer with
 // dictation docked at the bottom; beside it the editable draft (the run-through as timed segments,
-// direct edits, Undo, its one instructed action and its share link) and commitments grouped by who
-// holds them. Presentational: data and actions arrive as props.
+// direct edits, Undo and its share link) and commitments grouped by who holds them. Sending happens
+// in one place only: the approval in the thread. Presentational: data and actions arrive as props.
 import { useEffect, useId, useRef, useState } from "react";
-import { Act, type ActingActions, type LogDestinationView } from "./Act";
+import type { DeliveryStatus } from "@companion/domain/thread";
 import { Composer } from "./Composer";
-import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type Receipt } from "./model";
+import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared } from "./model";
 import { Thread, type ApproveArgs, type ThreadMessage } from "./Thread";
 import { formatWhen, reason, StateNote } from "./ui";
 
@@ -33,11 +33,15 @@ export type EditorActions = {
   dismissSuggestion(suggestionId: string): Promise<void>;
 };
 
-/** The chat's backend: his message goes to TARS; the approval's primary action is the send seam. */
+/** The chat's backend: his message goes to TARS; the approval's primary action sends (thread.send). */
 export type ChatActions = {
   send(text: string): Promise<void>;
   approve(args: ApproveArgs): Promise<void>;
   retry(messageId: string): Promise<void>;
+  /** A hook: one send's live delivery.status. */
+  useDeliveryStatus(actionId: string): DeliveryStatus | undefined;
+  /** Look an unconfirmed send up again; never resends. */
+  checkAgain(actionId: string): Promise<void>;
 };
 
 export type ProjectViewProps = {
@@ -56,10 +60,6 @@ export type ProjectViewProps = {
   /** undefined while loading, null before a run-through exists. */
   artifact: ArtifactView | null | undefined;
   editor: EditorActions;
-  /** The project's newest action receipt: undefined while loading, null when nothing was done yet. */
-  receipt: Receipt | null | undefined;
-  acting: ActingActions;
-  logDestination: LogDestinationView | null | undefined;
   sharing: Sharing;
   /** "I did this myself": recorded as reported by you, never as verified. */
   onReportDone(taskId: string): Promise<void>;
@@ -69,29 +69,22 @@ export type ProjectViewProps = {
 };
 
 export function ProjectView(props: ProjectViewProps) {
-  const { prepared, commitments, receipt } = props;
+  const { prepared, commitments } = props;
   const work = prepared?.work;
   const [preparing, setPreparing] = useState<{ busy: boolean; error?: string }>({ busy: false });
-  const [acted, setActed] = useState(false);
   const mine = commitments?.filter((c) => c.ownership === "user") ?? [];
   const doneMine = mine.filter((c) => c.state === "user-reported-done" || c.state === "verified-done");
   const complete = mine.length > 0 && doneMine.length === mine.length;
-  const openMine = mine.filter((c) => c.state === "open");
-  // Done for an action only right after the user acted here; an older receipt stays in its own block.
-  const verified = receipt?.state === "succeeded" && acted;
   const lastDone = doneMine.at(-1);
-  // What is actually done: the verified action, or every task of yours (marked when you reported it).
-  const doneText =
-    verified && receipt
-      ? `${receipt.kind === "update-note" ? `Updated ${receipt.destination}` : `Sent to ${receipt.destination}`}, verified.`
-      : complete && lastDone
-        ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ""}`
-        : null;
-  // A verified completion appears above the thread: bring it into view and focus once, starting nothing.
+  // Every task of yours is done: verified by a checked send, or reported by you (and said so).
+  const doneText = complete && lastDone ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ", verified."}` : null;
+  // Done while he is here (a send just checked): bring it into view and focus once, starting nothing.
   const doneRef = useRef<HTMLHeadingElement>(null);
+  const wasComplete = useRef(complete);
   useEffect(() => {
-    if (verified) doneRef.current?.focus();
-  }, [verified]);
+    if (complete && !wasComplete.current) doneRef.current?.focus();
+    wasComplete.current = complete;
+  }, [complete]);
 
   // "Open draft" and "Keep editing" bring the editable draft into view with its text box focused.
   const draftRef = useRef<HTMLDivElement>(null);
@@ -178,6 +171,8 @@ export function ProjectView(props: ProjectViewProps) {
                 onOpenDraft: openDraft,
                 onKeepEditing: openDraft,
                 onUndo: async (artifactId, expectedCurrent, undoRevision) => void (artifactId === props.artifact?.id && (await props.editor.undo(expectedCurrent, undoRevision))),
+                useDeliveryStatus: props.chat.useDeliveryStatus,
+                onCheckAgain: props.chat.checkAgain,
               }}
             />
           )}
@@ -192,7 +187,6 @@ export function ProjectView(props: ProjectViewProps) {
             canCreate={work !== undefined}
             editor={props.editor}
             sharing={props.sharing}
-            act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: receipt ?? null, onActed: () => setActed(true), actions: props.acting, logDestination: props.logDestination }}
           />
           <Commitments commitments={commitments} onReportDone={props.onReportDone} />
         </aside>
@@ -276,11 +270,10 @@ type RunThroughProps = {
   artifact: ArtifactView | null | undefined;
   canCreate: boolean;
   editor: EditorActions;
-  act: Omit<Parameters<typeof Act>[0], "saved" | "dirty">;
   sharing: Sharing;
 };
 
-function RunThrough({ artifact, canCreate, editor, act, sharing }: RunThroughProps) {
+function RunThrough({ artifact, canCreate, editor, sharing }: RunThroughProps) {
   const textId = useId();
   // `loaded` is the revision the draft started from; saves name it, so a newer cloud text is never overwritten.
   const [loaded, setLoaded] = useState({ revision: artifact?.revision, text: artifact?.text ?? "" });
@@ -429,7 +422,6 @@ function RunThrough({ artifact, canCreate, editor, act, sharing }: RunThroughPro
             </div>
           )}
 
-          <Act saved={{ artifactId: artifact.id, revision: artifact.revision, text: artifact.text }} dirty={dirty} {...act} />
           <ShareLink revision={artifact.revision} dirty={dirty} sharing={sharing} />
         </>
       )}

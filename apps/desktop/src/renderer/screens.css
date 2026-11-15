@@ -1343,3 +1343,34 @@
     animation: none;
   }
 }
+
+/* The approval says what will happen, then the one editable fact: who gets it. */
+.approval-what {
+  font-size: 15px;
+}
+
+.approval-facts dt label {
+  line-height: 38px; /* level with the field's text */
+}
+
+.approval-to {
+  max-width: 420px;
+}
+
+.approval-to[aria-invalid="true"] {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.approval-note {
+  display: block;
+  margin-top: 4px;
+}
+
+.receipt-doc {
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: underline 1px var(--ink-3);
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+}

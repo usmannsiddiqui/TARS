@@ -59,8 +59,8 @@ export const BLOCKS = {
     props: z.object({ actionId: z.string(), recipient: z.string() }),
   },
   receipt: {
-    description: "What was done, when, and what was checked.",
-    props: z.object({ text: z.string(), at: z.number(), check: z.string().optional() }),
+    description: "What was done, when, and what was checked; for a send, the document's name as a link.",
+    props: z.object({ text: z.string(), at: z.number(), check: z.string().optional(), document: z.string().optional(), link: z.string().optional() }),
   },
 } as const;
 
@@ -137,6 +137,10 @@ export type DeliveryStatus = {
   state: "pending" | "running" | "succeeded" | "failed" | "unknown";
   verified: boolean;
   recipient: string;
+  subject?: string;
+  filename?: string | null;
+  link?: string | null;
+  sentAt?: number;
   stages: { name: "document" | "link" | "send" | "verify"; state: "pending" | "running" | "done" | "failed" | "unknown"; startedAt?: number; endedAt?: number; detail?: string }[];
 };
 

@@ -4,19 +4,33 @@
 // actions with ids; none of them sends, shares or acts by itself. Presentational: data and actions
 // arrive as props.
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
-import { formatDuration, viewBlock, workSummary, type BlockProps, type BlockView, type Step } from "@companion/domain/thread";
+import {
+  deliverySteps,
+  formatDuration,
+  isMailAddress,
+  viewBlock,
+  workSummary,
+  type BlockProps,
+  type BlockView,
+  type DeliveryStatus,
+  type Step,
+} from "@companion/domain/thread";
 import { SourceChip } from "./logos";
 import { formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type ThreadMessage = { id: string; role: "tars" | "user"; text?: string; blocks: unknown[]; createdAt: number };
-export type ApproveArgs = { projectId: string; artifactId: string; revision: string; commitmentKey?: string };
+export type ApproveArgs = { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string };
 export type ThreadActions = {
-  /** THE SEAM FOR THE SEND: the approval's primary action, ids only. Wired to thread.approve today. */
+  /** The approval's primary action: send this revision to the recipient as he left the field (thread.send). */
   onApprove(args: ApproveArgs): Promise<void>;
   onKeepEditing(): void;
   onOpenDraft(): void;
   onUndo(artifactId: string, expectedCurrent: string, undoRevision: string): Promise<void>;
   onRetry(messageId: string): Promise<void>;
+  /** A hook: the live delivery.status of one send (undefined while loading). */
+  useDeliveryStatus(actionId: string): DeliveryStatus | undefined;
+  /** "Check again" for an unconfirmed send: looks it up, never resends. */
+  onCheckAgain(actionId: string): Promise<void>;
 };
 
 export function Thread({ messages, actions }: { messages: ThreadMessage[]; actions: ThreadActions }) {
@@ -76,6 +90,8 @@ function BlockSlot({ block, messageId, actions, hotkey, arrived }: { block: Bloc
         <ApprovalBlock props={block.props} complete={block.complete} actions={actions} hotkey={hotkey} />
       ) : block.type === "receipt" ? (
         <ReceiptBlock props={block.props} />
+      ) : block.type === "delivery" && block.props.actionId ? (
+        <DeliveryBlock actionId={block.props.actionId} actions={actions} />
       ) : (
         <p className="quiet small">This part of the message can't be shown here.</p>
       )}
@@ -83,14 +99,14 @@ function BlockSlot({ block, messageId, actions, hotkey, arrived }: { block: Bloc
   );
 }
 
-const MARK: Record<Step["status"], string> = { done: "done", running: "now", waiting: "next", failed: "failed" };
+const MARK: Record<Step["status"], string> = { done: "done", running: "now", waiting: "next", failed: "failed", unknown: "next" };
 
 /** A running clock in CSS from the step's real start (no JS timer): the tape counter, started in the past. */
 function Clock({ since }: { since: number }) {
   return <span className="tape-run" style={{ animationDelay: `${-(Date.now() - since)}ms` } as CSSProperties} aria-hidden="true" />;
 }
 
-function WorkBlock({ props, onRetry }: { props: Partial<BlockProps<"work">>; onRetry(): Promise<void> }) {
+function WorkBlock({ props, onRetry, retryLabel = "Try again" }: { props: Partial<BlockProps<"work">>; onRetry(): Promise<void>; retryLabel?: string }) {
   const id = useId();
   const steps = props.steps ?? [];
   const summary = workSummary(steps);
@@ -102,8 +118,7 @@ function WorkBlock({ props, onRetry }: { props: Partial<BlockProps<"work">>; onR
     was.current = summary.state;
   }, [summary.state]);
   const [busy, setBusy] = useState<string | null>(null);
-  const mark = summary.state === "running" ? "now" : summary.state === "done" ? "done" : summary.state === "failed" ? "failed" : "next";
-  return (
+  const mark = summary.state === "running" ? "now" : summary.state === "done" ? "done" : summary.state === "failed" ? "failed" : "next";  return (
     <section className="work" data-state={summary.state} aria-label={summary.label}>
       <button type="button" className="work-head" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
         <span className="helper-step" data-step={mark} aria-hidden="true" />
@@ -129,6 +144,7 @@ function WorkBlock({ props, onRetry }: { props: Partial<BlockProps<"work">>; onR
                   {step.status === "done" ? (step.doneLabel ?? step.label) : step.label}
                   {step.status === "failed" && <StateTag state={{ kind: "needs-retry" }} label="Failed" />}
                   {step.status === "waiting" && <StateTag state={{ kind: "scheduled" }} label="Waiting" />}
+                  {step.status === "unknown" && <StateTag state={{ kind: "unknown" }} />}
                 </span>
                 {step.error && <span className="work-step-error">{step.error}</span>}
                 {step.sources && step.sources.length > 0 && (
@@ -160,7 +176,7 @@ function WorkBlock({ props, onRetry }: { props: Partial<BlockProps<"work">>; onR
               }
             }}
           >
-            Try again
+            {busy === "retry" ? `${retryLabel}…` : retryLabel}
           </button>
           {busy && busy !== "retry" && <StateNote state={{ kind: "needs-retry", detail: busy }} />}
         </div>
@@ -235,15 +251,25 @@ function SayBlock({ props }: { props: Partial<BlockProps<"say">> }) {
 
 function ApprovalBlock({ props, complete, actions, hotkey }: { props: Partial<BlockProps<"approval">>; complete: boolean; actions: ThreadActions; hotkey: boolean }) {
   const headId = useId();
+  const fieldId = useId();
+  const noteId = useId();
+  const [recipient, setRecipient] = useState(props.recipient ?? "");
+  const [touched, setTouched] = useState(false);
   const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const approved = props.state === "approved";
   const { projectId, artifactId, revision, commitmentKey } = props;
-  const ready = complete && !approved && projectId !== undefined && artifactId !== undefined && revision !== undefined;
+  const address = recipient.trim();
+  const valid = isMailAddress(address);
+  // The suggestion is who asked; sending to them replies to their mail, anyone else gets a fresh subject.
+  const toAsker = props.recipient !== undefined && props.recipient !== "" && address.toLowerCase() === props.recipient.toLowerCase();
+  const subject = toAsker ? props.replySubject : props.subject;
+  const ready = complete && !approved && valid && projectId !== undefined && artifactId !== undefined && revision !== undefined && commitmentKey !== undefined;
   const approve = async () => {
+    setTouched(true);
     if (!ready || state.busy) return;
     setState({ busy: true });
     try {
-      await actions.onApprove({ projectId, artifactId, revision, ...(commitmentKey ? { commitmentKey } : {}) });
+      await actions.onApprove({ projectId, artifactId, revision, commitmentKey, recipient: address });
       setState({ busy: false });
     } catch (err) {
       setState({ busy: false, error: reason(err) });
@@ -263,34 +289,61 @@ function ApprovalBlock({ props, complete, actions, hotkey }: { props: Partial<Bl
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [hotkey]);
-  const row = (label: string, value: string | undefined, empty: string) => (
-    <div className="approval-row">
-      <dt>{label}</dt>
-      <dd>{value ? value : <span className="quiet">{empty}</span>}</dd>
-    </div>
-  );
+  const problem = touched && !valid ? (address === "" ? "Add the address to send it to." : "Use one plain email address, like name@example.com.") : null;
   return (
     <section className="approval block tars-voice" aria-labelledby={headId} data-state={props.state}>
       <h3 id={headId} className="block-title">
         {approved ? "Approved" : "Before it goes out"}
       </h3>
+      <p className="approval-what">
+        A Word document of {props.document ? `“${props.document}”` : "the draft"}, revision {revision ?? "not known"}, sent as a link by email.
+      </p>
       <dl className="approval-facts">
-        {row("To", props.recipient, "No recipient on record")}
-        {row("Subject", props.subject, "No subject")}
-        {row("Attached", props.attachment, "Nothing attached")}
+        <div className="approval-row">
+          <dt>{approved ? "To" : <label htmlFor={fieldId}>To</label>}</dt>
+          <dd>
+            {approved ? (
+              address
+            ) : (
+              <>
+                <input
+                  id={fieldId}
+                  className="approval-to"
+                  type="email"
+                  required
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={recipient}
+                  placeholder="name@example.com"
+                  aria-invalid={problem !== null || undefined}
+                  aria-describedby={noteId}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  onBlur={() => setTouched(true)}
+                />
+                <span id={noteId} className="approval-note quiet small">
+                  {problem ?? (toAsker && props.recipientName ? `${props.recipientName}, who asked` : props.recipient ? "Changed from who asked" : "Nobody on record asked; add who gets it")}
+                </span>
+              </>
+            )}
+          </dd>
+        </div>
+        <div className="approval-row">
+          <dt>Subject</dt>
+          <dd>{subject ?? <span className="quiet">No subject</span>}</dd>
+        </div>
       </dl>
       {approved ? (
         <StateNote state={{ kind: "done", detail: "You approved this revision." }} />
       ) : (
         <div className="actions">
-          <button type="button" className="primary" disabled={!ready || state.busy} onClick={() => void approve()} aria-keyshortcuts="Meta+Enter">
-            {props.primary ?? "Send it"}
+          <button type="button" className="primary" disabled={!complete || state.busy} onClick={() => void approve()} aria-keyshortcuts="Meta+Enter">
+            {state.busy ? "Sending…" : (props.primary ?? "Send it")}
             <kbd className="approval-key" aria-hidden="true">
               ⌘↵
             </kbd>
           </button>
           <button type="button" className="secondary" onClick={actions.onKeepEditing}>
-            {props.secondary ?? "Keep editing"}
+            {props.secondary ?? "Not yet"}
           </button>
         </div>
       )}
@@ -300,10 +353,42 @@ function ApprovalBlock({ props, complete, actions, hotkey }: { props: Partial<Bl
   );
 }
 
+/** One approved send, followed live: its four real stages, then the receipt once it is checked. */
+function DeliveryBlock({ actionId, actions }: { actionId: string; actions: ThreadActions }) {
+  const status = actions.useDeliveryStatus(actionId);
+  if (status === undefined) return <StateNote state={{ kind: "loading", detail: "Reading where the send is…" }} />;
+  const steps = deliverySteps(status);
+  return (
+    <>
+      <WorkBlock props={{ steps, ...(status.state === "unknown" ? { retry: true } : {}) }} onRetry={() => actions.onCheckAgain(actionId)} retryLabel="Check again" />
+      {status.state === "failed" && <p className="say-text">Nothing was sent, and your draft is kept as it is.</p>}
+      {status.verified && (
+        <ReceiptBlock
+          props={{
+            text: `Sent to ${status.recipient}: “${status.subject ?? ""}”`,
+            at: status.sentAt ?? Date.now(),
+            check: "it arrived",
+            ...(status.filename ? { document: status.filename } : {}),
+            ...(status.link ? { link: status.link } : {}),
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function ReceiptBlock({ props }: { props: Partial<BlockProps<"receipt">> }) {
   return (
-    <div className="receipt chat-receipt">
+    <div className="receipt chat-receipt" role="status">
       <StateNote state={{ kind: "done", detail: props.text ?? "Done." }} />
+      {props.document &&
+        (props.link ? (
+          <a className="receipt-doc" href={props.link} target="_blank" rel="noreferrer noopener">
+            {props.document}
+          </a>
+        ) : (
+          <span className="receipt-doc">{props.document}</span>
+        ))}
       <p className="quiet small">
         {props.at !== undefined ? formatWhen(new Date(props.at).toISOString()) : ""}
         {props.check ? ` · Checked: ${props.check}` : ""}

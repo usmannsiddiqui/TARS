@@ -1,6 +1,7 @@
 // TEST-ONLY: illustrative project-chat threads for the harness scenes (shapes of thread.listThread).
 // Every state the chat can show, plus "play": the real running -> done sequence with real timings.
 import { useEffect, useState } from "react";
+import type { DeliveryStatus } from "../../../packages/domain/src/thread";
 import type { ThreadMessage } from "../../../apps/desktop/src/renderer/Thread";
 import type { ChatActions } from "../../../apps/desktop/src/renderer/ProjectView";
 
@@ -41,6 +42,55 @@ function opening(t0: number, at: number): ThreadMessage {
 }
 
 const user = (id: string, at: number, text: string): ThreadMessage => ({ id, role: "user", text, blocks: [], createdAt: at });
+
+const COPRESENTER = "copresenter@example.com";
+/** TARS's answer to "send it": the approval, with who asked as the suggestion (from the mail's header fields). */
+const askedToSend = (at: number, state: "open" | "approved"): ThreadMessage => ({
+  id: "m2",
+  role: "tars",
+  createdAt: at,
+  blocks: [
+    { id: "work", type: "work", props: { steps: [{ id: "read", label: "Reading your message", doneLabel: "Read your message", status: "done", startedAt: at, endedAt: at + 1_400 }] } },
+    { id: "say", type: "say", props: { text: "Here is exactly what will go out. Nothing leaves until you press Send it." } },
+    {
+      id: "approval",
+      type: "approval",
+      props: {
+        projectId: "guides",
+        artifactId: "art1",
+        revision: "3",
+        commitmentKey: "guides:send the final slide order to the co-presenter",
+        recipient: COPRESENTER,
+        recipientName: "Co-presenter",
+        replySubject: "Re: Slide order for the 20 November session",
+        subject: "Presenter run-through for the co-presentation",
+        document: title,
+        primary: "Send it",
+        secondary: "Not yet",
+        state,
+      },
+    },
+  ],
+});
+
+/** delivery.status fixtures, on the backend's real wording (convex/delivery.ts). */
+export function deliveryFixture(actionId: string, now: number): DeliveryStatus {
+  const t = now - 9 * S;
+  const base = { recipient: COPRESENTER, subject: "Re: Slide order for the 20 November session", filename: "AI Guides.docx", link: "https://illustrative.convex.site/d/illustrative-token" };
+  const done = (name: "document" | "link" | "send" | "verify", from: number, to: number) => ({ name, state: "done" as const, startedAt: t + from, endedAt: t + to });
+  if (actionId === "act-sending") {
+    return { ...base, state: "running", verified: false, stages: [done("document", 0, 1_300), done("link", 1_300, 1_700), { name: "send", state: "running", startedAt: t + 1_700 }, { name: "verify", state: "pending" }] };
+  }
+  if (actionId === "act-unknown") {
+    return {
+      ...base,
+      state: "unknown",
+      verified: false,
+      stages: [done("document", 0, 1_300), done("link", 1_300, 1_700), { name: "send", state: "unknown", startedAt: t + 1_700, endedAt: t + 8_900, detail: "We could not confirm this was sent. Nothing has been repeated. Check again in the app." }, { name: "verify", state: "pending" }],
+    };
+  }
+  return { ...base, state: "succeeded", verified: true, sentAt: t + 4_100, stages: [done("document", 0, 1_300), done("link", 1_300, 1_700), done("send", 1_700, 4_100), done("verify", 4_100, 6_200)] };
+}
 const readMessage = (at: number, ms: number) => ({ id: "read", label: "Reading your message", doneLabel: "Read your message", status: "done", startedAt: at, endedAt: at + ms });
 const reply = (id: string, at: number, blocks: unknown[]): ThreadMessage => ({ id, role: "tars", createdAt: at, blocks });
 
@@ -73,30 +123,18 @@ export function chatThread(variant: string, now: number): ThreadMessage[] {
         ]),
       ];
     case "approval":
+      return [first, user("u1", later, "Looks good, send it"), askedToSend(later, "open")];
+    case "permission":
       return [
         first,
         user("u1", later, "Looks good, send it"),
-        reply("m2", later, [
-          { id: "work", type: "work", props: { steps: [readMessage(later, 1_400)] } },
-          { id: "say", type: "say", props: { text: "Here is exactly what will go out. Nothing leaves until you press Send it." } },
-          {
-            id: "approval",
-            type: "approval",
-            props: {
-              projectId: "guides",
-              artifactId: "art1",
-              revision: "3",
-              commitmentKey: "guides:send the final slide order to the co-presenter",
-              recipient: "Co-presenter <copresenter@example.com>",
-              subject: "Re: Slide order for the 20 November session",
-              attachment: `${title}, revision 3`,
-              primary: "Send it",
-              secondary: "Keep editing",
-              state: "open",
-            },
-          },
-        ]),
+        askedToSend(later, "open"),
+        reply("m3", later + 20 * S, [{ id: "say", type: "say", props: { text: "Sending from Gmail hasn't been allowed yet. Allow it in Connections → Gmail, then press Send it again." } }]),
       ];
+    case "sending":
+    case "verified":
+    case "unknown":
+      return [first, user("u1", later, "Looks good, send it"), askedToSend(later, "approved"), reply("m3", later + 20 * S, [{ id: "delivery", type: "delivery", props: { actionId: `act-${variant}`, recipient: COPRESENTER } }])];
     case "failed":
       return [
         first,
@@ -148,12 +186,12 @@ export function chatActions(thread: ThreadMessage[], setThread: (next: ThreadMes
       const at = Date.now();
       setThread([
         ...thread.map((m) => ({ ...m, blocks: m.blocks.map((b) => ((b as { type: string }).type === "approval" ? { ...(b as object), props: { ...(b as { props: object }).props, state: "approved" } } : b)) })),
-        reply(`m${at}`, at, [
-          { id: "receipt", type: "receipt", props: { text: `You approved revision ${args.revision}.`, at, check: `Revision ${args.revision} is the current draft.` } },
-          { id: "work", type: "work", props: { steps: [{ id: "send", label: "Waiting for the send to be wired", status: "waiting" }] } },
-        ]),
+        // Illustrative: the harness send goes straight to verified.
+        reply(`m${at}`, at, [{ id: "delivery", type: "delivery", props: { actionId: "act-verified", recipient: args.recipient } }]),
       ]);
     },
     retry: async (messageId) => record("retry", messageId),
+    useDeliveryStatus: (actionId) => deliveryFixture(actionId, Date.now()),
+    checkAgain: async (actionId) => record("reconcileAction", actionId),
   };
 }

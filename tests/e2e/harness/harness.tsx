@@ -5,12 +5,11 @@ import { record } from "./bridge"; // first: the Composer reads the bridge when 
 import { chatActions, useChatThread } from "./chat";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ActingActions } from "../../../apps/desktop/src/renderer/Act";
 import { Connections, type CloudActions } from "../../../apps/desktop/src/renderer/Connections";
 import { Home } from "../../../apps/desktop/src/renderer/Home";
 import { HelperCards, type HelperActions } from "../../../apps/desktop/src/renderer/Helpers";
 import { MemoryView } from "../../../apps/desktop/src/renderer/MemoryView";
-import type { Brief, Commitment, Evidence, Fact, HelperRun, PetState, ProjectSummary, Receipt, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
+import type { Brief, Commitment, Evidence, Fact, HelperRun, PetState, ProjectSummary, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
 import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
@@ -218,30 +217,6 @@ function useEditor(): { artifact: ArtifactView; editor: EditorActions } {
   };
 }
 
-function useActing(variant: string): { receipt: Receipt | null; acting: ActingActions } {
-  const [receipt, setReceipt] = useState<Receipt | null>(null);
-  return {
-    receipt,
-    acting: {
-      execute: async (intent, saved) => {
-        record("executeIntent", { kind: intent.kind, destination: intent.destination, revision: saved.revision, ...(intent.taskId ? { taskId: intent.taskId } : {}) });
-        const next: Receipt =
-          variant === "unknown"
-            ? { id: "act-1", kind: intent.kind, destination: intent.destination, revision: saved.revision, state: "unknown", logState: "not-due", reason: "timeout" }
-            : { id: "act-1", kind: intent.kind, destination: intent.destination, revision: saved.revision, state: "succeeded", verifiedAt: new Date().toISOString(), externalId: "illustrative-message-1", logState: "failed" };
-        setReceipt(next);
-        return { status: "receipt", receipt: next };
-      },
-      // Illustrative: the provider still cannot say, so the receipt stays unknown.
-      reconcile: async (id) => record("reconcileAction", id),
-      retryLog: async (id) => (record("appendOutcomeLog", id), setReceipt((r) => r && { ...r, logState: "written" })),
-      setLogDestination: async (kind, target) => record("setLogDestination", kind, target),
-      notes: { sources: [{ id: "src-notes", name: "HackUmass vault", cloudProcessing: true }], designate: async (id) => (record("designateLogNote", id), { target: "note-illustrative", name: "AI Guides log.md" }) },
-      sendConsent: { blocked: "This build cannot open your browser for the provider's sign-in page yet. Nothing was sent." },
-    },
-  };
-}
-
 const cloudActions: CloudActions = {
   onConnect: async (provider, form) => record("connect", provider, { projectId: form.projectId, selectors: form.selectors, writeTargets: form.writeTargets }),
   onRefresh: async (row) => record("refresh", row.id),
@@ -313,7 +288,6 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const [session, setSession] = useState<SessionState>("idle");
   // As the subscription would: a brief reported as shown comes back delivered.
   const [delivered, setDelivered] = useState<string[]>([]);
-  const { receipt, acting } = useActing(variant);
   const [focus, setFocus] = useState("guides");
   const [stopped, setStopped] = useState(false);
   const [pet, setPet] = useState(true);
@@ -369,7 +343,6 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           key={project.id}
           projectId={project.id}
           name={project.name}
-          logDestination={variant === "unknown" ? null : { kind: "notion", label: "8f2c…a41" }}
           isFocus={project.id === focus}
           {...(route.mode ? { mode: route.mode } : {})}
           {...(project.prepared ? { prepared: project.prepared } : {})}
@@ -378,8 +351,6 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           commitments={project.commitments}
           artifact={project.id === "guides" ? artifact : null}
           editor={editor}
-          receipt={receipt}
-          acting={acting}
           sharing={{ state: null, share: async (r) => record("share", r), update: async (r) => record("updateShare", r), stop: async () => record("stopSharing") }}
           onReportDone={async (taskId) => record("reportDone", taskId)}
           onMakeFocus={() => pick(project.id)}

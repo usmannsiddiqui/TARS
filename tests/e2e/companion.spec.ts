@@ -567,25 +567,46 @@ test("keyboard-only main path with visible focus", async () => {
   expect(await style(page, "*:focus", "outlineStyle")).toBe("solid");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("AI Guides");
-  // Help me start lands focus on the one small step.
-  await expect(page.locator(".step")).toBeFocused();
-  await expect(page.locator(".step")).toHaveText("Open slides 9–18 and time the demo section against 25 minutes.");
-  // Ask for a revision, then undo it, without a mouse.
-  await tabTo(page, "Tell me what to change");
+  // The project is its chat: TARS's first message is in the thread, the composer is one Tab path away.
+  const thread = page.getByRole("list", { name: "Conversation with TARS" });
+  await expect(thread).toContainText("Tell me what to change, or send it.");
+  await tabTo(page, "Message TARS");
   await page.keyboard.type("Make the demo shorter");
-  await tabTo(page, "Revise");
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("status")).toContainText("Changed: Shortened the live demo to 7 minutes.");
-  await page.getByRole("status").getByRole("button", { name: "Undo" }).focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("status")).toContainText("Restored revision 3.");
+  await page.keyboard.press("Enter"); // Return sends
+  await expect(thread.getByRole("listitem").filter({ hasText: "Make the demo shorter" })).toHaveCount(1);
   // Help me start is the user's explicit session start; nothing else ran besides what they asked.
   expect(await calls(page)).toEqual([
     ["markDelivered", "morning:2026-11-14", "panel"],
     ["session", "start"],
-    ["revise", "Make the demo shorter", "3"],
-    ["undo", "4", "3"],
+    ["sendMessage", "Make the demo shorter"],
   ]);
+  await page.close();
+});
+
+test("keyboard-only approval: the suggested recipient, Tab to Send it, the send followed to its receipt", async () => {
+  const page = await scene("project-approval");
+  const approval = page.getByRole("region", { name: "Before it goes out" });
+  // Exactly what will happen is on screen before anything leaves; the recipient is a suggestion he can change.
+  await expect(approval).toContainText("A Word document of “Presenter run-through for the co-presentation”, revision 3, sent as a link by email.");
+  const to = approval.getByLabel("To");
+  await expect(to).toHaveValue("copresenter@example.com");
+  await expect(approval).toContainText("Co-presenter, who asked");
+  await expect(approval).toContainText("Re: Slide order for the 20 November session");
+  await to.focus();
+  expect(await style(page, "*:focus", "outlineStyle")).toBe("solid");
+  // An empty field cannot be sent; it says why, in words.
+  await to.fill("");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter");
+  await expect(approval).toContainText("Add the address to send it to.");
+  expect((await calls(page)).filter((c) => c[0] === "approve")).toEqual([]);
+  await to.fill("copresenter@example.com");
+  // ⌘↵ is the primary action's shortcut; it never fires from a composer with words in it.
+  await page.keyboard.press("Meta+Enter");
+  expect((await calls(page)).filter((c) => c[0] === "approve")).toEqual([
+    ["approve", { projectId: "guides", artifactId: "art1", revision: "3", commitmentKey: "guides:send the final slide order to the co-presenter", recipient: "copresenter@example.com" }],
+  ]);
+  await expect(page.getByRole("status").filter({ hasText: "Checked: it arrived" })).toBeVisible();
   // How to stop is always one key path away.
   await page.locator("body").focus();
   await tabTo(page, "Stop for now");
@@ -685,60 +706,39 @@ test("stop_for_now_starts_nothing", async () => {
   await page.close();
 });
 
-// ---- T10 (harness: executeIntent and receipts are Convex actions; no test triggers a real send).
+// ---- Sending from the chat (harness: thread.send and delivery.status are Convex; no test triggers a real send).
 
-async function send(page: Page) {
-  const act = page.getByRole("region", { name: "Send or update" });
-  await act.getByLabel("Recipient email address").fill("copresenter@example.com");
-  // The destination and revision are on the button before the click; the click is the approval.
-  await act.getByRole("button", { name: "Send revision 3 to copresenter@example.com" }).click();
-  return act;
-}
-
-test("completion_shows_done_next_and_stop_equally", async () => {
-  const page = await scene("project");
+test("completion_shows_the_receipt_and_stop_equally_clear", async () => {
+  const page = await scene("project-approval");
   let dialogs = 0;
   page.on("dialog", () => void dialogs++);
-  const act = await send(page);
-  const receipt = act.getByRole("status", { name: "What happened" });
-  await expect(receipt).toContainText("Sent to copresenter@example.com, verified");
-  // The win above is brought into view by focus; Tab then reaches its two equal choices.
-  // (activeElement, not toBeFocused: several harness windows are open, so this one may not hold OS focus.)
-  await expect.poll(() => page.evaluate(() => (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id)).toBe("done-h");
-  await expect(receipt).toContainText("found in your sent mail with the same recipient and text");
-  // The log is its own state; retrying it never sends again.
-  await expect(receipt).toContainText("Outcome log not written");
-  await receipt.getByRole("button", { name: "Retry log" }).click();
-  await expect(receipt).toContainText("Outcome logged.");
-
-  const done = page.getByRole("region", { name: "Done" });
-  await expect(done).toContainText("Sent to copresenter@example.com, verified.");
-  const buttons = done.getByRole("button");
-  await expect(buttons).toHaveText(["Optional next: Run through the AI Studio demo for the co-presentation", "Stop for now"]);
-  const [next, stop] = [await buttons.nth(0).boundingBox(), await buttons.nth(1).boundingBox()];
-  expect(Math.abs(next!.width - stop!.width)).toBeLessThan(1);
-  expect(Math.abs(next!.height - stop!.height)).toBeLessThan(1);
-  expect(await buttons.nth(0).getAttribute("class")).toBe(await buttons.nth(1).getAttribute("class"));
+  const approval = page.getByRole("region", { name: "Before it goes out" });
+  await approval.getByRole("button", { name: /^Send it/ }).click();
+  // The send is followed in the thread to a checked receipt: who, what, the document as a link, when, checked.
+  const receipt = page.getByRole("status").filter({ hasText: "Checked: it arrived" });
+  await expect(receipt).toContainText("Sent to copresenter@example.com: “Re: Slide order for the 20 November session”");
+  await expect(receipt.getByRole("link", { name: "AI Guides.docx" })).toHaveAttribute("href", /\/d\//);
+  await expect(page.getByRole("region", { name: "Approved" })).toBeVisible();
+  // The receipt and the way to stop are both on screen at once, neither behind the other.
+  const stop = page.getByRole("button", { name: "Stop for now" });
+  await expect(receipt).toBeInViewport();
+  await expect(stop).toBeInViewport();
   expect(dialogs).toBe(0);
-  // Nothing started on its own.
-  expect((await calls(page)).map((c) => c[0])).toEqual(["executeIntent", "appendOutcomeLog"]);
-  await buttons.nth(1).click();
+  // Nothing started on its own: one approval, nothing sent twice.
+  expect((await calls(page)).map((c) => c[0])).toEqual(["approve"]);
+  await stop.click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Stopped for now.");
   expect((await calls(page)).at(-1)).toEqual(["session", "stop"]);
   await page.close();
 });
 
-test("unknown_send_offers_check_not_resend", async () => {
+test("unknown_send_offers_check_again_never_a_resend", async () => {
   const page = await scene("project-unknown");
-  const act = await send(page);
-  const receipt = act.getByRole("status", { name: "What happened" });
-  await expect(receipt).toContainText("We could not confirm this was sent. Nothing has been resent.");
-  await expect(receipt.getByRole("button")).toHaveText(["Check again"]);
-  await expect(act.getByRole("button", { name: /^Send revision/ })).toBeDisabled();
-  await expect(act).toContainText("Check the last one first. Sending again could deliver it twice.");
-  await receipt.getByRole("button", { name: "Check again" }).click();
-  const names = (await calls(page)).map((c) => c[0]);
-  expect(names).toEqual(["executeIntent", "reconcileAction"]);
+  const work = page.getByRole("region", { name: /^Not confirmed after/ });
+  await expect(work).toContainText("We could not confirm this was sent. Nothing has been repeated. Check again in the app.");
+  await expect(work.getByRole("button", { name: /Send/ })).toHaveCount(0);
+  await work.getByRole("button", { name: "Check again" }).click();
+  expect((await calls(page)).map((c) => c[0])).toEqual(["reconcileAction"]);
   await page.close();
 });
 
@@ -845,20 +845,9 @@ test("ui_shots", async () => {
     await page.screenshot({ path: join(SHOTS, `harness-${file}-1200x1300.png`) });
     await page.close();
   }
-  {
-    const page = await scene("project");
-    const act = await send(page);
-    await expect(act.getByRole("status", { name: "What happened" })).toContainText("verified");
-    await page.screenshot({ path: join(SHOTS, "harness-completion-1200x800.png") });
-    await act.scrollIntoViewIfNeeded();
-    await act.screenshot({ path: join(SHOTS, "harness-action-verified.png") });
-    await page.close();
-  }
-  {
-    const page = await scene("project-unknown");
-    const act = await send(page);
-    await expect(act.getByRole("status", { name: "What happened" })).toContainText("could not confirm");
-    await act.screenshot({ path: join(SHOTS, "harness-action-unknown.png") });
+  for (const name of ["verified", "unknown"]) {
+    const page = await scene(`project-${name}`);
+    await page.screenshot({ path: join(SHOTS, `harness-send-${name}-1200x800.png`) });
     await page.close();
   }
   {
