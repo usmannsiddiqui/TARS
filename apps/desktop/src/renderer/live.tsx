@@ -6,6 +6,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
 import type { HoldKeyStatus, PanelShowing } from "../preload/index";
+import type { BrainDumpProps, DumpView } from "./BrainDump";
 import { Connections, type CloudActions, type LocalKind, type SelfTextActions, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
 import type { HelperActions } from "./Helpers";
@@ -271,6 +272,55 @@ export function useHelpers(): { helpers: HelperRun[]; helperActions: HelperActio
       onRetry: async (projectId) => void (await prepare({ projectId })),
       onDismiss: async (projectId) => void (await dismiss({ projectId })),
     },
+  };
+}
+
+// ---- Brain dump: sort the capture just saved, then show its lines by subscription.
+
+/** One sort per saved capture, only while signed in with the cloud reachable; a failure keeps the capture on the Mac. */
+export function useBrainDump(): BrainDumpProps {
+  const cloud = useCloud();
+  const projects = useQuery(api.projects.listProjects, cloud.ready ? {} : "skip");
+  const sort = useAction(api.captures.sortCapture);
+  const move = useMutation(api.captures.moveItem);
+  const setKind = useMutation(api.captures.setItemKind);
+  const remove = useMutation(api.captures.removeItem);
+  const [capture, setCapture] = useState<{ id: string; text: string } | null>(null);
+  const [run, setRun] = useState<"sorting" | "sorted" | { failed: string } | null>(null);
+  const lines = useQuery(api.captures.listCaptureItems, cloud.ready && capture && run === "sorted" ? { captureId: capture.id } : "skip");
+  const go = useCallback(
+    (c: { id: string; text: string }) => {
+      if (!cloud.ready) return setRun({ failed: "TARS is offline or signed out right now." });
+      setRun("sorting");
+      sort({ captureId: c.id, text: c.text }).then(
+        (r) => setRun(r.status === "sorted" ? "sorted" : { failed: `the sorting model did not answer (${r.code}).` }),
+        (err: unknown) => setRun({ failed: `${reason(err)}.` }),
+      );
+    },
+    [cloud.ready, sort],
+  );
+  const view: DumpView | undefined =
+    run === null
+      ? undefined
+      : run === "sorted"
+        ? lines === undefined
+          ? { kind: "sorting", projects: projects?.length ?? 0 }
+          : { kind: "sorted", lines }
+        : run === "sorting"
+          ? { kind: "sorting", projects: projects?.length ?? 0 }
+          : { kind: "failed", detail: run.failed };
+  return {
+    cloud: cloud.ready,
+    projects: projects ?? [],
+    ...(view ? { view } : {}),
+    onSaved: (id, text) => {
+      setCapture({ id, text });
+      go({ id, text });
+    },
+    onRetry: () => capture && go(capture),
+    onMove: async (itemId, projectId) => void (await move({ itemId: itemId as Id<"captureItems">, projectId })),
+    onSetKind: async (itemId, kind) => void (await setKind({ itemId: itemId as Id<"captureItems">, kind })),
+    onRemove: async (itemId) => void (await remove({ itemId: itemId as Id<"captureItems"> })),
   };
 }
 
@@ -761,6 +811,7 @@ export function PanelLive() {
   usePointerOver();
   const ctx = useCompanionContext(shown.projectId);
   const helpers = useHelpers();
+  const brainDump = useBrainDump();
   const work = ctx.prepared?.work;
   // Only the app window records a return; opening the panel must not move "since you were last here".
   const today = useToday({ recordReturn: false });
@@ -781,6 +832,7 @@ export function PanelLive() {
       key={shown.at}
       capture={shown.capture}
       {...(shown.transcript ? { transcript: shown.transcript } : {})}
+      brainDump={brainDump}
       petState={ctx.petState}
       {...helpers}
       now={Date.now()}
