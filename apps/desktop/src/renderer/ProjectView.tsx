@@ -4,7 +4,7 @@
 // in one place only: the approval in the thread. Presentational: data and actions arrive as props.
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { DeliveryStatus } from "@companion/domain/thread";
+import { stripEvidenceIds, type DeliveryStatus } from "@companion/domain/thread";
 import { Composer } from "./Composer";
 import { PaneSlot } from "./Shell";
 import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type ThreadMessage } from "./model";
@@ -44,6 +44,10 @@ export type ChatActions = {
   useDeliveryStatus(actionId: string): DeliveryStatus | undefined;
   /** Look an unconfirmed send up again; never resends. */
   checkAgain(actionId: string): Promise<void>;
+  /** A hook: whether sending from this source is allowed. */
+  useSendingState(sourceId: string): "allowed" | "not-allowed" | undefined;
+  /** His consent to send from this source; it sends nothing. */
+  allowSend(sourceId: string): Promise<void>;
 };
 
 export type ProjectViewProps = {
@@ -151,6 +155,8 @@ export function ProjectView(props: ProjectViewProps) {
                 onUndo: async (artifactId, expectedCurrent, undoRevision) => void (artifactId === props.artifact?.id && (await props.editor.undo(expectedCurrent, undoRevision))),
                 useDeliveryStatus: props.chat.useDeliveryStatus,
                 onCheckAgain: props.chat.checkAgain,
+                useSendingState: props.chat.useSendingState,
+                onAllowSend: props.chat.allowSend,
               }}
             />
           )}
@@ -161,7 +167,7 @@ export function ProjectView(props: ProjectViewProps) {
       {pane.slot &&
         createPortal(
           <div className="pane-project" ref={draftRef}>
-            <RunThrough artifact={props.artifact} canCreate={work !== undefined} editor={props.editor} sharing={props.sharing} />
+            <RunThrough artifact={props.artifact && { ...props.artifact, text: stripEvidenceIds(props.artifact.text) }} canCreate={work !== undefined} editor={props.editor} sharing={props.sharing} />
             <details className="open-items">
               <summary>
                 Open items {openItems !== undefined && <span className="count num">{openItems}</span>}

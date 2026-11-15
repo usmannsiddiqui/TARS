@@ -63,6 +63,15 @@ describe("cloudRow", () => {
     });
   });
 
+  it("says honestly whether sending is allowed, only where sending exists", () => {
+    const gmail = { provider: "gmail" as const, name: "Gmail", coverage: "Selected labels." };
+    const row = (sending?: "allowed" | "not-allowed") => cloudRow(gmail, [{ ...base, provider: "gmail", state: "active", broker: "composio", ...(sending ? { sending } : {}) }], nameOf);
+    expect(row("allowed").sending).toBe("allowed");
+    expect(row("not-allowed").sending).toBe("not-allowed");
+    expect(row().sending).toBeUndefined();
+    expect(cloudRow(gmail, [], nameOf).sending).toBeUndefined(); // not connected: nothing to allow yet
+  });
+
   it("says how a Composio source was last checked", () => {
     const via = (checkedVia: "pushed" | "opened") => cloudRow(slack, [{ ...base, state: "active", broker: "composio", checkedVia }], nameOf).status;
     expect(via("pushed")).toEqual({ kind: "last-checked", at: base.lastCheckedAt, detail: "pushed by Composio" });

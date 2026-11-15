@@ -136,9 +136,11 @@ describe("TARS speaks first", () => {
     const artifact = await s.asAlice.query(api.artifacts.getArtifact, { projectId: s.budget });
     expect(blockOf(first!, "document")).toMatchObject({ artifactId: artifact!.id, title: "Budget for Dana", revision: "1" });
     const say = blockOf(first!, "say").text as unknown as string;
-    expect(say).toContain("Send the budget to Dana");
-    expect(say).toContain("Saturday 5:00 PM");
-    expect(say).toMatch(/Tell me what to change, or send it\.$/);
+    // Plain words from stored data: who (the mail's From field), what (no quote), when (his zone), from what, the question.
+    // The run read one item, the request itself, so TARS says it only had that to go on.
+    expect(say).toBe(
+      "Dana Reyes asked for the budget. It's due Saturday at 5:00 PM. I only have the request to go on, so the draft marks what I need from you. Tell me what to change, or send it.",
+    );
     // The nudge it raised names this project, so clicking it opens this chat.
     expect(await s.asAlice.query(api.briefs.getAttentionState, {})).toMatchObject({ key: expect.stringMatching(/^nudge:/), projectId: s.budget });
 
@@ -180,8 +182,10 @@ describe("he answers in the chat", () => {
   test("looks_good_send_it_shows_an_approval_built_from_stored_data_and_sends_nothing", async () => {
     const s = await setup();
     await s.opening();
-    stubModel([reply({ outcome: "approve", reply: "Here is exactly what will go out." })]);
+    // Whatever the model says on approve is never shown: one fixed line.
+    stubModel([reply({ outcome: "approve", reply: "The draft is approved for sending. The app will show the recipient and content from its records." })]);
     await s.asAlice.action(api.thread.sendMessage, { projectId: s.budget, text: "looks good, send it" });
+    expect(blockOf((await s.thread()).at(-1)!, "say")).toEqual({ text: "Here is exactly what will go out. Nothing leaves until you press Send it." });
 
     const answer = (await s.thread()).at(-1)!;
     expect(types(answer)).toEqual(["work", "say", "approval"]);

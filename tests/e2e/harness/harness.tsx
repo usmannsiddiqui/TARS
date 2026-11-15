@@ -2,7 +2,7 @@
 // and for behaviour that needs cloud data no test can sign in to yet. Never part of the product
 // bundle (it lives under tests/ and is served only by the e2e spec's own Vite server).
 import { record } from "./bridge"; // first: the Composer reads the bridge when it loads
-import { chatActions, useChatThread } from "./chat";
+import { chatActions, useChatThread, useSendingFixture } from "./chat";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Connections, type CloudActions } from "../../../apps/desktop/src/renderer/Connections";
@@ -231,6 +231,7 @@ const cloudActions: CloudActions = {
   onPause: async (row) => record("pauseCloud", row.id),
   onResume: async (row) => record("resumeCloud", row.id),
   onRevoke: async (row) => record("revokeCloud", row.id),
+  onAllowSend: async (row) => record("allowSend", row.id),
   notionWebhookUrl: (id) => `https://illustrative-deployment.convex.site/notion/events?source=${id}`,
   revealNotionToken: async (id) => (record("revealNotionToken", id), "secret_illustrative_verification_token"),
 };
@@ -369,6 +370,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const [pet, setPet] = useState(true);
   const { artifact, editor } = useEditor();
   const [thread, setThread] = useChatThread(variant, NOW.getTime());
+  const sendingFixture = useSendingFixture();
   const pick = (id: string) => {
     if (id === focus) return; // as App.tsx: picking the current focus changes nothing
     record("switchProject", { targetProjectId: id, userInitiated: true });
@@ -455,7 +457,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           {...(route.mode ? { mode: route.mode } : {})}
           {...(project.prepared ? { prepared: project.prepared } : {})}
           thread={project.id === "guides" ? thread : []}
-          chat={chatActions(thread, setThread, record)}
+          chat={chatActions(thread, setThread, record, sendingFixture)}
           commitments={project.commitments}
           artifact={project.id === "guides" ? artifact : null}
           editor={editor}

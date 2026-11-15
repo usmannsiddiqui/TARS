@@ -4,7 +4,7 @@ import { useId, useState, type FormEvent } from "react";
 import { gmailSelectors, parseRepositories, parseSlackChannels, type ParsedSelectors } from "../../../../packages/domain/src/composio";
 import { kindOfName, SourceLogo } from "./logos";
 import type { CloudProvider, Honest, SourceRow } from "./model";
-import { reason, StateNote } from "./ui";
+import { AllowSending, reason, StateNote } from "./ui";
 
 export type LocalKind = "obsidian" | "claude-code" | "codex";
 
@@ -69,6 +69,8 @@ export type CloudActions = {
   onPause(row: SourceRow): Promise<void>;
   onResume(row: SourceRow): Promise<void>;
   onRevoke(row: SourceRow): Promise<void>;
+  /** The separate permission to send from this connected account (Composio Gmail); it sends nothing. */
+  onAllowSend(row: SourceRow): Promise<void>;
   notionWebhookUrl(sourceId: string): string;
   revealNotionToken(sourceId: string): Promise<string>;
 };
@@ -545,6 +547,7 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
         </p>
       )}
       {row.state === "paused" && <p className="small">Paused: nothing new is read until you resume. What was read stays stored.</p>}
+      {provider === "gmail" && row.sending && <AllowSending account={row.name} state={row.sending} onAllow={() => cloud.onAllowSend(row)} />}
 
       {row.state === "off" && step === "idle" && (
         <>

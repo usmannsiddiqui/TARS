@@ -5,7 +5,9 @@
 // is decided here once (primaryBlockId), never by a block. Presentational: data and actions arrive as props.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import {
+  blockHasContent,
   deliverySteps,
+  stripEvidenceIds,
   formatDuration,
   isMailAddress,
   primaryBlockId,
@@ -19,7 +21,7 @@ import {
 import { SortedDump, type BrainDumpProps } from "./BrainDump";
 import { SourceChip, SourceLogo } from "./logos";
 import { rowTime, type ThreadMessage } from "./model";
-import { formatWhen, reason, scrollWithin, SOURCE_NAME, StateNote, StateTag } from "./ui";
+import { AllowSending, formatWhen, reason, scrollWithin, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type ApproveArgs = { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string };
 /** Each screen passes the actions its blocks can emit; a block whose action is absent offers nothing to press. */
@@ -41,6 +43,10 @@ export type ThreadActions = {
   onChoose?(askId: string, choiceId: string): Promise<void>;
   /** Today: the sorted brain dump's Fix and Sort again. */
   dump?: BrainDumpProps;
+  /** A hook: whether sending from this source is allowed (undefined while loading). */
+  useSendingState?(sourceId: string): "allowed" | "not-allowed" | undefined;
+  /** The user's consent to send from this source (composio.allowSend); it never sends. */
+  onAllowSend?(sourceId: string): Promise<void>;
 };
 
 const noStatus = () => undefined;
@@ -111,6 +117,7 @@ export function Thread({ messages, actions, label = "Conversation with TARS" }: 
 }
 
 function BlockSlot({ block, messageId, actions, primary, arrived }: { block: BlockView; messageId: string; actions: ThreadActions; primary: boolean; arrived: boolean }) {
+  if (!blockHasContent(block)) return null; // nothing to show: no empty card
   return (
     <div className="block-slot" data-type={block.type} data-new={arrived ? "" : undefined}>
       {block.type === "work" ? (
@@ -123,6 +130,8 @@ function BlockSlot({ block, messageId, actions, primary, arrived }: { block: Blo
         <ApprovalBlock props={block.props} complete={block.complete} actions={actions} primary={primary} />
       ) : block.type === "receipt" ? (
         <ReceiptBlock props={block.props} />
+      ) : block.type === "allowSend" && block.props.sourceId ? (
+        <AllowSendBlock sourceId={block.props.sourceId} account={block.props.account ?? "Gmail"} actions={actions} />
       ) : block.type === "delivery" && block.props.actionId ? (
         <DeliveryBlock actionId={block.props.actionId} actions={actions} />
       ) : block.type === "results" ? (
@@ -464,7 +473,7 @@ function DocumentBlock({ props, actions }: { props: Partial<BlockProps<"document
 function SayBlock({ props }: { props: Partial<BlockProps<"say">> }) {
   return (
     <div className="say">
-      <p className="say-text">{props.text ?? <span className="quiet">…</span>}</p>
+      <p className="say-text">{props.text ? stripEvidenceIds(props.text) : <span className="quiet">…</span>}</p>
       {props.sources && props.sources.length > 0 && (
         <p className="say-sources" aria-label="From your sources">
           {props.sources.map((s) => (
@@ -568,6 +577,13 @@ function ApprovalBlock({ props, complete, actions, primary }: { props: Partial<B
       {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
     </section>
   );
+}
+
+/** The permission to send, asked where he is; after it, he presses Send it on the approval himself. */
+function AllowSendBlock({ sourceId, account, actions }: { sourceId: string; account: string; actions: ThreadActions }) {
+  const state = (actions.useSendingState ?? noStatus)(sourceId);
+  const allow = actions.onAllowSend;
+  return <AllowSending account={account} state={state} {...(allow ? { onAllow: () => allow(sourceId) } : {})} next="Press Send it on the approval above." />;
 }
 
 /** One approved send, followed live: its four real stages, then the receipt once it is checked. */
