@@ -84,7 +84,7 @@ const cloudOff: SourceRow[] = [
   { id: "slack", provider: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom.", group: "cloud", state: "off" },
   { id: "gmail", provider: "gmail", name: "Gmail", coverage: "Selected project labels and threads.", group: "cloud", state: "off" },
   { id: "notion", provider: "notion", name: "Notion", coverage: "Pages you share with the app, and the outcome log you choose.", group: "cloud", state: "off" },
-  { id: "canvas", provider: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh.", group: "cloud", state: "off" },
+  { id: "canvas", provider: "canvas", name: "Canvas", coverage: "Your Canvas calendar: assignment due dates and course events. Checked when you connect and when you press Refresh.", group: "cloud", state: "off" },
   { id: "outlook-mail", provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select.", group: "cloud", state: "off" },
   { id: "outlook-calendar", provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting.", group: "cloud", state: "off" },
 ];

@@ -484,7 +484,7 @@ const CLOUD: { provider: CloudProvider; name: string; coverage: string }[] = [
   { provider: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom." },
   { provider: "gmail", name: "Gmail", coverage: "Your inbox, or only the labels you choose." },
   { provider: "notion", name: "Notion", coverage: "Pages you share with the app, and the outcome log you choose." },
-  { provider: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh." },
+  { provider: "canvas", name: "Canvas", coverage: "Your Canvas calendar: assignment due dates and course events. Checked when you connect and when you press Refresh." },
   { provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select." },
   { provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting." },
   { provider: "teams", name: "Microsoft Teams", coverage: "Connects now; new Teams messages cannot arrive yet, because Composio has no Teams message trigger." },
@@ -616,7 +616,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       try {
         const credential = form.credential ?? "";
         if (provider === "notion") await connectNotion({ sourceId: grant.id, token: credential });
-        else if (provider === "canvas") await connectCanvas({ sourceId: grant.id, baseUrl: form.baseUrl ?? "", token: credential });
+        else if (provider === "canvas") await connectCanvas({ sourceId: grant.id, feedLink: credential });
         // Sign-in pages open in the system browser; the connection appears when its callback lands.
         else if (viaComposio(provider)) await window.companion.openExternalAuth(await startComposio({ sourceId: grant.id, kind: provider }));
         else await window.companion.openExternalAuth(await startOutlook({ sourceId: grant.id }));

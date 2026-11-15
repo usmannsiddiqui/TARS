@@ -205,8 +205,8 @@ const longAgo = ["UID:event-assignment-300", "DTSTART:20261020T045900Z", "SUMMAR
 const broken = ["UID:event-assignment-404", "DTSTART:not-a-date", "SUMMARY:Broken"];
 
 /** Answers only the feed link; records every URL fetched and the redirect mode asked for. */
-function stubFeed(respond: () => Response | Promise<Response>): { urls: string[]; redirects: (RequestRedirect | undefined)[] } {
-  const seen = { urls: [] as string[], redirects: [] as (RequestRedirect | undefined)[] };
+function stubFeed(respond: () => Response | Promise<Response>): { urls: string[]; redirects: RequestInit["redirect"][] } {
+  const seen = { urls: [] as string[], redirects: [] as RequestInit["redirect"][] };
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input.toString();
     seen.urls.push(url);
@@ -441,7 +441,7 @@ describe("canvas calendar feed", () => {
   test("the feed link is never returned, stored in the clear, or put in evidence", async () => {
     const ctx = await setup("canvas");
     stubFeed(() => ics(feed([essay(), fieldTrip])));
-    const results = [await connectFeed(ctx), await ctx.asAlice.action(api.connectors.canvas.refreshByUser, { sourceId: ctx.sourceId })];
+    const results: unknown[] = [await connectFeed(ctx), await ctx.asAlice.action(api.connectors.canvas.refreshByUser, { sourceId: ctx.sourceId })];
     results.push(await ctx.asAlice.query(api.connections.listConnections, {}));
     results.push(await ctx.asAlice.query(api.evidence.listCurrentEvidence, { projectId: ctx.avt.id }));
     const tables = await ctx.t.run(async (db) => Promise.all(Object.keys(schema.tables).map((name) => db.db.query(name as never).collect())));
