@@ -679,6 +679,23 @@ test("reentry_shows_one_action_and_full_backlog", async () => {
   await page.close();
 });
 
+test("the composer is docked under the thread: the last message ends above it", async () => {
+  for (const [name, size] of [
+    ["project-long", { width: 1200, height: 800 }],
+    ["project-long", { width: 960, height: 640 }],
+    ["today-sorted", { width: 1200, height: 800 }],
+    ["today-sorted", { width: 960, height: 640 }],
+  ] as const) {
+    const page = await scene(name, { size });
+    const last = await page.locator(".thread > .msg").last().boundingBox();
+    const composer = await page.locator(".composer-pill").boundingBox();
+    expect(last && composer && last.y + last.height <= composer.y + 0.5, `${name} ${size.width}x${size.height}`).toBe(true);
+    // The recording strip appears only while recording.
+    await expect(page.locator(".composer-pill .tape-window")).toBeHidden();
+    await page.close();
+  }
+});
+
 test("stop_for_now_starts_nothing", async () => {
   const page = await scene("today");
   const session = page.getByRole("group", { name: "Work session" });
