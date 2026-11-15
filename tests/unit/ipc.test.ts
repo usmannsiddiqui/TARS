@@ -433,11 +433,13 @@ describe("ipc router: wired routes", () => {
     expect(sourceCalls).toEqual([["designateLog", alice.ownerId, "s1"]]);
   });
 
-  it("openExternalAuth opens only Google or Microsoft sign-in pages over https", async () => {
+  it("openExternalAuth opens only Google, Microsoft or Composio sign-in pages over https", async () => {
     const { router, systemCalls } = setup(null);
     for (const url of [
       "http://accounts.google.com/o/oauth2",
       "https://accounts.google.com.evil.example/",
+      "https://connect.composio.dev.evil.example/link/ln_1",
+      "https://composio.dev/link/ln_1",
       "https://evil.example/?next=https://accounts.google.com/",
       "https://user@accounts.google.com/",
       "https://accounts.google.com:8443/",
@@ -452,9 +454,11 @@ describe("ipc router: wired routes", () => {
     expect(systemCalls).toEqual([]);
     await router.handle("auth:openExternal", trusted, { url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=x" });
     await router.handle("auth:openExternal", trusted, { url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" });
+    await router.handle("auth:openExternal", trusted, { url: "https://connect.composio.dev/link/ln_1" });
     expect(systemCalls).toEqual([
       ["openExternal", "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"],
       ["openExternal", "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"],
+      ["openExternal", "https://connect.composio.dev/link/ln_1"],
     ]);
   });
 

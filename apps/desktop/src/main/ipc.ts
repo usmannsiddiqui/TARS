@@ -110,8 +110,8 @@ const AcceleratorSchema = z.strictObject({
     .regex(/^(?:(?:Command|Cmd|Control|Ctrl|CommandOrControl|CmdOrCtrl|Alt|Option|Shift|Super|Meta)\+)+[A-Za-z0-9]+$/)
     .refine((a) => /(?:Command|Cmd|Control|Ctrl|CommandOrControl|CmdOrCtrl|Alt|Option|Super|Meta)\+/.test(a)),
 });
-/** Only the two identity providers' own sign-in pages may open in the system browser. */
-const AUTH_ORIGINS = new Set(["https://accounts.google.com", "https://login.microsoftonline.com"]);
+/** Only these sign-in pages may open in the system browser: Google, Microsoft, and Composio's hosted connect link. */
+const AUTH_ORIGINS = new Set(["https://accounts.google.com", "https://login.microsoftonline.com", "https://connect.composio.dev"]);
 const isAuthUrl = (raw: string) => {
   if (!URL.canParse(raw)) return false;
   const url = new URL(raw);
