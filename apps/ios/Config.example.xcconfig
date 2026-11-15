@@ -1,0 +1,5 @@
+// Names only. scripts/make-config.sh writes the real Config.xcconfig (git-ignored) from the repo's .env.local.
+CONVEX_URL =
+AUTH0_DOMAIN =
+AUTH0_CLIENT_ID =
+DEVELOPMENT_TEAM =

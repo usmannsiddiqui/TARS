@@ -1,0 +1,52 @@
+# XcodeGen spec for TARS.xcodeproj. After changing it: `rtk xcodegen generate` in apps/ios.
+name: TARS
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  ConvexMobile:
+    url: https://github.com/get-convex/convex-swift
+    exactVersion: 0.8.2
+configFiles:
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
+targets:
+  TARS:
+    type: application
+    platform: iOS
+    sources: [TARS]
+    dependencies:
+      - package: ConvexMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.tars.companion
+        PRODUCT_NAME: TARS
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: TARS
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIUserInterfaceStyle: Light
+        INFOPLIST_FILE: TARS/Info.plist
+        CODE_SIGN_STYLE: Automatic
+  TARSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [TARSTests]
+    dependencies:
+      - target: TARS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.tars.companion.tests
+        SWIFT_VERSION: "5.0"
+schemes:
+  TARS:
+    build:
+      targets:
+        TARS: all
+        TARSTests: [test]
+    test:
+      targets: [TARSTests]
