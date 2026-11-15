@@ -55,7 +55,8 @@ export type CloudActions = {
   revealNotionToken(sourceId: string): Promise<string>;
 };
 
-const REFRESHABLE: CloudProvider[] = ["canvas", "gmail", "outlook-mail", "outlook-calendar"];
+// Composio-connected cards (Slack, Gmail, Outlook mail, Teams) update only by push; nothing to refresh by hand.
+const REFRESHABLE: CloudProvider[] = ["canvas", "outlook-calendar"];
 
 /** The approved runtime-consent wording (validation/access-and-readiness.md). */
 export const consentText = (source: string) =>
@@ -182,15 +183,16 @@ const stateWord = (row: SourceRow) => ({ off: "Off", on: "On", paused: "Paused",
 
 /** Who runs the service, as the connector card says it. */
 const BY: Record<CloudProvider, string> = {
-  slack: "by Slack",
-  gmail: "by Google",
+  slack: "by Slack, sign-in held by Composio",
+  gmail: "by Google, sign-in held by Composio",
   notion: "by Notion",
   canvas: "by Instructure",
-  "outlook-mail": "by Microsoft",
+  "outlook-mail": "by Microsoft, sign-in held by Composio",
   "outlook-calendar": "by Microsoft",
+  teams: "by Microsoft, sign-in held by Composio",
 };
-/** What TARS may do with it, from what the connect flow asks for: only Notion takes write targets, and mail sending is its own consent. */
-const CAN: Partial<Record<CloudProvider, string>> = { notion: "reads, and updates only pages you allow", gmail: "reads; sends only if you allow it", "outlook-mail": "reads; sends only if you allow it" };
+/** What TARS may do with it, from what the connect flow asks for: only Notion takes write targets, and sending is its own consent. */
+const CAN: Partial<Record<CloudProvider, string>> = { notion: "reads, and updates only pages you allow", gmail: "reads; sends only if you allow it", slack: "reads; posts only if you allow it" };
 
 // Local rows carry no kind, but their names start with the kind's display name ("Notes folder: HackUmass vault").
 const kindOf = (row: SourceRow) => row.provider ?? (row.group === "optional" ? "observation" : kindOfName(row.name.split(": ")[0] ?? ""));
@@ -383,16 +385,17 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
 
 type Fields = { credential?: string; selectors: string; writeTargets?: string; baseUrl?: string; /** OAuth: whose sign-in page opens. */ signIn?: string };
 const FIELDS: Record<CloudProvider, Fields> = {
-  slack: { credential: "Bot token from your Slack app", selectors: "Channel IDs to read, separated by commas" },
+  slack: { selectors: "Channel IDs to read, separated by commas", signIn: "Composio" },
   notion: {
     credential: "Internal integration token",
     selectors: "Page IDs to read, separated by commas",
     writeTargets: "Page IDs TARS may write to, separated by commas (optional, for updates and the outcome log)",
   },
   canvas: { baseUrl: "Your Canvas address (https://…)", credential: "Canvas access token", selectors: "Course IDs to read, separated by commas" },
-  gmail: { selectors: "Gmail label IDs to read, separated by commas", signIn: "Google" },
-  "outlook-mail": { selectors: "Mail folder IDs to read, separated by commas", signIn: "Microsoft" },
+  gmail: { selectors: "Gmail label IDs to read, separated by commas", signIn: "Composio" },
+  "outlook-mail": { selectors: "Mail folder IDs to read, separated by commas", signIn: "Composio" },
   "outlook-calendar": { selectors: "Calendar IDs to read, separated by commas", signIn: "Microsoft" },
+  teams: { selectors: "Teams chat IDs, separated by commas", signIn: "Composio" },
 };
 const list = (text: string) => text.split(",").map((s) => s.trim()).filter((s) => s !== "");
 
@@ -560,7 +563,9 @@ function CloudConnectForm(props: {
       )}
       <p>{consentText(props.name)}</p>
       <p className="quiet small">
-        {props.fields.signIn
+        {props.fields.signIn === "Composio"
+          ? `Composio's sign-in page opens in your browser. Composio holds your ${props.name} sign-in for TARS; TARS keeps only which account it is. Reading only; sending is a separate permission asked for later.`
+          : props.fields.signIn
           ? `${props.fields.signIn}'s sign-in page opens in your browser. Reading only; sending is a separate permission asked for later.`
           : "The token is sent once to the cloud, sealed there, and never kept on this Mac."}
       </p>

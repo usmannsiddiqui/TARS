@@ -190,7 +190,7 @@ function TodayLines({ today, now, step }: { today: { hard: HardItem[]; start?: s
 
 /** The last instructed action, honestly: unknown is never shown as sent or as failed. */
 function ReceiptLine({ receipt }: { receipt: Receipt }) {
-  const sent = receipt.kind === "send-mail";
+  const sent = receipt.kind !== "update-note"; // an email or a Slack post
   const where = `${sent ? "to " : ""}${receipt.destination}`;
   const state: Honest =
     receipt.state === "succeeded"

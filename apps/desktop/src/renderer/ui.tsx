@@ -23,6 +23,7 @@ export const SOURCE_NAME: Record<string, string> = {
   canvas: "Canvas",
   "outlook-mail": "Outlook mail",
   "outlook-calendar": "Outlook calendar",
+  teams: "Microsoft Teams",
   obsidian: "Notes folder",
   "claude-code": "Claude Code sessions",
   codex: "Codex sessions",

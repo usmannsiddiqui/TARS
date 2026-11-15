@@ -25,6 +25,7 @@ import {
   query,
   type QueryCtx,
 } from "./_generated/server";
+import * as composio from "./connectors/composio";
 import * as gmail from "./connectors/gmail";
 import * as notion from "./connectors/notion";
 import * as outlook from "./connectors/outlook";
@@ -37,7 +38,7 @@ const normalizePage = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 const receipt = v.object({
   id: v.string(),
-  kind: v.union(v.literal("update-note"), v.literal("send-mail")),
+  kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message")),
   destination: v.string(), // the address or Notion page id the user named
   revision: v.string(), // the artifact revision the instruction was bound to
   state: v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("unknown")),
@@ -96,7 +97,7 @@ async function loadLogDestination(ctx: Pick<QueryCtx, "db">, ownerId: string, pr
 const intentArgs = {
   projectId: v.string(),
   taskId: v.optional(v.string()),
-  kind: v.union(v.literal("update-note"), v.literal("send-mail")),
+  kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message")),
   destination: v.string(),
   artifactId: v.string(),
   revision: v.string(),
@@ -159,18 +160,24 @@ export const reserve = internalMutation({
 
     const grants = await activeGrants(ctx, ownerId, intent.projectId);
     let route: { sourceId: string; provider: string };
-    if (intent.kind === "send-mail") {
+    if (intent.kind === "send-mail" || intent.kind === "post-message") {
+      const kinds = intent.kind === "send-mail" ? MAIL_KINDS : ["slack"];
       const senders = [];
-      for (const grant of grants.filter((g) => MAIL_KINDS.includes(g.kind))) {
+      for (const grant of grants.filter((g) => kinds.includes(g.kind))) {
         const permission = await ctx.db
           .query("sendPermissions")
           .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
           .unique();
-        if (permission?.ownerId === ownerId) senders.push({ sourceId: grant.id, provider: grant.kind });
+        if (permission?.ownerId !== ownerId) continue;
+        const connection = await ctx.db
+          .query("connections")
+          .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
+          .unique();
+        senders.push({ sourceId: grant.id, provider: connection?.broker === "composio" ? `composio-${grant.kind}` : grant.kind });
       }
       // Never a silent downgrade: no send consent means no send.
       if (senders.length === 0) throw new ConvexError("missing-send-permission");
-      if (senders.length > 1) return clarify("Which mailbox should send it?");
+      if (senders.length > 1) return clarify(intent.kind === "send-mail" ? "Which mailbox should send it?" : "Which Slack workspace should post it?");
       route = senders[0]!;
     } else {
       const page = grants.find(
@@ -196,6 +203,7 @@ export const reserve = internalMutation({
 
 function perform(ctx: ActionCtx, row: Doc<"actions">): Promise<EffectOutcome> {
   const mail = { actionId: row._id, sourceId: row.sourceId, to: row.destination, body: row.body };
+  if (row.provider.startsWith("composio-")) return composio.perform(ctx, row);
   if (row.provider === "gmail") return gmail.sendMail(ctx, mail);
   if (row.provider === "outlook-mail") return outlook.sendMail(ctx, mail);
   return notion.appendMarked(ctx, noteJob(row));
@@ -209,6 +217,7 @@ function lookup(ctx: ActionCtx, row: Doc<"actions">): Promise<EffectOutcome> {
     body: row.body,
     ...(row.externalId === undefined ? {} : { externalId: row.externalId }),
   };
+  if (row.provider.startsWith("composio-")) return composio.lookup(ctx, row);
   if (row.provider === "gmail") return gmail.lookupSentMail(ctx, mail);
   if (row.provider === "outlook-mail") return outlook.lookupSentMail(ctx, mail);
   return notion.lookupMarked(ctx, noteJob(row));

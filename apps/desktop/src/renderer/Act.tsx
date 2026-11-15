@@ -7,7 +7,7 @@ import { SourceChip } from "./logos";
 import type { Receipt } from "./model";
 import { formatWhen, reason, StateNote } from "./ui";
 
-export type ActKind = "send-mail" | "update-note";
+export type ActKind = "send-mail" | "post-message" | "update-note";
 export type ActIntent = { kind: ActKind; destination: string; taskId?: string; instructionId: string };
 export type ActResult = { status: "receipt"; receipt: Receipt } | { status: "needs-clarification"; reason: string } | { status: "missing-send-permission" };
 
@@ -41,9 +41,14 @@ export type ActProps = {
 
 export type LogDestinationView = { kind: "notion" | "obsidian"; label?: string };
 
-const KIND_WORD: Record<ActKind, string> = { "send-mail": "Email", "update-note": "Notion page update" };
-
-const verb = (kind: ActKind) => (kind === "send-mail" ? "sent" : "updated");
+/** Every kind's words in one place: what it is, the destination field, and how its outcome reads. */
+const TEXT: Record<ActKind, { word: string; option: string; field: string; verb: string; doing: string; chip: string; proof: string; to: boolean }> = {
+  "send-mail": { word: "Email", option: "Send as an email", field: "Recipient email address", verb: "sent", doing: "Sending", chip: "mail", proof: "found in your sent mail with the same recipient and text", to: true },
+  "post-message": { word: "Slack post", option: "Post to a Slack channel", field: "Slack channel ID", verb: "posted", doing: "Posting", chip: "slack", proof: "read back from the channel with the same text", to: true },
+  "update-note": { word: "Notion page update", option: "Update a Notion page", field: "Notion page ID", verb: "updated", doing: "Updating", chip: "notion", proof: "read back from the page", to: false },
+};
+const verb = (kind: ActKind) => TEXT[kind].verb;
+const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
 export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestination }: ActProps) {
   const destId = useId();
@@ -64,7 +69,12 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
   const inFlight = receipt?.state === "pending" || receipt?.state === "running" || busy === "execute";
   // An unconfirmed outcome is checked, never resent: sending again could deliver it twice.
   const unresolved = receipt?.state === "unknown";
-  const label = kind === "send-mail" ? `Send revision ${saved.revision} to ${dest || "…"}` : `Update page ${dest || "…"} with revision ${saved.revision}`;
+  const label =
+    kind === "send-mail"
+      ? `Send revision ${saved.revision} to ${dest || "…"}`
+      : kind === "post-message"
+        ? `Post revision ${saved.revision} to ${dest || "…"}`
+        : `Update page ${dest || "…"} with revision ${saved.revision}`;
 
   async function run(name: string, action: () => Promise<void>) {
     setBusy(name);
@@ -96,16 +106,15 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
       <div className="act-steps">
         <fieldset className="choice">
           <legend className="act-step">What to do with it</legend>
-          <label>
-            <input type="radio" name="act-kind" checked={kind === "send-mail"} onChange={() => setKind("send-mail")} /> Send as an email
-          </label>
-          <label>
-            <input type="radio" name="act-kind" checked={kind === "update-note"} onChange={() => setKind("update-note")} /> Update a Notion page
-          </label>
+          {(["send-mail", "post-message", "update-note"] as const).map((k) => (
+            <label key={k}>
+              <input type="radio" name="act-kind" checked={kind === k} onChange={() => setKind(k)} /> {TEXT[k].option}
+            </label>
+          ))}
         </fieldset>
         <div className="act-fields">
           <div className="field">
-            <label htmlFor={destId}>{kind === "send-mail" ? "Recipient email address" : "Notion page ID"}</label>
+            <label htmlFor={destId}>{TEXT[kind].field}</label>
             <input
               id={destId}
               value={destination}
@@ -136,7 +145,7 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
                 : `Revision ${saved.revision} goes exactly as saved. Your click is the approval.`}
           </p>
           <button type="button" className="secondary" disabled={dest === "" || dirty || inFlight || unresolved || busy !== null} onClick={execute}>
-            {busy === "execute" ? (kind === "send-mail" ? "Sending…" : "Updating…") : label}
+            {busy === "execute" ? `${TEXT[kind].doing}…` : label}
           </button>
         </div>
       </div>
@@ -150,7 +159,7 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
       {needsConsent && (
         <div className="confirm consent" role="group" aria-label="Allow sending">
           <p>
-            Sending is a separate permission from reading. If you allow it, TARS may send only the messages you click Send on, from the mailbox you connected,
+            Sending is a separate permission from reading. If you allow it, TARS may send only the messages you click Send or Post on, from the account you connected,
             and nothing else. Nothing was sent.
           </p>
           {"mailboxes" in actions.sendConsent ? (
@@ -162,7 +171,7 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
           ) : (
             <p className="quiet small">{actions.sendConsent.blocked}</p>
           )}
-          {busy === null && consentOpened && <p className="quiet small">Finish in your browser, then click Send again.</p>}
+          {busy === null && consentOpened && <p className="quiet small">Once it is allowed (in your browser, if a sign-in page opened), click again.</p>}
         </div>
       )}
 
@@ -185,20 +194,20 @@ export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestina
 function ReceiptView(props: { receipt: Receipt; busy: string | null; onCheck(): void; onRetryLog(): void; onTryAgain(): void }) {
   const { receipt } = props;
   const { kind, destination } = receipt;
-  const where = `${kind === "send-mail" ? " to" : ""} ${destination}`;
-  const done = kind === "send-mail" ? "Sent" : "Updated";
+  const where = `${TEXT[kind].to ? " to" : ""} ${destination}`;
+  const done = capital(verb(kind));
   return (
     <div className="receipt" role="status" aria-label="What happened">
       <p className="receipt-title">What happened</p>
       <dl className="receipt-facts">
         <div>
           <dt>What</dt>
-          <dd>{KIND_WORD[kind]}</dd>
+          <dd>{TEXT[kind].word}</dd>
         </div>
         <div>
           <dt>Where</dt>
           <dd>
-            <SourceChip kind={kind === "update-note" ? "notion" : "mail"} label={destination} />
+            <SourceChip kind={TEXT[kind].chip} label={destination} />
           </dd>
         </div>
         <div>
@@ -207,16 +216,14 @@ function ReceiptView(props: { receipt: Receipt; busy: string | null; onCheck(): 
         </div>
       </dl>
       {(receipt.state === "pending" || receipt.state === "running") && (
-        <StateNote state={{ kind: "loading", detail: `${kind === "update-note" ? "Updating" : "Sending"}${where}. Waiting for the provider to confirm it.` }} />
+        <StateNote state={{ kind: "loading", detail: `${TEXT[kind].doing}${where}. Waiting for the provider to confirm it.` }} />
       )}
       {receipt.state === "succeeded" && (
         <>
           <StateNote
             state={{
               kind: "done",
-              detail: `${done}${where}, verified ${receipt.verifiedAt ? formatWhen(receipt.verifiedAt) : ""}: ${
-                kind === "send-mail" ? "found in your sent mail with the same recipient and text" : "read back from the page"
-              }.`,
+              detail: `${done}${where}, verified ${receipt.verifiedAt ? formatWhen(receipt.verifiedAt) : ""}: ${TEXT[kind].proof}.`,
             }}
           />
           {receipt.externalId && <p className="quiet small">Provider reference {receipt.externalId}</p>}

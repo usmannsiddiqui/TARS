@@ -101,7 +101,7 @@ export type SessionEvent = "start" | "break" | "resume" | "stop";
 /** An instructed action's receipt (actions.listReceipts / executeIntent). */
 export type Receipt = {
   id: string;
-  kind: "send-mail" | "update-note";
+  kind: "send-mail" | "update-note" | "post-message";
   /** The address or Notion page id the user named. */
   destination: string;
   /** The run-through revision the instruction was bound to. */
@@ -118,7 +118,7 @@ export type CapturedIdea = { text: string };
 export type Fact = { id: string; key: string; value: string; scope: "project" | "global"; evidenceIds: string[] };
 export type Withheld = { id: string; key: string; value: string; evidenceIds: string[] };
 
-export type CloudProvider = "slack" | "notion" | "canvas" | "gmail" | "outlook-mail" | "outlook-calendar";
+export type CloudProvider = "slack" | "notion" | "canvas" | "gmail" | "outlook-mail" | "outlook-calendar" | "teams";
 
 export type SourceRow = {
   id: string;
@@ -172,6 +172,7 @@ export const permissionMissing = (status: { freshness: string; reason?: string }
 export type ConnectionRow = {
   sourceId: string;
   provider: string;
+  broker?: "composio";
   availability: string;
   lastCheckedAt?: string;
   lastError?: string;

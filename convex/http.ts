@@ -1,4 +1,5 @@
 import { httpRouter } from "convex/server";
+import { handleEvent as composioEvent, oauthCallback as composioCallback } from "./connectors/composio";
 import { handlePush as gmailPush, oauthCallback as googleCallback } from "./connectors/gmail";
 import { handleEvent as notionEvent } from "./connectors/notion";
 import { handleNotification as outlookNotification, oauthCallback as microsoftCallback } from "./connectors/outlook";
@@ -13,6 +14,9 @@ http.route({ path: "/slack/events", method: "POST", handler: slackEvent });
 http.route({ path: "/notion/events", method: "POST", handler: notionEvent });
 http.route({ path: "/gmail/push", method: "POST", handler: gmailPush });
 http.route({ path: "/outlook/notifications", method: "POST", handler: outlookNotification });
+// Composio: one signed webhook for every trigger in the project (Slack, Gmail, Outlook via Composio).
+http.route({ path: "/composio/events", method: "POST", handler: composioEvent });
+http.route({ path: "/composio/callback", method: "GET", handler: composioCallback });
 // Provider OAuth redirects: the stored single-use state names the owner and source.
 http.route({ path: "/oauth/google/callback", method: "GET", handler: googleCallback });
 http.route({ path: "/oauth/microsoft/callback", method: "GET", handler: microsoftCallback });
