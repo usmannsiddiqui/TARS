@@ -99,6 +99,22 @@ describe("assemblePreparation", () => {
     expect(unlisted.ok && unlisted.work.state).toBe("partial");
   });
 
+  test("raw evidence ids never stay in the body; citations stay in evidenceIds", () => {
+    const body = [
+      "AI Guides report",
+      "",
+      "## Summary",
+      `- The demo runs 25 minutes [${evidence.id}].`,
+      `- Ten staff joined (${evidence.id}) [gmail-15ac84d1-9f0e:3].`,
+      "- See [Needs from you: Q3 numbers]",
+    ].join("\n");
+    const result = assemblePreparation(output({ body, evidenceIds: [evidence.id] }), guides, [evidence], 0);
+    expect(result.ok && result.work.body).toBe(
+      ["AI Guides report", "", "## Summary", "- The demo runs 25 minutes.", "- Ten staff joined.", "- See [Needs from you: Q3 numbers]"].join("\n"),
+    );
+    expect(result.ok && result.work.evidenceIds).toEqual([evidence.id]);
+  });
+
   test("ownership: only clear, quoted responsibility becomes the user's task", () => {
     const result = assemblePreparation(
       output({

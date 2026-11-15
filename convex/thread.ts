@@ -58,6 +58,12 @@ export const listThread = query({
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
+const OPENING = {
+  created: "I started the draft while you were busy. Tell me what to change, or send it.",
+  revised: "I started a fresh draft for this while you were busy; Undo brings back the earlier one. Tell me what to change, or send it.",
+  suggested: "I left your edited draft as it is and put a fresh start for this next to it as a suggestion. Apply it, or tell me what to change.",
+} as const;
+
 /**
  * TARS's first message for a newly recorded due commitment, written in the same transaction as the
  * preparation that found it. Steps are only the stages the run really recorded, with their times.
@@ -65,7 +71,14 @@ const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `
  */
 export async function writeOpening(
   ctx: MutationCtx,
-  { ownerId, projectId, key, commitment, artifactId }: { ownerId: string; projectId: string; key: string; commitment: Doc<"commitments">; artifactId: Id<"artifacts"> },
+  {
+    ownerId,
+    projectId,
+    key,
+    commitment,
+    artifactId,
+    outcome,
+  }: { ownerId: string; projectId: string; key: string; commitment: Doc<"commitments">; artifactId: Id<"artifacts">; outcome: "created" | "revised" | "suggested" },
 ) {
   const already = await ctx.db
     .query("threadMessages")
@@ -107,7 +120,7 @@ export async function writeOpening(
   const blocks: Block[] = [
     ...(steps.length > 0 ? [block("work", "work", { steps })] : []),
     block("document", "document", { artifactId, title, revision: artifact.revision }),
-    block("say", "say", { text: `${asked}${due} I started the draft while you were busy. Tell me what to change, or send it.` }),
+    block("say", "say", { text: `${asked}${due} ${OPENING[outcome]}` }),
   ];
   await ctx.db.insert("threadMessages", { ownerId, projectId, role: "tars", blocks, commitmentKey: key, createdAt: now });
 }
