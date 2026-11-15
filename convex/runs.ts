@@ -241,7 +241,8 @@ const TOOLS: { [T in RunToolName]: (ctx: ActionCtx, run: Run, args: RunToolArgs<
       size += JSON.stringify(item).length;
       if (size > MAX_TOOL_RESULT) break; // newest first: what does not fit is left out, never cut mid-item
       items.push(item);
-      const label = (e.subject ?? e.text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Source").slice(0, 48);
+      const whole = e.subject ?? e.text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Source";
+      const label = whole.length > 48 ? `${whole.slice(0, 47)}…` : whole;
       const kind = kinds.find((k) => k.sourceId === e.sourceId)?.kind;
       run.items.set(e.id, { label, ...(kind ? { kind } : {}), ...(e.sourceUrl?.startsWith("https://") ? { url: e.sourceUrl } : {}) });
     }
