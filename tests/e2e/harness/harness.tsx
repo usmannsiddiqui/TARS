@@ -338,6 +338,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
             onOpenAccessibility: async () => record("observation.openAccessibilitySettings"),
           }}
           shortcut={{ status: { accelerator: "CommandOrControl+Shift+Space", registered: false, error: "another app already uses it" }, onSet: async (a) => record("shortcut.set", a) }}
+          talkKey={{ status: { key: "Right Option (⌥)", state: "permission-missing" }, onOpenAccessibility: async () => record("talk.openAccessibilitySettings") }}
           projects={projects}
           onAdd={async (kind, projectId) => record("chooseSource", kind, projectId)}
           onPause={async (id) => record("pause", id)}
@@ -373,8 +374,30 @@ const panelToday = [
   { ...morning.hard[0]!, text: "Rehearsal call with the co-presenter", dueAt: new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate(), 23, 59).toISOString() },
   morning.hard[2]!,
 ];
+// pet-<state>, or pet-<state>-recording (the voice button gets a silent generated stream, see bridge.ts).
 const element = scene.startsWith("pet-") ? (
-  <Pet state={scene.slice(4) as PetState} onOpen={() => record("openPanel")} onMove={(dx, dy) => record("dragPet", dx, dy)} />
+  <Pet
+    state={scene.split("-")[1] as PetState}
+    talkKey={{ key: "Right Option (⌥)", state: "ready" }}
+    keyHeld={false}
+    onOpen={() => record("openPanel")}
+    onMove={(dx, dy) => record("dragPet", dx, dy)}
+    onPress={(phase) => record("petPress", phase)}
+    onHover={(over) => record("hover", over)}
+    onCompose={() => record("compose")}
+  />
+) : scene === "panel-transcript" ? (
+  <Panel
+    petState="idle"
+    now={NOW.getTime()}
+    leftOff={{ project: "AI Guides", artifact: guides.title }}
+    capture
+    transcript={{ text: "Ask the AV lead for a second wireless mic", recoveryId: "rec_illustrative" }}
+    onRecapShown={(key) => record("markDelivered", key, "panel")}
+    onOpenApp={() => record("openApp", "guides")}
+    onStop={() => record("closePanel")}
+    onClose={() => record("closePanel")}
+  />
 ) : scene === "panel" ? (
   <Panel
     petState="idle"

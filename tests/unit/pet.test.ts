@@ -1,6 +1,6 @@
 // The desktop pet's pure rules: where it may sit, when a press is a drag, and when the hover panel opens and closes.
 import { describe, expect, it } from "vitest";
-import { clampToWorkAreas, HOVER_START, hoverNext, isDrag, panelBeside, restorePetPosition, type Hover, type HoverEvent } from "../../apps/desktop/src/main/pet";
+import { clampToWorkAreas, gaze, HOVER_START, hoverNext, isDrag, overFigure, panelBeside, PET_WINDOW, restorePetPosition, type Hover, type HoverEvent } from "../../apps/desktop/src/main/pet";
 
 const laptop = { x: 0, y: 25, width: 1440, height: 875 };
 // A second display to the right, taller, with its top higher than the laptop's.
@@ -102,13 +102,47 @@ describe("hoverNext", () => {
     expect(closed).toEqual(HOVER_START);
   });
 
-  it("a_drag_cancels_intent_closes_and_waits_for_the_pointer_to_leave", () => {
-    expect(run(petIn, { type: "drag" }).mode).toBe("closed");
-    expect(run(petIn, { type: "drag" }, timer).mode).toBe("closed");
-    expect(run(petIn, timer, { type: "drag" }).mode).toBe("closed");
-    // Dropped and still resting on the pet: nothing opens until the pointer leaves and comes back.
-    expect(run(petIn, { type: "drag" }, petIn).mode).toBe("closed");
-    expect(run(petIn, { type: "drag" }, petOut, petIn).mode).toBe("intent");
+  const press: HoverEvent = { type: "press" };
+  const dropped: HoverEvent = { type: "release", moved: true };
+  const clicked: HoverEvent = { type: "release", moved: false };
+
+  it("a_press_cancels_intent_and_nothing_opens_while_the_button_is_down", () => {
+    expect(run(petIn, press).mode).toBe("closed");
+    // The intent timer (armed before the press) firing during the press opens nothing.
+    expect(run(petIn, press, timer).mode).toBe("closed");
+    // Window moves under the pointer during the drag report leave/enter again: still nothing opens.
+    expect(run(petIn, press, petOut, petIn).mode).toBe("closed");
+    expect(run(petIn, press, petOut, petIn, timer).mode).toBe("closed");
+  });
+
+  it("a_press_after_hover_opened_the_panel_closes_it_at_once", () => {
+    expect(run(petIn, timer).mode).toBe("open");
+    expect(run(petIn, timer, press).mode).toBe("closed");
+    expect(run(petIn, timer, press, timer).mode).toBe("closed");
+  });
+
+  it("hold_then_move_then_drop_opens_nothing_until_the_pointer_leaves_and_returns", () => {
+    // A pause longer than the intent before moving, then the drop with the pointer still on the pet.
+    const afterDrop = run(petIn, press, timer, dropped);
+    expect(afterDrop.mode).toBe("closed");
+    expect(run(petIn, press, timer, dropped, petIn, timer).mode).toBe("closed");
+    expect(run(petIn, press, dropped, petOut, petIn).mode).toBe("intent");
+  });
+
+  it("a_press_released_in_place_is_left_to_the_click_which_pins", () => {
+    expect(run(petIn, press, clicked).mode).toBe("closed");
+    expect(run(petIn, press, clicked, { type: "pin" }).mode).toBe("pinned");
+  });
+
+  it("a_press_never_closes_a_pinned_panel", () => {
+    expect(run({ type: "pin" }, press).mode).toBe("pinned");
+  });
+
+  it("closing_while_the_pointer_is_elsewhere_does_not_block_the_next_hover", () => {
+    // Pinned by the shortcut, closed with Escape while the pointer was away: the next rest opens it.
+    expect(run({ type: "pin" }, { type: "close" }, petIn).mode).toBe("intent");
+    // Closed while resting on the pet: it waits for the pointer to leave first.
+    expect(run(petIn, { type: "pin" }, { type: "close" }, petIn, timer).mode).toBe("closed");
   });
 
   it("pinned_by_click_or_key_ignores_the_pointer_until_closed", () => {
@@ -122,5 +156,25 @@ describe("hoverNext", () => {
     const reopened = run(petIn, timer, panelIn, { type: "close" }, petOut, petIn, timer);
     expect(reopened.mode).toBe("open");
     expect(hoverNext(reopened, petOut).mode).toBe("closing");
+  });
+});
+
+describe("overFigure", () => {
+  const win = { x: 100, y: 200, ...PET_WINDOW };
+  it("the_figure_is_the_top_of_the_pet_window_and_the_pill_below_is_not_part_of_it", () => {
+    expect(overFigure(win, { x: 101, y: 201 })).toBe(true);
+    expect(overFigure(win, { x: 283, y: 335 })).toBe(true);
+    expect(overFigure(win, { x: 190, y: 200 + 136 + 10 })).toBe(false);
+    expect(overFigure(win, { x: 99, y: 250 })).toBe(false);
+  });
+});
+
+describe("gaze", () => {
+  const box = { x: 0, y: 0, width: 100, height: 60 };
+  it("points_from_the_centre_toward_the_pointer_within_one_unit", () => {
+    expect(gaze({ x: 50, y: 30 }, box)).toEqual({ x: 0, y: 0 });
+    expect(gaze({ x: 100, y: 0 }, box)).toEqual({ x: 1, y: -1 });
+    expect(gaze({ x: 75, y: 45 }, box)).toEqual({ x: 0.5, y: 0.5 });
+    expect(gaze({ x: -500, y: 900 }, box)).toEqual({ x: -1, y: 1 });
   });
 });

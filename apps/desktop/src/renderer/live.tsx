@@ -5,6 +5,7 @@ import { Component, createContext, useCallback, useContext, useEffect, useMemo, 
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
+import type { HoldKeyStatus, PanelShowing } from "../preload/index";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
 import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
@@ -483,6 +484,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const [local, setLocal] = useState<LocalSourceView[] | null>(null);
   const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
   const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
+  const talkKey = useTalkKey();
   useEffect(() => {
     window.companion.shortcut.status().then(setShortcut, (err: unknown) => setShortcut({ accelerator: "The shortcut", registered: false, error: reason(err) }));
   }, []);
@@ -618,6 +620,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
         onOpenAccessibility: () => window.companion.observation.openAccessibilitySettings(),
       }}
       shortcut={{ status: shortcut, onSet: async (accelerator) => setShortcut(await window.companion.shortcut.set(accelerator)) }}
+      talkKey={{ status: talkKey, onOpenAccessibility: () => window.companion.talk.openAccessibilitySettings() }}
       projects={projects ?? []}
       {...(addBlocked ? { addBlocked } : {})}
       onAdd={(kind, projectId) => after(window.companion.chooseSource(kind, [projectId]))}
@@ -630,6 +633,18 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
 }
 
 // ---- Pet and panel windows.
+
+/** The held talk key's status: read once, then pushed by main when it changes (never polled). */
+function useTalkKey() {
+  const [status, setStatus] = useState<HoldKeyStatus | null>(null);
+  useEffect(() => {
+    let pushed = false;
+    const stop = window.companion.talk.onKeyStatus((s) => ((pushed = true), setStatus(s)));
+    window.companion.talk.keyStatus().then((s) => pushed || setStatus(s), () => undefined);
+    return stop;
+  }, []);
+  return status;
+}
 
 /** The focus project's prepared work and completion, for the pet and the panel. */
 function useCompanionContext(projectIdOverride: string | null) {
@@ -667,13 +682,27 @@ function usePointerOver() {
 
 export function PetLive() {
   const { petState } = useCompanionContext(null);
-  usePointerOver();
-  return <Pet state={petState} onOpen={() => void window.companion.openPanel()} onMove={(dx, dy) => void window.companion.dragPet(dx, dy)} />;
+  const talkKey = useTalkKey();
+  // The held key comes from main as down/up; the pill turns it into the same hold as a pointer press.
+  const [keyHeld, setKeyHeld] = useState(false);
+  useEffect(() => window.companion.talk.onKey(setKeyHeld), []);
+  return (
+    <Pet
+      state={petState}
+      talkKey={talkKey}
+      keyHeld={keyHeld}
+      onOpen={() => void window.companion.openPanel()}
+      onMove={(dx, dy) => void window.companion.dragPet(dx, dy)}
+      onPress={(phase) => void window.companion.petPress(phase)}
+      onHover={(over) => void window.companion.pointerOver(over)}
+      onCompose={() => void window.companion.openCapture()}
+    />
+  );
 }
 
 export function PanelLive() {
-  const [shown, setShown] = useState<{ projectId: string | null; at: number }>({ projectId: null, at: 0 });
-  useEffect(() => window.companion.onPanelShow((projectId) => setShown({ projectId, at: Date.now() })), []);
+  const [shown, setShown] = useState<PanelShowing & { at: number }>({ projectId: null, capture: false, at: 0 });
+  useEffect(() => window.companion.onPanelShow((showing) => setShown({ ...showing, at: Date.now() })), []);
   usePointerOver();
   const ctx = useCompanionContext(shown.projectId);
   const work = ctx.prepared?.work;
@@ -694,6 +723,8 @@ export function PanelLive() {
   return (
     <Panel
       key={shown.at}
+      capture={shown.capture}
+      {...(shown.transcript ? { transcript: shown.transcript } : {})}
       petState={ctx.petState}
       now={Date.now()}
       {...(ctx.projectId ? { projectId: ctx.projectId } : {})}

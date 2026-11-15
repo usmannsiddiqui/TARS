@@ -29,6 +29,7 @@ import { startAttentionDelivery, type AttentionState } from "./attention";
 import { authConfigFromEnv, createAuth, type SecretVault } from "./auth";
 import { createHandoff } from "./cloud-handoff";
 import { createDictation, createTranscriptionUploader } from "./dictation";
+import { startHoldKey } from "./hold-key";
 import { createIpcRouter, IPC_CHANNELS } from "./ipc";
 import { appendLocalLog } from "./local-log";
 import { aesGcmCipher, openLocalStore, type LocalStore } from "./local-store";
@@ -40,7 +41,9 @@ import {
   HOVER_INTENT_MS,
   HOVER_START,
   hoverNext,
+  overFigure,
   panelBeside,
+  PET_WINDOW,
   restorePetPosition,
   type Hover,
   type HoverEvent,
@@ -119,10 +122,9 @@ function prefsFile(path: string) {
   };
 }
 
-// Built observer helper: shipped in Resources by electron-builder; in dev, the SwiftPM release build.
-const observerPath = app.isPackaged
-  ? join(process.resourcesPath, "observer")
-  : join(import.meta.dirname, "../../../../native/observer/.build/release/observer");
+// Built native helpers: shipped in Resources by electron-builder; in dev, the SwiftPM release build.
+const helperPath = (name: "observer" | "holdkey") =>
+  app.isPackaged ? join(process.resourcesPath, name) : join(import.meta.dirname, `../../../../native/observer/.build/release/${name}`);
 
 function isAppUrl(raw: string): boolean {
   if (!URL.canParse(raw)) return false;
@@ -132,7 +134,7 @@ function isAppUrl(raw: string): boolean {
 
 // One renderer, three views: the full app, the pet and the compact panel (chosen by the URL hash).
 type View = "app" | "pet" | "panel";
-const SIZES = { app: { width: 1200, height: 800 }, pet: { width: 184, height: 136 }, panel: { width: 360, height: 420 } };
+const SIZES = { app: { width: 1200, height: 800 }, pet: PET_WINDOW, panel: { width: 360, height: 420 } };
 const GROUND = "#d6d5d2"; // the studio-grey canvas, so the window never flashes another colour on launch
 
 function newWindow(view: View, options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
@@ -180,11 +182,13 @@ function createWindows(petPref: { visible: boolean; position?: Point; save(patch
     // A one-shot UI delay (hover intent / grace), never a check for data.
     const delay = hover.mode === "intent" ? HOVER_INTENT_MS : hover.mode === "closing" ? HOVER_CLOSE_MS : null;
     if (delay !== null) hoverTimer = setTimeout(() => dispatch({ type: "timer" }), delay);
-    if (hover.mode === "open" && !isOpen(before.mode)) void showPanel(null, false);
+    if (hover.mode === "open" && !isOpen(before.mode)) void showPanel({ projectId: null, capture: false }, false);
     if (!isOpen(hover.mode) && isOpen(before.mode) && live(panel)) panel.hide();
   };
 
-  const showPanel = async (projectId: string | null, focus: boolean) => {
+  /** What the panel shows: a project, and whether it opens on the capture box (with a transcript to edit). */
+  type Showing = { projectId: string | null; capture: boolean; transcript?: { text: string; recoveryId: string } };
+  const showPanel = async (showing: Showing, focus: boolean) => {
     const { win, ready } = ensurePanel();
     await ready;
     if (!isOpen(hover.mode)) return; // the pointer left (or a drag began) while the window was loading
@@ -194,7 +198,7 @@ function createWindows(petPref: { visible: boolean; position?: Point; save(patch
       ? panelBeside(anchor, SIZES.panel, workArea)
       : { x: workArea.x + workArea.width - SIZES.panel.width - 24, y: workArea.y + workArea.height - SIZES.panel.height - 24 };
     win.setPosition(x, y);
-    win.webContents.send("panel:show", projectId);
+    win.webContents.send("panel:show", showing);
     if (focus) win.show(); // a user action (pet click or key, shortcut, notification click): the panel may take focus
     else win.showInactive(); // hover: shown beside the pet, the app in front keeps focus
   };
@@ -273,21 +277,24 @@ function createWindows(petPref: { visible: boolean; position?: Point; save(patch
     return { win, ready: panelReady };
   };
 
+  const openPanel = async (projectId?: string, capture?: { transcript?: Showing["transcript"] }) => {
+    dispatch({ type: "pin" });
+    if (capture) returnFocusOnClose = BrowserWindow.getFocusedWindow() === null;
+    await showPanel({ projectId: projectId ?? null, capture: capture !== undefined, ...(capture?.transcript ? { transcript: capture.transcript } : {}) }, true);
+  };
+
   return {
     openMain,
     openPet,
     hasMain: () => live(main),
     isPanelOpen: () => live(panel) && panel.isVisible(),
+    /** Opens the panel pinned. Only the panel takes focus. */
+    openPanel: (projectId?: string) => openPanel(projectId),
     /**
-     * Opens the panel; `capture` (the shortcut) also asks it to show the capture box. Only the panel
-     * takes focus, and nothing here starts the microphone: recording needs a Record click.
+     * Opens the panel pinned on the capture box (the shortcut, the pill's Compose, a finished hold to talk).
+     * A transcript goes into the editable box; nothing is saved until the user presses Save.
      */
-    async openPanel(projectId?: string, capture = false) {
-      dispatch({ type: "pin" });
-      if (capture) returnFocusOnClose = BrowserWindow.getFocusedWindow() === null;
-      await showPanel(projectId ?? null, true);
-      if (capture && live(panel)) panel.webContents.send("capture:open");
-    },
+    openCapture: (transcript?: Showing["transcript"]) => openPanel(undefined, transcript ? { transcript } : {}),
     openApp(projectId?: string) {
       dispatch({ type: "close" });
       const win = openMain();
@@ -318,20 +325,32 @@ function createWindows(petPref: { visible: boolean; position?: Point; save(patch
     },
     dragPet(senderId: number, dx: number, dy: number) {
       if (!live(pet) || senderId !== pet.webContents.id) return; // only the pet moves itself
-      dispatch({ type: "drag" });
       const { x, y } = pet.getBounds();
       const at = movePetTo({ x: x + dx, y: y + dy });
       if (at) petPref.save({ petPosition: at });
     },
+    petPress(senderId: number, phase: "down" | "up" | "dragged") {
+      if (!live(pet) || senderId !== pet.webContents.id) return;
+      dispatch(phase === "down" ? { type: "press" } : { type: "release", moved: phase === "dragged" });
+    },
     pointerOver(senderId: number, over: boolean) {
-      if (live(pet) && senderId === pet.webContents.id) dispatch({ type: "pet", over });
-      else if (live(panel) && senderId === panel.webContents.id) dispatch({ type: "panel", over });
+      if (live(pet) && senderId === pet.webContents.id) {
+        // Moving the window under a still pointer makes the page report leave/enter again; only a pointer
+        // that is really off the figure has left it (one geometry check on the event, not a poll).
+        if (!over && overFigure(pet.getBounds(), screen.getCursorScreenPoint())) return;
+        dispatch({ type: "pet", over });
+      } else if (live(panel) && senderId === panel.webContents.id) dispatch({ type: "panel", over });
+    },
+    /** The held talk key went down or up: the pet's pill records while it is held. */
+    talkKey(down: boolean) {
+      if (live(pet)) pet.webContents.send("talk:key", down);
     },
   };
 }
 
 let store: LocalStore | undefined;
 let stopShortcut: (() => void) | undefined;
+let stopHoldKey: (() => void) | undefined;
 
 app.on("web-contents-created", (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -343,7 +362,7 @@ app.on("web-contents-created", (_event, contents) => {
 
 async function start(): Promise<void> {
   // No renderer permission is granted implicitly. The single exception: audio-only capture for the app's
-  // own frames, in a window where the user pressed Record (dictation.begin), never at startup or on the shortcut.
+  // own frames, in a window where the user pressed Record or held to talk (dictation.begin), never at startup or on the shortcut.
   const micWindows = new Set<number>();
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
     const types = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
@@ -388,7 +407,7 @@ async function start(): Promise<void> {
         ? watchSelected(grant, emit, options)
         : grant.kind === "observation"
           ? watchObservation(grant, emit, {
-              spawn: () => spawn(observerPath, [], { stdio: "pipe" }),
+              spawn: () => spawn(helperPath("observer"), [], { stdio: "pipe" }),
               // Status words only (ready, permission-missing, ...): never observed text.
               onStatus: (status) => broadcast("observation:status", { sourceId: grant.id, ...status }),
             })
@@ -487,12 +506,19 @@ async function start(): Promise<void> {
     {
       register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
       unregister: (accelerator) => globalShortcut.unregister(accelerator),
-      onTrigger: () => void windows.openPanel(undefined, true),
+      onTrigger: () => void windows.openCapture(),
       save: (accelerator) => prefs.set({ shortcut: accelerator }),
     },
     prefs.get().shortcut ?? DEFAULT_SHORTCUT,
   );
   stopShortcut = () => shortcut.stop();
+  // Hold Right Option anywhere to talk: the native helper reports only down/up (needs Accessibility).
+  const talkKey = startHoldKey({
+    spawn: () => spawn(helperPath("holdkey"), [], { stdio: "pipe" }),
+    onHold: (down) => windows.talkKey(down),
+    onStatus: (status) => broadcast("talk:keyStatus", status),
+  });
+  stopHoldKey = () => talkKey.stop();
   const router = createIpcRouter({
     appOrigin,
     auth: {
@@ -508,7 +534,7 @@ async function start(): Promise<void> {
     cloud: handoff,
     windows,
     dictation: {
-      // Pressing Record is the user action that may show the macOS microphone prompt.
+      // Pressing Record or holding to talk is the user action that may show the macOS microphone prompt.
       async begin(senderId) {
         if (process.platform === "darwin" && !(await systemPreferences.askForMediaAccess("microphone"))) {
           return { microphone: "denied" };
@@ -527,10 +553,12 @@ async function start(): Promise<void> {
       listRecoverable: () => dictation.listRecoverable(),
     },
     shortcut,
+    talkKey,
     system: {
       openExternal: (url) => shell.openExternal(url),
       openAccessibilitySettings: () =>
         shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
+      openMicrophoneSettings: () => shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
     },
   });
   for (const channel of IPC_CHANNELS) {
@@ -561,5 +589,6 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   stopShortcut?.();
+  stopHoldKey?.();
   store?.close();
 });

@@ -304,7 +304,7 @@ test("pet_drags_and_its_spot_survives_a_relaunch", async () => {
     await expect.poll(() => spot(app)).toEqual(saved);
     const corner = await app.evaluate(({ screen }) => {
       const { workArea: w } = screen.getPrimaryDisplay();
-      return { x: w.x + w.width - 184 - 24, y: w.y + w.height - 136 - 24 };
+      return { x: w.x + w.width - 184 - 24, y: w.y + w.height - 212 - 24 };
     });
     await app.close();
 
@@ -318,6 +318,204 @@ test("pet_drags_and_its_spot_survives_a_relaunch", async () => {
   } finally {
     rmSync(userData, { recursive: true, force: true });
   }
+});
+
+/** Visibility and focus of each TARS window by its hash ("" is the full app), in the packaged app. */
+const windowStates = (app: ElectronApplication) =>
+  app.evaluate(({ BrowserWindow }) =>
+    Object.fromEntries(
+      BrowserWindow.getAllWindows()
+        .filter((w) => URL.canParse(w.webContents.getURL())) // a window still loading has no URL yet
+        .map((w) => [new URL(w.webContents.getURL()).hash, { visible: w.isVisible(), focused: w.isFocused(), bounds: w.getBounds() }]),
+    ),
+  );
+
+test("pet_drag_with_the_mouse_never_opens_the_panel_or_the_app", async () => {
+  const userData = freshProfile();
+  try {
+    const app = await launch(userData);
+    await windowFor(app, "");
+    const pet = await windowFor(app, "#pet");
+    await expect.poll(async () => (await windowStates(app))["#pet"]?.visible).toBe(true);
+    await expect.poll(async () => (await windowStates(app))[""]?.visible).toBe(true);
+    // From here on, count every time a window is shown or focused.
+    await app.evaluate(({ app, BrowserWindow }) => {
+      const g = globalThis as unknown as { __events: string[] };
+      g.__events = [];
+      const name = (w: Electron.BrowserWindow) => (URL.canParse(w.webContents.getURL()) ? new URL(w.webContents.getURL()).hash || "app" : "loading");
+      app.on("browser-window-focus", (_e, w) => g.__events.push(`focus ${name(w)}`));
+      for (const w of BrowserWindow.getAllWindows()) w.on("show", () => g.__events.push(`show ${name(w)}`));
+      app.on("browser-window-created", (_e, w) => w.on("show", () => g.__events.push(`show ${name(w)}`)));
+    });
+    const events = () => app.evaluate(() => (globalThis as unknown as { __events: string[] }).__events);
+    const panelVisible = async () => (await windowStates(app))["#panel"]?.visible ?? false;
+
+    const figure = pet.getByRole("button", { name: /^Open companion panel/ });
+    const box = (await figure.boundingBox())!;
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    // The pointer rests on TARS first (as it does before a real press): the hover panel opens.
+    await pet.mouse.move(x, y);
+    await expect.poll(panelVisible).toBe(true);
+    // Button down: the hover-opened panel closes at once, and a pause before moving opens nothing.
+    await pet.mouse.down();
+    await expect.poll(panelVisible).toBe(false);
+    await pet.waitForTimeout(700);
+    expect(await panelVisible()).toBe(false);
+    const start = (await windowStates(app))["#pet"]!.bounds;
+    for (let i = 1; i <= 8; i++) {
+      await pet.mouse.move(x - 10 * i, y - 6 * i, { steps: 3 });
+      if (i === 4) await pet.waitForTimeout(450); // a pause mid-drag, longer than the hover intent
+      expect(await panelVisible()).toBe(false);
+    }
+    await pet.mouse.up();
+    // Dropped with the pointer still on TARS: nothing opens, not even after the intent delay.
+    await pet.waitForTimeout(900);
+    expect(await panelVisible()).toBe(false);
+    const end = (await windowStates(app))["#pet"]!.bounds;
+    expect(end.x).toBeLessThan(start.x - 30);
+    // The only window shown since the pointer arrived is the panel, once, by the hover before the press.
+    // The full app was never shown or focused, and nothing took focus.
+    expect(await events()).toEqual(["show #panel"]);
+    // Leaving TARS and coming back is a fresh hover: the panel opens again.
+    await pet.mouse.move(-40, -40);
+    const back = (await figure.boundingBox())!;
+    await pet.mouse.move(back.x + back.width / 2, back.y + back.height / 2);
+    await expect.poll(panelVisible).toBe(true);
+    await app.close();
+  } finally {
+    rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("pill_compose_opens_capture_pinned_and_a_transcript_lands_unsaved", async () => {
+  const userData = await signedInProfile();
+  try {
+    const app = await launch(userData);
+    await windowFor(app, "");
+    const pet = await windowFor(app, "#pet");
+    await expect.poll(async () => (await windowStates(app))["#pet"]?.visible).toBe(true);
+    // The window grew downward for the pill; the figure keeps its 184x136 at the top.
+    const petBounds = (await windowStates(app))["#pet"]!.bounds;
+    expect([petBounds.width, petBounds.height]).toEqual([184, 212]);
+    const compose = pet.getByRole("button", { name: "Capture an idea" });
+    const voice = pet.getByRole("button", { name: "Hold to talk" });
+    await expect(compose).toBeVisible();
+    await expect(voice).toBeVisible();
+    await expect(voice).toHaveAccessibleDescription(/Press and hold to talk.*Right Option \(⌥\)/);
+    for (const b of [compose, voice]) {
+      const r = (await b.boundingBox())!;
+      expect(Math.min(r.width, r.height)).toBeGreaterThanOrEqual(28);
+      // The pill sits wholly below the figure.
+      expect(r.y).toBeGreaterThanOrEqual(136);
+    }
+    const panelVisible = async () => (await windowStates(app))["#panel"]?.visible ?? false;
+
+    // Compose: the panel opens pinned with the capture box focused, ready to type.
+    await compose.click();
+    const panel = await windowFor(app, "#panel");
+    await expect.poll(panelVisible).toBe(true);
+    const box = panel.getByLabel("Capture an idea");
+    await expect.poll(() => box.evaluate((el) => el === el.ownerDocument.activeElement)).toBe(true);
+    await pet.mouse.move(-40, -40);
+    await panel.waitForTimeout(800);
+    expect(await panelVisible()).toBe(true);
+    await panel.keyboard.press("Escape");
+    await expect.poll(panelVisible).toBe(false);
+
+    // A finished hold to talk hands its transcript over: it lands in the editable box, caret at the end, unsaved.
+    const text = "Book the venue walk-through for Thursday";
+    await pet.evaluate((text) => (globalThis as unknown as { companion: { openCapture(t: object): Promise<void> } }).companion.openCapture({ text, recoveryId: "rec_e2e_0001" }), text);
+    await expect.poll(panelVisible).toBe(true);
+    await expect(box).toHaveValue(text);
+    await expect.poll(() => box.evaluate((el) => { const t = el as unknown as { selectionStart: number; selectionEnd: number }; return [el === el.ownerDocument.activeElement, t.selectionStart, t.selectionEnd]; })).toEqual([true, text.length, text.length]);
+    await expect(panel.getByRole("status").filter({ hasText: "Transcript" })).toHaveText("Transcript added. Edit it, then Save.");
+    expect(await pet.evaluate(() => (globalThis as unknown as { companion: { loadPending(): Promise<unknown[]> } }).companion.loadPending())).toEqual([]);
+    await app.close();
+  } finally {
+    rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("pet_hover_reacts_and_reduced_motion_keeps_it_still", async () => {
+  const page = await scene("pet-idle", { size: { width: 184, height: 212 } });
+  const figure = page.getByRole("button", { name: /^Open companion panel/ });
+  await expect(figure).toHaveAttribute("data-hover", "off");
+  const box = (await figure.boundingBox())!;
+  // The pointer comes in at the top right: TARS turns its eyes that way and says hello.
+  await page.mouse.move(box.x + box.width - 6, box.y + 6);
+  await expect(figure).toHaveAttribute("data-hover", "on");
+  await expect.poll(() => figure.evaluate((el) => Number(el.style.getPropertyValue("--gx")))).toBeGreaterThan(0.8);
+  expect(await style(page, ".pet .head-eyes", "transform")).not.toBe("none");
+  expect(await style(page, ".pet-wave[data-side='l']", "animationName")).toBe("hello-l");
+  // Leaving settles it back to rest, and the frame loop stops there.
+  await page.mouse.move(-40, -40);
+  await expect(figure).toHaveAttribute("data-hover", "off");
+  await expect.poll(() => figure.evaluate((el) => el.style.getPropertyValue("--gx"))).toBe("0.000");
+  // The pill is not the figure: resting on it reports no hover, so it never opens the panel.
+  const voice = page.getByRole("button", { name: "Hold to talk" });
+  await voice.hover();
+  await page.waitForTimeout(400);
+  expect((await calls(page)).filter((c) => c[0] === "hover")).toEqual([["hover", true], ["hover", false]]);
+  await page.close();
+
+  const still = await scene("pet-idle", { size: { width: 184, height: 212 }, reducedMotion: "reduce" });
+  const f = still.getByRole("button", { name: /^Open companion panel/ });
+  const b = (await f.boundingBox())!;
+  await still.mouse.move(b.x + b.width - 6, b.y + 6);
+  await expect(f).toHaveAttribute("data-hover", "on");
+  await still.waitForTimeout(300);
+  // No movement: no gaze loop, no slab motion; the face on the screen opens wider instead.
+  expect(await f.evaluate((el) => el.style.getPropertyValue("--gx"))).toBe("");
+  for (const s of [".pet .head-eyes", ".pet-wave[data-side='l']", ".pet-wave[data-side='r']"]) expect(await style(still, s, "transform")).toBe("none");
+  expect(await style(still, ".pet .pet-mark", "transform")).toMatch(/^matrix\(1\.18, 0, 0, 1\.18/);
+  await still.close();
+});
+
+test("voice_hold_listens_transcribes_and_fills_capture_unsaved", async () => {
+  const page = await scene("pet-idle-recording", { size: { width: 184, height: 212 } });
+  const voice = page.getByRole("button", { name: "Hold to talk" });
+  const status = page.locator(".pill-word");
+  const r = (await voice.boundingBox())!;
+  await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2);
+  await page.mouse.down();
+  await expect(page.locator(".pet-controls")).toHaveAttribute("data-talk", "listening");
+  await expect(page.getByRole("status")).toHaveText("Listening");
+  await expect(voice).toHaveAccessibleName("Hold to talk");
+  await page.waitForTimeout(600);
+  await page.mouse.up();
+  await expect(status).toHaveText("Transcribing…");
+  await expect.poll(async () => (await calls(page)).some((c) => c[0] === "dictation.finish")).toBe(true);
+  await page.evaluate(() => (globalThis as unknown as { __finishTranscription(): void }).__finishTranscription());
+  await expect(page.locator(".pet-controls")).toHaveAttribute("data-talk", "ready");
+  const made = await calls(page);
+  expect(made.filter((c) => ["dictation.begin", "dictation.finish", "openCapture", "saveCapture"].includes(c[0] as string))).toEqual([
+    ["dictation.begin"],
+    ["dictation.finish", "audio"],
+    ["openCapture", { text: "Ask the AV lead for a second wireless mic", recoveryId: "rec_illustrative" }],
+  ]);
+  // The voice button is not the figure: holding it neither dragged TARS nor reported a press or hover.
+  expect(made.filter((c) => ["dragPet", "petPress", "hover", "openPanel"].includes(c[0] as string))).toEqual([]);
+  await page.close();
+
+  // A tap records nothing and says how to use it.
+  const tap = await scene("pet-idle-recording", { size: { width: 184, height: 212 } });
+  const v = tap.getByRole("button", { name: "Hold to talk" });
+  await v.click();
+  await expect(tap.locator(".pill-word")).toHaveText("Hold to talk");
+  await tap.waitForTimeout(400);
+  expect((await calls(tap)).filter((c) => c[0] === "dictation.finish" || c[0] === "openCapture")).toEqual([]);
+  await tap.close();
+
+  // The panel it opens: the transcript in the editable box, caret at the end, nothing saved.
+  const panel = await scene("panel-transcript", { size: { width: 360, height: 420 } });
+  const box = panel.getByLabel("Capture an idea");
+  await expect(box).toHaveValue("Ask the AV lead for a second wireless mic");
+  expect(await box.evaluate((el) => [el === el.ownerDocument.activeElement, (el as unknown as { selectionStart: number }).selectionStart])).toEqual([true, 41]);
+  await expect(panel.getByRole("status").filter({ hasText: "Transcript" })).toHaveText("Transcript added. Edit it, then Save.");
+  // Opened for capture, the whole card is in view: the box, Save and the status line.
+  await expect(panel.getByRole("button", { name: "Save" })).toBeInViewport({ ratio: 1 });
+  expect((await calls(panel)).filter((c) => c[0] === "saveCapture")).toEqual([]);
+  await panel.close();
 });
 
 test("panel_glance_left_off_then_today_then_actions", async () => {
@@ -390,8 +588,8 @@ test("reduced motion: nothing travels and states still read by words and shape",
   expect(new Set(durations.flatMap((d) => d.split(", ")))).toEqual(new Set(["0s"]));
   await page.close();
   for (const state of ["idle", "working", "done"] as const) {
-    const pet = await scene(`pet-${state}`, { reducedMotion: "reduce", size: { width: 184, height: 136 } });
-    await expect(pet.getByRole("button")).toHaveAccessibleName(`Open companion panel. ${{ idle: "Idle", working: "Working", done: "Done" }[state]}.`);
+    const pet = await scene(`pet-${state}`, { reducedMotion: "reduce", size: { width: 184, height: 212 } });
+    await expect(pet.getByRole("button", { name: /^Open companion panel/ })).toHaveAccessibleName(`Open companion panel. ${{ idle: "Idle", working: "Working", done: "Done" }[state]}.`);
     const marks = await pet.locator(".pet-mark > *").count();
     expect(marks).toBe(state === "working" ? 3 : 1);
     await pet.close();
@@ -657,6 +855,35 @@ test("ui_shots", async () => {
       await page.screenshot({ path: join(SHOTS, `harness-pet-${state}-${tone}-184x136.png`) });
       await page.close();
     }
+  }
+  // The pill under TARS: idle, hovered, listening and transcribing, over light, mid and dark stand-in desktops.
+  for (const [ground, tone] of [["#ecebe8", "light"], ["#7d8187", "mid"], ["#1d2024", "dark"]]) {
+    const page = await scene("pet-idle-recording", { size: { width: 184, height: 212 } });
+    await page.addStyleTag({ content: `html { background: ${ground} !important }` });
+    const shot = (name: string) => page.screenshot({ path: join(SHOTS, `pill-pet-${name}-${tone}.png`) });
+    await shot("idle");
+    const figure = page.getByRole("button", { name: /^Open companion panel/ });
+    const f = (await figure.boundingBox())!;
+    await page.mouse.move(f.x + f.width - 20, f.y + 20);
+    await expect.poll(() => figure.evaluate((el) => el.style.getPropertyValue("--gx"))).not.toBe("");
+    await page.waitForTimeout(500); // the hello has played; the gaze has settled
+    await shot("hover");
+    const voice = page.getByRole("button", { name: "Hold to talk" });
+    const v = (await voice.boundingBox())!;
+    await page.mouse.move(v.x + v.width / 2, v.y + v.height / 2);
+    await page.mouse.down();
+    await expect(page.getByRole("status")).toHaveText("Listening");
+    await page.waitForTimeout(2200);
+    await shot("listening");
+    await page.mouse.up();
+    await expect(page.locator(".pill-word")).toHaveText("Transcribing…");
+    await shot("transcribing");
+    await page.close();
+  }
+  {
+    const page = await scene("panel-transcript", { size: { width: 360, height: 420 } });
+    await page.screenshot({ path: join(SHOTS, "pill-panel-transcript.png") });
+    await page.close();
   }
   // Live packaged app with a seeded (unconfirmed) session.
   const userData = await signedInProfile();

@@ -49,7 +49,9 @@ export type IpcRouterDeps = {
   };
   shortcut: { status(): unknown; set(accelerator: string): unknown };
   /** OS hand-offs, each called only from a user's click. */
-  system: { openExternal(url: string): Promise<void>; openAccessibilitySettings(): Promise<void> };
+  system: { openExternal(url: string): Promise<void>; openAccessibilitySettings(): Promise<void>; openMicrophoneSettings(): Promise<void> };
+  /** The held talk key (native helper): which key, and whether macOS lets it work. */
+  talkKey: { status(): unknown };
   /** Event-driven hand-off of consented local evidence to the cloud. */
   cloud: { trigger(): Promise<void> };
   /** Window control. Called only from the user's own pointer and key input in the renderer; never on a timer. */
@@ -63,6 +65,10 @@ export type IpcRouterDeps = {
     dragPet(senderId: number, dx: number, dy: number): void;
     /** The pointer entered or left the calling window; main knows whether that is the pet or the panel. */
     pointerOver(senderId: number, over: boolean): void;
+    /** The button went down on the pet's figure, or came up in place ("up") or after a drag ("dragged"). */
+    petPress(senderId: number, phase: PetPress): void;
+    /** Opens the panel pinned with the capture box focused; a dictation transcript, if any, goes into it to edit. */
+    openCapture(transcript?: Transcript): void;
   };
 };
 
@@ -91,7 +97,8 @@ const ObservationChoiceSchema = z.strictObject({
   projectIds: z.array(ProjectIdSchema).min(1),
 });
 type ObservationChoice = z.infer<typeof ObservationChoiceSchema>;
-const RecoveryRefSchema = z.strictObject({ recoveryId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/) });
+const RECOVERY_ID = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+const RecoveryRefSchema = z.strictObject({ recoveryId: RECOVERY_ID });
 type RecoveryRef = z.infer<typeof RecoveryRefSchema>;
 const FinishSchema = z.strictObject({ bytes: z.instanceof(Uint8Array), mime: z.string().min(1).max(100) });
 type Finish = z.infer<typeof FinishSchema>;
@@ -128,6 +135,13 @@ type WindowTarget = z.infer<typeof WindowTargetSchema>;
 const step = z.number().int().min(-4000).max(4000);
 const DragSchema = z.strictObject({ dx: step, dy: step });
 type Drag = z.infer<typeof DragSchema>;
+
+const PetPressSchema = z.strictObject({ phase: z.enum(["down", "up", "dragged"]) });
+type PetPress = z.infer<typeof PetPressSchema>["phase"];
+// A transcript only ever lands in the editable capture box; nothing here saves it.
+const TranscriptSchema = z.strictObject({ text: z.string().min(1).max(50_000), recoveryId: RECOVERY_ID });
+type Transcript = z.infer<typeof TranscriptSchema>;
+const OpenCaptureSchema = z.strictObject({ transcript: TranscriptSchema.optional() });
 
 /** Window-bound requests: main checks which window sent them, never the renderer's say-so. */
 function requireSender(sender: IpcSender): number {
@@ -273,6 +287,22 @@ const routes = {
   "window:hover": {
     payload: z.strictObject({ over: z.boolean() }),
     run: async (deps: IpcRouterDeps, { over }: { over: boolean }, sender: IpcSender) => deps.windows.pointerOver(requireSender(sender), over),
+  },
+  "pet:press": {
+    payload: PetPressSchema,
+    run: async (deps: IpcRouterDeps, { phase }: { phase: PetPress }, sender: IpcSender) => deps.windows.petPress(requireSender(sender), phase),
+  },
+  "capture:open": {
+    payload: OpenCaptureSchema,
+    run: async (deps: IpcRouterDeps, { transcript }: { transcript?: Transcript }) => deps.windows.openCapture(transcript),
+  },
+  "dictation:openMicrophoneSettings": {
+    payload: z.undefined(),
+    run: (deps: IpcRouterDeps) => deps.system.openMicrophoneSettings(),
+  },
+  "talk:keyStatus": {
+    payload: z.undefined(),
+    run: async (deps: IpcRouterDeps) => deps.talkKey.status(),
   },
   "auth:idToken": {
     payload: z.strictObject({ forceRefresh: z.boolean() }),

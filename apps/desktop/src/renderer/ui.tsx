@@ -265,7 +265,14 @@ export function PetFigure({
     const posed = name === "s1" || name === "s4";
     return (
       <g className={posed ? "pet-part" : undefined} style={posed ? { transform: pose[name] ?? "none", transformOrigin: `${x + W / 2}px ${H}px` } : undefined}>
-        <SlabShape x={x} />
+        {posed ? (
+          // The hover "hello" moves this inner group, so it adds to the pose instead of replacing it.
+          <g className="pet-wave" data-side={name === "s1" ? "l" : "r"} style={{ transformOrigin: `${x + W / 2}px ${H}px` }}>
+            <SlabShape x={x} />
+          </g>
+        ) : (
+          <SlabShape x={x} />
+        )}
       </g>
     );
   };
