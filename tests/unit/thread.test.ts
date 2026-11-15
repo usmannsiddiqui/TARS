@@ -1,74 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-  askedFor,
-  asksToSend,
   block,
   blockHasContent,
   deliverySteps,
   dueLabel,
   formatDuration,
   isMailAddress,
-  openingText,
   primaryBlockId,
+  sayParts,
   stripEvidenceIds,
   viewBlock,
   workSummary,
 } from "../../packages/domain/src/thread";
-
-describe("TARS's opening, in plain words from stored data", () => {
-  it("names what was asked as a short phrase, never a quote or the model's qualifiers", () => {
-    expect(askedFor("Send the AI Guides report, per a separate request")).toBe("asked for the AI Guides report");
-    expect(askedFor("Send Dana the budget summary")).toBe("asked for the budget summary");
-    expect(askedFor("Send the budget to Dana by 5pm today.")).toBe("asked for the budget");
-    expect(askedFor("Share the final slide order with the co-presenter")).toBe("asked for the final slide order");
-    expect(askedFor("Review the pitch deck")).toBe("asked you to review the pitch deck");
-    expect(askedFor("Send it (as discussed)")).toBe("asked you to send it");
-  });
-
-  it("reads like TARS: who, what, when, from what, then the one question", () => {
-    expect(
-      openingText({
-        asker: { name: "Dana", address: "dana@example.com" },
-        commitment: "Send the AI Guides summary",
-        due: "Monday at 5:00 PM",
-        sources: [
-          { kind: "obsidian", count: 3 },
-          { kind: "gmail", count: 2 },
-        ],
-        requestOnly: false,
-      }),
-    ).toBe("Dana asked for the AI Guides summary. It's due Monday at 5:00 PM. I drafted it from 3 notes and 2 emails while you were busy. Tell me what to change, or send it.");
-  });
-
-  it("falls back honestly: the address, then Someone; no due time, no sources; only the request to go on", () => {
-    expect(openingText({ asker: { address: "dana@example.com" }, commitment: "Send the budget", sources: [], requestOnly: false })).toBe(
-      "dana@example.com asked for the budget. I drafted it while you were busy. Tell me what to change, or send it.",
-    );
-    expect(openingText({ asker: null, commitment: "Send the budget", due: "Sunday at 11:59 PM", sources: [{ kind: "gmail", count: 1 }], requestOnly: true })).toBe(
-      "Someone asked for the budget. It's due Sunday at 11:59 PM. I only have the request to go on, so the draft marks what I need from you. Tell me what to change, or send it.",
-    );
-    expect(openingText({ asker: null, commitment: "Send the budget", sources: [{ kind: "slack", count: 1 }, { kind: "canvas", count: 4 }], requestOnly: false })).toContain(
-      "I drafted it from 1 Slack message and 4 calendar items while you were busy.",
-    );
-  });
-});
-
-describe("the opening after a fresh draft, in the same plain voice", () => {
-  const base = { asker: { name: "Dana" }, commitment: "Send the AI Guides summary", due: "Monday at 5:00 PM", sources: [{ kind: "gmail", count: 2 }], requestOnly: false };
-  it("a fresh draft over an earlier one says Undo brings it back", () => {
-    expect(openingText({ ...base, outcome: "revised" })).toBe(
-      "Dana asked for the AI Guides summary. It's due Monday at 5:00 PM. I wrote a fresh draft from 2 emails while you were busy; Undo brings back the earlier one. Tell me what to change, or send it.",
-    );
-  });
-  it("his edited draft is left alone and the fresh start waits as a suggestion", () => {
-    expect(openingText({ ...base, outcome: "suggested" })).toBe(
-      "Dana asked for the AI Guides summary. It's due Monday at 5:00 PM. I left your edited draft as it is and put a fresh one from 2 emails next to it as a suggestion. Apply it, or tell me what to change.",
-    );
-    expect(openingText({ ...base, requestOnly: true, outcome: "suggested" })).toContain(
-      "I left your edited draft as it is and put a fresh one next to it as a suggestion; I only have the request to go on, so it marks what I need from you.",
-    );
-  });
-});
 
 describe("blocks with nothing to show render nothing", () => {
   it("empty work, blank words, a card with no draft and a send with no action are empty", () => {
@@ -203,13 +146,6 @@ describe("helpers from stored data", () => {
   it("says the due time in the user's own zone", () => {
     expect(dueLabel("2026-11-14T22:00:00.000Z", "America/New_York")).toBe("Saturday at 5:00 PM");
   });
-
-  it("only the user's own words can ask to send", () => {
-    expect(asksToSend("looks good, send it")).toBe(true);
-    expect(asksToSend("Approve it")).toBe(true);
-    expect(asksToSend("tighten the intro")).toBe(false);
-    expect(asksToSend("when is this due?")).toBe(false);
-  });
 });
 
 describe("Today's blocks: results, start, ask, sorted", () => {
@@ -267,5 +203,26 @@ describe("primaryBlockId (the one navy action on screen)", () => {
 
   it("never picks a work, document, receipt or sorted block", () => {
     expect(primaryBlockId([msg("m1", [{ type: "work", props: { steps: [] } }, { type: "sorted", props: { view: { kind: "sorting", projects: 1 } } }])])).toBeNull();
+  });
+});
+
+describe("sayParts (TARS's words, formatted for reading)", () => {
+  it("splits paragraphs on blank lines and marks bold runs", () => {
+    expect(sayParts("Dana asked for the budget.\nIt is due **Monday at 5 PM**.\n\nTell me what to change.")).toEqual([
+      { kind: "p", lines: [[{ text: "Dana asked for the budget. It is due " }, { text: "Monday at 5 PM", bold: true }, { text: "." }]] },
+      { kind: "p", lines: [[{ text: "Tell me what to change." }]] },
+    ]);
+  });
+
+  it("groups list lines into one list, bulleted or numbered", () => {
+    expect(sayParts("Coming up:\n- **Nov 16:** class\n- Nov 19: homework\n\n1. First\n2. Second")).toEqual([
+      { kind: "p", lines: [[{ text: "Coming up:" }]] },
+      { kind: "ul", lines: [[{ text: "Nov 16:", bold: true }, { text: " class" }], [{ text: "Nov 19: homework" }]] },
+      { kind: "ol", lines: [[{ text: "First" }], [{ text: "Second" }]] },
+    ]);
+  });
+
+  it("leaves a lone asterisk pair or a heading mark as plain words", () => {
+    expect(sayParts("## Budget\n2 ** 3 is 8")).toEqual([{ kind: "p", lines: [[{ text: "Budget 2 ** 3 is 8" }]] }]);
   });
 });

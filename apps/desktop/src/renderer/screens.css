@@ -1130,6 +1130,36 @@
   color: var(--ink);
 }
 
+.say-text p + p,
+.say-text p + ul,
+.say-text p + ol,
+.say-text ul + p,
+.say-text ol + p {
+  margin-top: 10px;
+}
+
+.say-text ul,
+.say-text ol {
+  padding-left: 22px;
+}
+
+.say-text li + li {
+  margin-top: 4px;
+}
+
+.say-text strong {
+  font-weight: 600;
+}
+
+.say-source-link {
+  text-decoration: none;
+  border-radius: 999px;
+}
+
+.say-source-link:hover .source-chip-label {
+  text-decoration: underline;
+}
+
 .say-sources {
   display: flex;
   flex-wrap: wrap;

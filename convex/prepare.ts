@@ -24,7 +24,7 @@ import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields
 const StoredGrant = z.object(SourceGrantSchema.shape);
 
 /** The grant when in scope, else null: revoked/paused grants, old grant versions and unconfirmed projects are out of scope even if rows remain. */
-async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
+export async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
   const grantRow = await ctx.db
     .query("grants")
     .withIndex("by_source", (q) => q.eq("id", sourceId))
@@ -63,6 +63,7 @@ const runSources = v.array(v.object({ kind: v.string(), count: v.number() }));
 const preparationContext = v.object({
   projectName: v.string(),
   evidence: v.array(v.object(evidenceFields)),
+  kinds: v.array(v.object({ sourceId: v.string(), kind: v.string() })), // each source's kind, for a source chip's mark
   sources: runSources, // the source kinds of `evidence`, with item counts: what the helper card names
   omitted: v.number(),
   memory: v.array(v.object({ key: v.string(), value: v.string() })),
@@ -97,6 +98,7 @@ export const loadPreparationContext = internalQuery({
     return {
       projectName: project.name,
       evidence: selected,
+      kinds: [...kindOf].map(([sourceId, kind]) => ({ sourceId, kind })),
       sources: [...counts].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind)),
       omitted,
       memory: (await loadVisibleFacts(ctx, ownerId, projectId)).map(({ key, value }) => ({ key, value })),
@@ -472,7 +474,7 @@ export const persistPreparation = internalMutation({
     };
     if (row === null) await ctx.db.insert("preparedWork", { ownerId, projectId, ...next });
     else await ctx.db.patch(row._id, { ...next, lastError: undefined });
-    await trackDueCommitments(ctx, ownerId, projectId, automatic);
+    await trackDueCommitments(ctx, ownerId, projectId);
     return "stored" as const;
   },
 });

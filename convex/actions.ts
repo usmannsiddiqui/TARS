@@ -142,8 +142,8 @@ export const reserve = internalMutation({
   handler: (ctx, { ownerId, ...intent }) => reserveAction(ctx, ownerId, intent),
 });
 
-/** What a send-document reservation binds beyond the intent: the mail itself and its document. */
-type DocumentMail = { subject: string; body: string; documentId: Id<"artifactDocuments">; stages: NonNullable<Doc<"actions">["stages"]> };
+/** What a send-document reservation binds beyond the intent: the mail itself and its document (none for a reply). */
+type DocumentMail = { subject: string; body: string; documentId?: Id<"artifactDocuments">; stages: NonNullable<Doc<"actions">["stages"]> };
 type Intent = Omit<Infer<ReturnType<typeof v.object<typeof intentArgs>>>, "kind"> & { kind: Doc<"actions">["kind"] };
 
 /** The reservation itself; `mail` is required for (and only for) send-document. */
@@ -284,7 +284,7 @@ export const recordOutcome = internalMutation({
       // A later check that proves delivery closes the send and verify stages it left open.
       ...(verified && row.stages !== undefined ? { stages: row.stages.map((s) => (s.state === "done" ? s : { name: s.name, state: "done" as const, ...(s.startedAt === undefined ? {} : { startedAt: s.startedAt }), endedAt: Date.now() })) } : {}),
     });
-    await reportSendOutcome(ctx, row, state); // a send he started with SEND on WhatsApp: one message
+    await reportSendOutcome(ctx, row, state); // one message to his linked phone
     if (verified && row.taskId !== undefined) {
       const taskId = ctx.db.normalizeId("commitments", row.taskId);
       const task = taskId === null ? null : await ctx.db.get(taskId);
