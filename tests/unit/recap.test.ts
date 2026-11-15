@@ -14,6 +14,11 @@ describe("closingRecap", () => {
     expect(recap.done).toEqual({ items: ["Sent AI Guides report, 12:41 AM"], more: 0 });
   });
 
+  test("a verified Word-document send today is Done", () => {
+    const recap = closingRecap({ ...base, actions: [{ kind: "send-document", title: "AI Guides report", verifiedAt: "2026-11-15T05:41:00Z" }] });
+    expect(recap.done).toEqual({ items: ["Sent AI Guides report, 12:41 AM"], more: 0 });
+  });
+
   test("commitments the user marked done today are Done; other states and days are not", () => {
     const recap = closingRecap({
       ...base,
