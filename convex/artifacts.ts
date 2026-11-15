@@ -47,6 +47,8 @@ const toArtifact = (row: Doc<"artifacts"> | Doc<"artifactVersions">, id: Id<"art
   text: row.text,
   userEdited: row.userEdited,
   evidenceIds: row.evidenceIds as EvidenceId[],
+  ...(row.title === undefined ? {} : { title: row.title }),
+  ...(row.form === undefined ? {} : { form: row.form }),
 });
 
 export async function requireOwnedArtifact(ctx: Pick<QueryCtx, "db">, ownerId: string, artifactId: string) {
@@ -327,6 +329,38 @@ export const commitRevision = internalMutation({
       });
     }
     return await commit(ctx, row._id, transition);
+  },
+});
+
+/**
+ * A run's draft for the project: the first revision, or the next one (the earlier text stays in the
+ * versions, so Undo brings it back). The title and form are the run's own choice. Sends nothing.
+ */
+export const writeDraft = internalMutation({
+  args: {
+    ownerId: v.string(),
+    projectId: v.string(),
+    title: v.string(),
+    form: v.union(v.literal("document"), v.literal("reply")),
+    text: v.string(),
+    changeSummary: v.string(),
+  },
+  returns: revisionResult,
+  handler: async (ctx, { ownerId, projectId, title, form, text, changeSummary }): Promise<Infer<typeof revisionResult>> => {
+    await requireOwnedProject(ctx, ownerId, projectId);
+    checkText(text);
+    const row = await ctx.db
+      .query("artifacts")
+      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+      .unique();
+    if (row === null) {
+      const fields = { ownerId, projectId, revision: FIRST_REVISION, text, userEdited: false, evidenceIds: [], title, form };
+      const id = await ctx.db.insert("artifacts", fields);
+      return { status: "applied", artifact: { id, ...fields }, changeSummary };
+    }
+    const result = await commit(ctx, row._id, applyChange(toArtifact(row, row._id), row.revision as RevisionId, { text, userEdited: false, changeSummary }));
+    await ctx.db.patch(row._id, { title, form });
+    return { ...result, artifact: { ...result.artifact, title, form } };
   },
 });
 

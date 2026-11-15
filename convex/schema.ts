@@ -85,6 +85,9 @@ export const artifactFields = {
   text: v.string(),
   userEdited: v.boolean(),
   evidenceIds: v.array(v.string()),
+  // Set by the run that wrote the draft: its name, and whether it goes out as a document or a short reply.
+  title: v.optional(v.string()),
+  form: v.optional(v.union(v.literal("document"), v.literal("reply"))),
 };
 
 /** Block specs as stored; their props are checked by the domain catalog's Zod schemas before writing. */
@@ -235,13 +238,13 @@ export default defineSchema({
     stageTimes: v.optional(v.array(v.object({ stage: runStage, at: v.number() }))),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
-  // Gentle nudges for one of the user's commitments with a due time (key = commitmentKey, stable
+  // Gentle nudges for one of the user's commitments (key = commitmentKey, stable
   // across re-preparation). dueJob: the one due-1h reminder. offer: what is showing now, if anything.
   nudges: defineTable({
     ownerId: v.string(),
     projectId: v.string(),
     key: v.string(),
-    dueAt: v.string(),
+    dueAt: v.optional(v.string()), // absent: the request gave no due time, so it has an offer but no reminder
     dueJob: v.optional(v.id("_scheduled_functions")),
     lastNudgedAt: v.optional(v.number()),
     offer: v.optional(v.object({ key: v.string(), startedForYou: v.boolean() })),

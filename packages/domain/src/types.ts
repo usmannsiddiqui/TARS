@@ -156,6 +156,8 @@ export type Artifact = {
   text: string;
   userEdited: boolean;
   evidenceIds: EvidenceId[];
+  title?: string;
+  form?: "document" | "reply";
 };
 
 export type RevisionRequest = { artifactId: ArtifactId; baseRevision: RevisionId; instruction: string };

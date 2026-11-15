@@ -24,7 +24,7 @@ import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields
 const StoredGrant = z.object(SourceGrantSchema.shape);
 
 /** The grant when in scope, else null: revoked/paused grants, old grant versions and unconfirmed projects are out of scope even if rows remain. */
-async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
+export async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
   const grantRow = await ctx.db
     .query("grants")
     .withIndex("by_source", (q) => q.eq("id", sourceId))

@@ -220,12 +220,12 @@ export const recordStatus = internalMutation({
 // ---- What TARS says to the phone.
 
 /** A nudge offer just opened for a newly seen due commitment: its title and due time, nothing else. */
-export async function queueNudge(ctx: MutationCtx, ownerId: string, key: string, title: string, dueAt: string, started: boolean) {
+export async function queueNudge(ctx: MutationCtx, ownerId: string, key: string, title: string, dueAt: string | undefined, started: boolean) {
   const settings = await ctx.db
     .query("attentionSettings")
     .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
     .unique();
-  const due = settings ? ` It's due ${dueLabel(dueAt, settings.timezone)}.` : "";
+  const due = settings && dueAt !== undefined ? ` It's due ${dueLabel(dueAt, settings.timezone)}.` : "";
   const lead = started ? `I started “${title}” for you while you were busy.` : `“${title}” is ready for you.`;
   await queueMessage(ctx, ownerId, `nudge:${key}`, `${lead}${due} Open TARS or reply here.`);
 }
