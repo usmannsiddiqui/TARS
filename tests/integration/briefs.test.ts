@@ -219,6 +219,19 @@ describe("briefs", () => {
     await expect(asAlice.mutation(api.briefs.resolveTradeoff, { commitmentId: added, choice: "defer" })).rejects.toThrow();
   });
 
+  test("reentry_returns_a_commitment_that_carries_its_stable_key", async () => {
+    // Seen live: commitments gained `key`, getReentry's return validator did not, and Today went blank.
+    const { asAlice, alice, project, t, configure } = setup();
+    const avt = await project("AVT");
+    await t.run((ctx) =>
+      ctx.db.insert("commitments", { ownerId: alice.ownerId, projectId: avt, text: "Pitch deck", ownership: "user", state: "open", evidenceIds: [], key: `${avt}:pitch deck` }),
+    );
+    await configure();
+    await asAlice.mutation(api.briefs.handleReturn, { panelOpen: true });
+    const reentry = (await asAlice.query(api.briefs.getReentry, {}))!;
+    expect(reentry.backlog.map((c) => c.text)).toEqual(["Pitch deck"]);
+  });
+
   test("brief_does_not_reschedule_or_send", async () => {
     const { asAlice, project, evidence, commitment, commitments, scheduled, runDeadline, configure } = setup();
     const avt = await project("AVT");
