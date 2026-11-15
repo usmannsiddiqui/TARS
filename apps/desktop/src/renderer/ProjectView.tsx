@@ -1,11 +1,13 @@
-// One project: its next step in TARS's voice, the run-through as timed segments (the signature: titles
-// and minutes edit the text, the total is computed) with its one instructed action, then prepared work
-// and commitments grouped by who holds them. Presentational: data and actions arrive as props.
+// One project, chat first: the thread with TARS (generative-UI messages) and the composer with
+// dictation docked at the bottom; beside it the editable draft (the run-through as timed segments,
+// direct edits, Undo, its one instructed action and its share link) and commitments grouped by who
+// holds them. Presentational: data and actions arrive as props.
 import { useEffect, useId, useRef, useState } from "react";
 import { Act, type ActingActions, type LogDestinationView } from "./Act";
-import { segmentsOf, setSegment, type Commitment, type Evidence, type Honest, type Prepared, type Receipt } from "./model";
-import { UrlChip } from "./logos";
-import { formatWhen, reason, StateNote, StateTag } from "./ui";
+import { Composer } from "./Composer";
+import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type Receipt } from "./model";
+import { Thread, type ApproveArgs, type ThreadMessage } from "./Thread";
+import { formatWhen, reason, StateNote } from "./ui";
 
 export type ArtifactView = {
   id: string;
@@ -26,20 +28,30 @@ export type RevisionOutcome = { status: "applied" | "conflict"; changeSummary: s
 export type EditorActions = {
   create(): Promise<void>;
   save(text: string, baseRevision: string): Promise<RevisionOutcome>;
-  revise(instruction: string, baseRevision: string): Promise<RevisionOutcome>;
   undo(expectedCurrent: string, undoRevision: string): Promise<RevisionOutcome>;
   applySuggestion(suggestionId: string, baseRevision: string): Promise<RevisionOutcome>;
   dismissSuggestion(suggestionId: string): Promise<void>;
 };
 
+/** The chat's backend: his message goes to TARS; the approval's primary action is the send seam. */
+export type ChatActions = {
+  send(text: string): Promise<void>;
+  approve(args: ApproveArgs): Promise<void>;
+  retry(messageId: string): Promise<void>;
+};
+
 export type ProjectViewProps = {
+  projectId: string;
   name: string;
   isFocus: boolean;
+  /** "improve" puts the caret in the composer. */
   mode?: "help" | "improve";
   /** undefined = nothing prepared yet; `preparedState` overrides with loading / retry states. */
   prepared?: Prepared;
   preparedState?: Honest;
-  evidence: Evidence[];
+  /** undefined while loading. */
+  thread: ThreadMessage[] | undefined;
+  chat: ChatActions;
   commitments: Commitment[] | null;
   /** undefined while loading, null before a run-through exists. */
   artifact: ArtifactView | null | undefined;
@@ -59,11 +71,8 @@ export type ProjectViewProps = {
 export function ProjectView(props: ProjectViewProps) {
   const { prepared, commitments, receipt } = props;
   const work = prepared?.work;
-  const [helping, setHelping] = useState(props.mode === "help");
   const [preparing, setPreparing] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const [acted, setActed] = useState(false);
-  const [chosenNext, setChosenNext] = useState<string | null>(null);
-  const evidenceById = new Map(props.evidence.map((e) => [e.id, e]));
   const mine = commitments?.filter((c) => c.ownership === "user") ?? [];
   const doneMine = mine.filter((c) => c.state === "user-reported-done" || c.state === "verified-done");
   const complete = mine.length > 0 && doneMine.length === mine.length;
@@ -78,15 +87,18 @@ export function ProjectView(props: ProjectViewProps) {
       : complete && lastDone
         ? `${lastDone.text}${lastDone.state === "user-reported-done" ? " (reported by you, not verified)" : ""}`
         : null;
-  // One optional next step: the next open task of yours, if there is one.
-  const optionalNext = openMine[0]?.text;
-  // A verified completion appears above the run-through: bring it into view and focus once, starting nothing.
+  // A verified completion appears above the thread: bring it into view and focus once, starting nothing.
   const doneRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (verified) doneRef.current?.focus();
   }, [verified]);
 
-  useEffect(() => setHelping(props.mode === "help"), [props.mode]);
+  // "Open draft" and "Keep editing" bring the editable draft into view with its text box focused.
+  const draftRef = useRef<HTMLDivElement>(null);
+  const openDraft = () => {
+    draftRef.current?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    draftRef.current?.querySelector<HTMLElement>("textarea.doc, .segment-title")?.focus({ preventScroll: true });
+  };
 
   async function prepare() {
     setPreparing({ busy: true });
@@ -98,30 +110,18 @@ export function ProjectView(props: ProjectViewProps) {
     }
   }
 
-  const preparedState: Honest =
+  const preparedState: Honest | null =
     props.preparedState ??
     (prepared === undefined
-      ? { kind: "empty", detail: "Nothing prepared for this project yet." }
+      ? null
       : prepared.status === "needs-retry"
         ? { kind: "needs-retry", detail: "The last preparation failed; the earlier version is kept." }
         : prepared.status === "invalidated"
           ? { kind: "partial", detail: "Something it relied on was forgotten, so it was removed." }
-          : prepared.status === "empty"
-            ? { kind: "empty", detail: "No source items for this project yet." }
-            : work?.state === "partial"
-              ? { kind: "partial", detail: `Prepared ${formatWhen(prepared.updatedAt)}, with gaps` }
-              : { kind: "last-checked", at: prepared.updatedAt });
-
-  // What this project holds right now, from data already on this screen. Nothing is estimated.
-  const minutes = props.artifact ? segmentsOf(props.artifact.text).reduce((n, s) => n + s.minutes, 0) : 0;
-  const readout: [key: string, value: string][] = [
-    ["Prepared", props.preparedState?.kind === "loading" ? "reading" : prepared?.status === "ready" ? formatWhen(prepared.updatedAt) : "not yet"],
-    ["Run-through", props.artifact === undefined ? "reading" : props.artifact === null ? "not started" : minutes > 0 ? `${minutes} min` : `revision ${props.artifact.revision}`],
-    ["Yours open", commitments === null ? "reading" : String(openMine.length)],
-  ];
+          : null);
 
   return (
-    <div className="screen project">
+    <div className="screen project chat">
       <header className="screen-head">
         <h1>{props.name}</h1>
         <p className="screen-sub">
@@ -135,132 +135,65 @@ export function ProjectView(props: ProjectViewProps) {
               </button>
             </>
           )}
+          {prepared?.status === "ready" && <span className="quiet">Prepared {formatWhen(prepared.updatedAt)}</span>}
         </p>
-        <ul className="readout" aria-label="Where this project stands">
-          {readout.map(([key, value]) => (
-            <li key={key}>
-              <span className="readout-key">{key}</span> {value}
-            </li>
-          ))}
-        </ul>
       </header>
 
-      {doneText && (
-        <section className="completion" aria-labelledby="done-h">
-          <h2 id="done-h" ref={doneRef} tabIndex={-1}>
-            Done
-          </h2>
-          <p className="completion-what">{doneText}</p>
-          <p className="quiet small">Nothing else starts on its own.</p>
-          <div className="actions equal">
-            {optionalNext && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  setChosenNext(optionalNext);
-                  setHelping(true);
-                }}
-              >
-                Optional next: {optionalNext}
-              </button>
-            )}
-            <button type="button" className="secondary" onClick={props.onStop}>
-              Stop for now
-            </button>
+      <div className="chat-grid">
+        <section className="chat-main" aria-label="Chat with TARS">
+          {doneText && (
+            <section className="completion" aria-labelledby="done-h">
+              <h2 id="done-h" ref={doneRef} tabIndex={-1}>
+                Done
+              </h2>
+              <p className="completion-what">{doneText}</p>
+              <p className="quiet small">Nothing else starts on its own.</p>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={props.onStop}>
+                  Stop for now
+                </button>
+              </div>
+            </section>
+          )}
+          {preparedState && <StateNote state={preparedState} />}
+          {props.thread === undefined ? (
+            <StateNote state={{ kind: "loading", detail: "Reading this project's conversation…" }} />
+          ) : props.thread.length === 0 ? (
+            <div className="thread-empty">
+              <p className="say-text">Nothing here yet. When a message asks you for something with a deadline, I start the work and write to you here first.</p>
+              <p className="quiet">You can also ask me about this project now, or tell me what to draft.</p>
+              {work === undefined && (
+                <button type="button" className="secondary" onClick={() => void prepare()} disabled={preparing.busy}>
+                  {preparing.busy ? "Preparing…" : prepared?.status === "needs-retry" ? "Try preparing again" : "Prepare from my sources"}
+                </button>
+              )}
+              {preparing.error && <StateNote state={{ kind: "needs-retry", detail: preparing.error }} />}
+            </div>
+          ) : (
+            <Thread
+              messages={props.thread}
+              actions={{
+                onApprove: props.chat.approve,
+                onRetry: props.chat.retry,
+                onOpenDraft: openDraft,
+                onKeepEditing: openDraft,
+                onUndo: async (artifactId, expectedCurrent, undoRevision) => void (artifactId === props.artifact?.id && (await props.editor.undo(expectedCurrent, undoRevision))),
+              }}
+            />
+          )}
+          <div className="chat-dock">
+            <Composer projectId={props.projectId} send={props.chat.send} autoFocus={props.mode === "improve"} />
           </div>
         </section>
-      )}
 
-      <section className="block next tars-voice" aria-labelledby="next-h">
-        <h2 id="next-h" className="block-title">
-          Next step
-        </h2>
-        <div className="next-body">
-          {helping && (chosenNext ?? work) ? (
-            <p className="step" tabIndex={-1} ref={(el) => el?.focus()}>
-              {chosenNext ?? work?.nextAction}
-            </p>
-          ) : helping && !work ? (
-            <StateNote state={{ kind: "empty", detail: "Prepare from your sources first, then I can suggest a step." }} />
-          ) : (
-            <p className="quiet">One small step, when you want it.</p>
-          )}
-          {!helping && (
-            <button type="button" className="primary" onClick={() => (work ? setHelping(true) : void prepare())} disabled={preparing.busy}>
-              Help me start
-            </button>
-          )}
-        </div>
-      </section>
-
-      <div className="project-grid">
-        <div className="project-main">
+        <aside className="chat-side" ref={draftRef}>
           <RunThrough
             artifact={props.artifact}
             canCreate={work !== undefined}
             editor={props.editor}
-            improve={props.mode === "improve"}
             sharing={props.sharing}
             act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: receipt ?? null, onActed: () => setActed(true), actions: props.acting, logDestination: props.logDestination }}
           />
-        </div>
-
-        <aside className="project-side">
-          <section className="block tars-voice" aria-labelledby="prepared-h">
-            <h2 id="prepared-h" className="block-title">
-              Prepared for you
-            </h2>
-            <StateNote state={preparedState} />
-            {work && (
-              <article className="prepared">
-                <h3 className="prepared-title">{work.title}</h3>
-                <p className="prepared-body">{work.body}</p>
-                {work.gaps.length > 0 && (
-                  <div className="gaps">
-                    <h4>Not known yet</h4>
-                    <ul className="plain">
-                      {work.gaps.map((g) => (
-                        <li key={g}>{g}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {work.evidenceIds.length > 0 && (
-                  <div className="sources">
-                    <h4>From your sources</h4>
-                    <ol className="source-list">
-                      {work.evidenceIds.map((id) => {
-                        const e = evidenceById.get(id);
-                        return (
-                          <li key={id}>
-                            {e ? (
-                              <>
-                                <q>{e.text.length > 160 ? `${e.text.slice(0, 160)}…` : e.text}</q>
-                                <span className="source-meta">
-                                  <UrlChip url={e.sourceUrl} />
-                                  <span className="quiet small">{formatWhen(e.occurredAt)}</span>
-                                  {e.freshness !== "current" && <StateTag state={{ kind: "stale" }} />}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="quiet">A source item that is no longer current.</span>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  </div>
-                )}
-              </article>
-            )}
-            {(prepared === undefined || prepared.status !== "ready") && !props.preparedState && (
-              <button type="button" className="secondary" onClick={prepare} disabled={preparing.busy}>
-                {preparing.busy ? "Preparing…" : prepared?.status === "needs-retry" ? "Try preparing again" : "Prepare from my sources"}
-              </button>
-            )}
-            {preparing.error && <StateNote state={{ kind: "needs-retry", detail: preparing.error }} />}
-          </section>
           <Commitments commitments={commitments} onReportDone={props.onReportDone} />
         </aside>
       </div>
@@ -343,19 +276,15 @@ type RunThroughProps = {
   artifact: ArtifactView | null | undefined;
   canCreate: boolean;
   editor: EditorActions;
-  improve: boolean;
   act: Omit<Parameters<typeof Act>[0], "saved" | "dirty">;
   sharing: Sharing;
 };
 
-function RunThrough({ artifact, canCreate, editor, improve, act, sharing }: RunThroughProps) {
+function RunThrough({ artifact, canCreate, editor, act, sharing }: RunThroughProps) {
   const textId = useId();
-  const instructionId = useId();
-  const instructionRef = useRef<HTMLTextAreaElement>(null);
   // `loaded` is the revision the draft started from; saves name it, so a newer cloud text is never overwritten.
   const [loaded, setLoaded] = useState({ revision: artifact?.revision, text: artifact?.text ?? "" });
   const [draft, setDraft] = useState(artifact?.text ?? "");
-  const [instruction, setInstruction] = useState("");
   const [last, setLast] = useState<LastChange | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -369,10 +298,6 @@ function RunThrough({ artifact, canCreate, editor, improve, act, sharing }: RunT
       setDraft(artifact.text);
     }
   }, [artifact, loaded, draft]);
-
-  useEffect(() => {
-    if (improve) instructionRef.current?.focus();
-  }, [improve, artifact?.id]);
 
   async function run(label: string, action: () => Promise<RevisionOutcome | void>) {
     setBusy(label);
@@ -503,35 +428,6 @@ function RunThrough({ artifact, canCreate, editor, improve, act, sharing }: RunT
               )}
             </div>
           )}
-
-          <form
-            className="instruct"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (instruction.trim() === "") return;
-              void run("revise", async () => {
-                const outcome = await editor.revise(instruction, artifact.revision);
-                if (outcome.status === "applied") setInstruction("");
-                return outcome;
-              });
-            }}
-          >
-            <label htmlFor={instructionId}>Tell me what to change</label>
-            <textarea
-              id={instructionId}
-              ref={instructionRef}
-              rows={2}
-              value={instruction}
-              placeholder="For example: make the demo part shorter"
-              onChange={(e) => setInstruction(e.target.value)}
-            />
-            <div className="editor-bar">
-              <span className="quiet">{dirty ? "Save your edits first, so nothing is overwritten." : "Applies straight away; you can undo it."}</span>
-              <button type="submit" className="secondary" disabled={dirty || busy !== null || instruction.trim() === ""}>
-                {busy === "revise" ? "Revising…" : "Revise"}
-              </button>
-            </div>
-          </form>
 
           <Act saved={{ artifactId: artifact.id, revision: artifact.revision, text: artifact.text }} dirty={dirty} {...act} />
           <ShareLink revision={artifact.revision} dirty={dirty} sharing={sharing} />

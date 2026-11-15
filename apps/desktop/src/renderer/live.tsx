@@ -342,12 +342,14 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
-  const evidence = useQuery(api.evidence.listCurrentEvidence, { projectId });
   const artifact = useQuery(api.artifacts.getArtifact, { projectId });
+  const thread = useQuery(api.thread.listThread, { projectId });
+  const sendMessage = useAction(api.thread.sendMessage);
+  const retryReply = useAction(api.thread.retry);
+  const approve = useMutation(api.thread.approve);
   const prepare = useAction(api.prepare.prepareProject);
   const create = useMutation(api.artifacts.createFromPrepared);
   const saveEdit = useMutation(api.artifacts.saveEdit);
-  const revise = useAction(api.artifacts.reviseArtifact);
   const undo = useMutation(api.artifacts.undoRevision);
   const apply = useMutation(api.artifacts.applySuggestion);
   const dismiss = useMutation(api.artifacts.dismissSuggestion);
@@ -422,7 +424,6 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const editor: EditorActions = {
     create: async () => void (await create({ projectId })),
     save: async (text, baseRevision) => outcome(await saveEdit({ artifactId: artifact!.id, baseRevision, text })),
-    revise: async (instruction, baseRevision) => outcome(await revise({ artifactId: artifact!.id, baseRevision, instruction })),
     undo: async (expectedCurrent, undoRevision) => outcome(await undo({ artifactId: artifact!.id, expectedCurrent, undoRevision })),
     applySuggestion: async (suggestionId, baseRevision) => outcome(await apply({ suggestionId, baseRevision })),
     dismissSuggestion: async (suggestionId) => void (await dismiss({ suggestionId })),
@@ -438,12 +439,19 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const loadedPrepared = toPrepared(prepared);
   return (
     <ProjectView
+      projectId={projectId}
       name={props.name}
       isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}
       {...(prepared === undefined ? { preparedState: { kind: "loading" } as Honest } : {})}
-      evidence={toEvidence(evidence)}
+      thread={thread?.map(({ _id, role, text, blocks, createdAt }) => ({ id: _id, role, ...(text === undefined ? {} : { text }), blocks, createdAt }))}
+      chat={{
+        send: async (text) => void (await sendMessage({ projectId, text })),
+        // The send seam: today this records the approval and shows a waiting step; nothing is sent.
+        approve: async (args) => void (await approve(args)),
+        retry: async (messageId) => void (await retryReply({ messageId: messageId as Id<"threadMessages"> })),
+      }}
       commitments={commitments ?? null}
       artifact={artifact === undefined ? undefined : artifact && { id: artifact.id, revision: artifact.revision, text: artifact.text, userEdited: artifact.userEdited, suggestions: artifact.suggestions }}
       editor={editor}

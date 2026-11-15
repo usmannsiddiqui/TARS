@@ -20,8 +20,22 @@ const clock = (ms: number) => `${String(Math.floor(ms / 60_000)).padStart(2, "0"
 /**
  * `onSaved`: the capture is durably on this Mac (for lists that show captures). `transcript`: a hold-to-talk
  * transcript to start from, editable and unsaved. `autoFocus`: focus the box with the caret at the end.
+ * `send`: the project chat's composer. The text goes to TARS (stored in the thread) instead of the
+ * capture queue; Return sends, Shift+Return is a new line.
  */
-export function Composer({ projectId, onSaved, transcript, autoFocus }: { projectId?: string; onSaved?(): void; transcript?: Transcript; autoFocus?: boolean }) {
+export function Composer({
+  projectId,
+  onSaved,
+  transcript,
+  autoFocus,
+  send,
+}: {
+  projectId?: string;
+  onSaved?(): void;
+  transcript?: Transcript;
+  autoFocus?: boolean;
+  send?(text: string): Promise<void>;
+}) {
   const id = useId();
   const box = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState(transcript?.text ?? "");
@@ -140,6 +154,22 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
     event?.preventDefault();
     if (text.trim() === "" || saving) return;
     setSaving(true);
+    if (send) {
+      try {
+        await send(text);
+        // Stored in the thread: only now may the spooled audio behind this text be deleted.
+        const acknowledged = pending;
+        setText("");
+        setPending([]);
+        setStatus("");
+        await Promise.all(acknowledged.map((recoveryId) => window.companion.dictation.acknowledge(recoveryId)));
+      } catch (err) {
+        setStatus(`Not sent: ${reason(err)}. Your text and any recording are kept.`);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     try {
       const input: CaptureInput = {
         text,
@@ -163,19 +193,22 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
 
   const busy = voice.kind === "starting" || voice.kind === "transcribing";
   return (
-    <form className="capture" onSubmit={save} aria-label="Capture">
-      <label htmlFor={id} className="block-title">
-        Capture an idea
+    <form className={send ? "capture chat-composer" : "capture"} onSubmit={save} aria-label={send ? "Message TARS" : "Capture"}>
+      <label htmlFor={id} className={send ? "sr-only" : "block-title"}>
+        {send ? "Message TARS" : "Capture an idea"}
       </label>
       <textarea
         id={id}
         ref={box}
         value={text}
-        rows={3}
-        placeholder="Type, or press Record to dictate. Nothing is saved until you press Save."
+        rows={send ? 2 : 3}
+        placeholder={send ? "Tell TARS what to change, ask about this project, or say send it." : "Type, or press Record to dictate. Nothing is saved until you press Save."}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (send && !e.shiftKey))) {
+            e.preventDefault();
+            void save();
+          }
         }}
       />
       <div className="tape-deck" data-state={voice.kind}>
@@ -208,10 +241,10 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
       </div>
       <div className="capture-foot">
         <p className="hint">
-          {voice.kind === "recording" ? "Recording now. Stop to transcribe, or Cancel to keep nothing." : LIMIT_TEXT} ⌘ Return saves.
+          {voice.kind === "recording" ? "Recording now. Stop to transcribe, or Cancel to keep nothing." : send ? "Return sends. Shift Return adds a line." : `${LIMIT_TEXT} ⌘ Return saves.`}
         </p>
         <button type="submit" className="secondary" disabled={saving || text.trim() === ""}>
-          Save
+          {send ? (saving ? "Sending…" : "Send") : "Save"}
         </button>
       </div>
       {failed.map((f) => (
@@ -227,7 +260,7 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
         </StateNote>
       ))}
       <p role="status" aria-live="polite" className="capture-status">
-        {saving ? "Saving…" : status}
+        {saving ? (send ? "" : "Saving…") : status}
       </p>
     </form>
   );
