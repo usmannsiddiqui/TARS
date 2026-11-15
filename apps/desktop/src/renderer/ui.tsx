@@ -144,6 +144,17 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
 }
 
 /** One honest state in words. Problems (retry, missing access) are visually distinct from Empty and Done. */
+/** A part of the window that could not load (a Boundary's fallback): one plain sentence and Try again. */
+export function RetryNote({ what, onRetry }: { what: string; onRetry(): void }) {
+  return (
+    <StateNote state={{ kind: "needs-retry", detail: `${what} could not load. Nothing was lost.` }}>
+      <button type="button" className="text-button" onClick={onRetry}>
+        Try again
+      </button>
+    </StateNote>
+  );
+}
+
 export function StateNote({ state, children }: { state: Honest; children?: ReactNode }) {
   const detail =
     state.kind === "last-checked"

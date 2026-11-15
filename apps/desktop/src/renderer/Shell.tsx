@@ -5,8 +5,9 @@
 import { createContext, useEffect, useState, type ReactNode } from "react";
 import { RECAP_EMPTY, type ClosingRecap, type RecapList } from "@companion/domain/recap";
 import { rowTime, type RowPreview, type SessionEvent, type SessionState } from "./model";
+import { Boundary } from "./boundary";
 import { Desk } from "./Desk";
-import { NewProject } from "./ui";
+import { NewProject, RetryNote } from "./ui";
 
 export type Route =
   | { view: "today" }
@@ -161,6 +162,7 @@ export function Shell({ route, today, projects, account, pet, session, title, su
             />
           </div>
         )}
+        <Boundary name="the project list" fallback={(retry) => <RetryNote what="The project list" onRetry={retry} />}>
         <ul className="rows">
           <li>
             <Row current={route.view === "today"} icon="today" name="Today" {...(today.time ? { time: rowTime(today.time, now) } : {})} preview={today} onClick={() => onNavigate({ view: "today" })} />
@@ -182,6 +184,7 @@ export function Shell({ route, today, projects, account, pet, session, title, su
             ))
           )}
         </ul>
+        </Boundary>
 
         <section className="more">
           <h2 className="rail-heading">
@@ -255,7 +258,22 @@ export function Shell({ route, today, projects, account, pet, session, title, su
             )}
           </div>
         </header>
-        <PaneSlot.Provider value={{ slot, open: () => setOpen(true) }}>{children}</PaneSlot.Provider>
+        <PaneSlot.Provider value={{ slot, open: () => setOpen(true) }}>
+          {/* Keyed by the place: going somewhere else starts it fresh. */}
+          <Boundary
+            key={JSON.stringify(route)}
+            name={title}
+            fallback={(retry) => (
+              <div className="screen chat-screen">
+                <div className="chat-scroll">
+                  <RetryNote what={title} onRetry={retry} />
+                </div>
+              </div>
+            )}
+          >
+            {children}
+          </Boundary>
+        </PaneSlot.Provider>
       </main>
 
       {pane !== null && (
@@ -268,7 +286,9 @@ export function Shell({ route, today, projects, account, pet, session, title, su
               </button>
             )}
           </div>
-          {pane}
+          <Boundary name="TARS's desk" fallback={(retry) => <RetryNote what="TARS's desk" onRetry={retry} />}>
+            {pane}
+          </Boundary>
           <div ref={setSlot} className="pane-slot" />
         </aside>
       )}
