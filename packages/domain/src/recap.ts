@@ -7,7 +7,7 @@ export type RecapInput = {
   nowMs: number;
   timezone: string;
   /** Actions whose receipt was verified (state succeeded); `title` names the item, never its content. */
-  actions: { kind: "send-mail" | "post-message" | "update-note"; title: string; verifiedAt: string }[];
+  actions: { kind: "send-mail" | "post-message" | "update-note" | "send-document"; title: string; verifiedAt: string }[];
   /** `doneAt`: when the user marked it done, if recorded. */
   commitments: (Pick<Commitment, "text" | "ownership" | "state" | "dueAt"> & { doneAt?: number })[];
   /** Nudge offers the user answered "Not now", with when. */
@@ -19,7 +19,7 @@ export type RecapList = { items: string[]; more: number };
 export type ClosingRecap = { done: RecapList; parked: RecapList; left: RecapList };
 
 const MAX_ITEMS = 5;
-const VERB = { "send-mail": "Sent", "post-message": "Posted", "update-note": "Updated" } as const;
+const VERB = { "send-mail": "Sent", "post-message": "Posted", "update-note": "Updated", "send-document": "Sent" } as const;
 
 const bounded = (items: string[]): RecapList => ({ items: items.slice(0, MAX_ITEMS), more: Math.max(0, items.length - MAX_ITEMS) });
 
