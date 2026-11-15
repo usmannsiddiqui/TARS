@@ -2,8 +2,8 @@
 // (aria-hidden): every fact it draws is also on the screen as text. A value it does not know is not drawn.
 // Flat shapes in the grey family; black is the loud tone and the palette's --accent marks only the active light.
 // "mini" is the same drawing framed tight on TARS behind the counter: the brand mark at the top of the rail.
-import { useEffect, useRef } from "react";
-import type { PetState } from "./model";
+import { useEffect, useRef, type ReactNode } from "react";
+import type { PetState, RoutineRow } from "./model";
 import { PetFigure } from "./ui";
 
 export type DeskProps = {
@@ -17,6 +17,48 @@ export type DeskProps = {
   /** "mini": the rail's brand mark, static and cropped to TARS behind the counter. */
   variant?: "scene" | "mini";
 };
+
+/**
+ * The right pane: TARS at the front desk, a caption of only what the desk draws (ideas in, prepared work
+ * out, the session), then the screen's own content (the routines on Today; the draft and open items in a project).
+ */
+export function DeskPane({ desk, routines, onRoutine, children }: { desk: DeskProps; routines?: RoutineRow[]; onRoutine?(id: RoutineRow["id"]): void; children?: ReactNode }) {
+  const caption = [
+    desk.inTray !== undefined && `${desk.inTray} ${desk.inTray === 1 ? "idea" : "ideas"} in`,
+    desk.outTray !== undefined && `${desk.outTray} ${desk.outTray === 1 ? "draft" : "drafts"} out`,
+    desk.signal ? "Working" : desk.state === "done" ? "Done for today" : "Idle",
+  ].filter(Boolean);
+  return (
+    <>
+      <figure className="pane-desk">
+        <Desk {...desk} />
+        <figcaption className="pane-caption num">{caption.join(" · ")}</figcaption>
+      </figure>
+      {routines && (
+        <section className="pane-section" aria-labelledby="routines-h">
+          <h3 id="routines-h" className="pane-heading">
+            Routines
+          </h3>
+          <ul className="routines">
+            {routines.map((r) => (
+              <li key={r.id}>
+                <button type="button" className="routine" onClick={() => onRoutine?.(r.id)} disabled={!onRoutine}>
+                  <svg className="icon" width="16" height="16" viewBox="0 0 14 14" aria-hidden="true">
+                    <circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <path d="M7 3.8V7l2.2 1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                  <span className="routine-name">{r.name}</span>
+                  <span className="routine-when">{r.summary}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {children}
+    </>
+  );
+}
 
 const TONE = { top: "#EDECE8", front: "#C6C5C0", groove: "#B8B7B2", plinth: "#8F8E89", ink: "#161616", back: "#3A3A3A", paper: "#FAF9F6", chrome: "#DAD9D5", chromeHi: "#F1F0ED", off: "#A9A8A3" };
 // shortcut: a tray draws at most five sheets, so a long backlog never buries the desk; the count is in the readout.
