@@ -365,6 +365,7 @@ const SlackHistory = z.object({ messages: z.array(z.object({ ts: z.string(), tex
 export async function perform(ctx: RunCtx, row: Doc<"actions">): Promise<EffectOutcome> {
   const { connection } = await ctx.runQuery(internal.connections.context, { sourceId: row.sourceId });
   if (connection?.broker !== "composio") return { state: "failed", reason: "not_connected" }; // nothing was sent
+  if (row.provider !== "composio-gmail" && row.provider !== "composio-slack") return { state: "failed", reason: "unsupported" };
   const account = await accountOf(connection);
   const gmail = row.provider === "composio-gmail";
   let result: z.infer<typeof ToolResult>;

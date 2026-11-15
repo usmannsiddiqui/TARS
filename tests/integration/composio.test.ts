@@ -6,7 +6,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ProjectIdSchema, type ProjectId } from "@companion/domain";
 import { contentHash } from "../../packages/domain/src/actions";
-import { api, internal } from "../../convex/_generated/api";
+import { api } from "../../convex/_generated/api";
 import { composioUserId } from "../../convex/connectors/composio";
 import schema from "../../convex/schema";
 import { makeOwners } from "../fixtures";
