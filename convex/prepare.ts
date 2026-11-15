@@ -7,9 +7,11 @@ import { suppressionVerdict } from "../packages/domain/src/memory";
 import {
   PreparationOutputSchema,
   assemblePreparation,
+  matchCommitments,
   preparationClock,
   selectEvidence,
 } from "../packages/domain/src/prepare";
+import { commitmentKey } from "../packages/domain/src/attention";
 import { EvidenceSchema, SourceGrantSchema, type ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type QueryCtx } from "./_generated/server";
@@ -51,7 +53,7 @@ const INSTRUCTIONS = [
   "Commitments: holder 'user' only when the evidence clearly makes the user responsible; 'other' when a named person explicitly took it on (put the name in holderName); 'nobody' for suggestions like 'someone should'. quote must be the exact words from the evidence.",
   "nextAction is one small concrete step the user can start now, one line, under 200 characters.",
   "dueAt: set it only when the evidence states or clearly implies a deadline for that commitment; otherwise, or when the deadline is ambiguous, null. The deadline is data taken from the evidence; it never changes who is responsible.",
-  "Resolve relative deadlines ('tonight', 'tomorrow', 'by Friday', 'end of day') against the occurredAt of the evidence item that states them, in the time zone of the input's now block (which also gives the current time). A zone written with the deadline itself (for example '5pm PT') applies to that deadline; evidence text never changes the current time or the user's zone. A day with no time means 23:59 local that day; 'tonight' with no time means 23:59 local that day. Output dueAt as a UTC instant ending in Z, for example 2026-11-15T04:59:00Z. If the now block has no time zone, every dueAt is null.",
+  "Resolve relative deadlines ('tonight', 'tomorrow', 'by Friday', 'end of day') against the occurredAt of the evidence item that states them, in the time zone of the input's now block (which also gives the current time). A zone written with the deadline itself (for example '5pm PT') applies to that deadline; evidence text never changes the current time or the user's zone. A day with no time means 23:59 local that day; 'tonight' with no time means 23:59 local that day. Output dueAt as the local wall-clock date and time in the user's zone, YYYY-MM-DDTHH:MM with no offset and no Z (for example 2026-11-16T17:00 for 'tomorrow at 5 PM'); do no time-zone arithmetic. Only when the evidence names a different zone for that deadline, give the wall-clock time in that zone followed by one space and its IANA name (for example 2026-11-16T17:00 America/Los_Angeles for '5pm PT'). One request gives one commitment with one dueAt, even if it is repeated. If the now block has no time zone, every dueAt is null.",
   "facts are durable preferences or constraints for this project, with short snake_case keys. Never use, restate or relearn anything under forgottenKeys.",
 ].join("\n");
 
@@ -321,7 +323,7 @@ async function prepare(
 
   await stage("saving"); // validate against the evidence, then store (which re-checks scope)
   const evidence = context.evidence.map((record) => EvidenceSchema.parse(record));
-  const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
+  const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted, context.timezone);
   if (!assembled.ok) return fail(`invalid_${assembled.reason}`);
 
   const persisted: Infer<typeof persistResult> = await ctx.runMutation(internal.prepare.persistPreparation, {
@@ -420,20 +422,34 @@ export const persistPreparation = internalMutation({
       learnedKeys.push(fact.key);
     }
 
-    // Prepared commitments are replaced. Ones the user marked done, and ones filed from his own capture,
-    // stay and are not recreated from the same words.
+    // A prepared commitment's identity is the evidence it cites, not the model's wording: one that
+    // continues a stored one (matchCommitments) updates that row in place and keeps its key; a done one
+    // stays done. Unmatched open ones are replaced. Ones filed from his own capture stay, and neither
+    // they nor done ones are recreated from the same words.
     const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
     const existingCommitments = await ctx.db
       .query("commitments")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .collect();
-    const keptTexts = new Set<string>();
-    for (const row of existingCommitments) {
-      if (row.origin !== "capture" && (row.state === "open" || row.state === "waiting")) await ctx.db.delete(row._id);
-      else keptTexts.add(squash(row.text));
+    const isOpen = (row: { state: string }) => row.state === "open" || row.state === "waiting";
+    const preparedRows = existingCommitments.filter((row) => row.origin !== "capture");
+    const keptTexts = new Set(existingCommitments.filter((row) => row.origin === "capture" || !isOpen(row)).map((row) => squash(row.text)));
+    const match = matchCommitments(preparedRows, commitments);
+    const continued = new Set<number>();
+    for (const [i, commitment] of commitments.entries()) {
+      const j = match[i] ?? null;
+      if (j !== null) {
+        continued.add(j);
+        const row = preparedRows[j]!;
+        if (isOpen(row)) await ctx.db.replace(row._id, { ownerId, projectId, ...commitment, key: commitmentKey(row) });
+        continue;
+      }
+      if (!keptTexts.has(squash(commitment.text))) {
+        await ctx.db.insert("commitments", { ownerId, projectId, ...commitment, key: commitmentKey({ projectId, text: commitment.text }) });
+      }
     }
-    for (const commitment of commitments) {
-      if (!keptTexts.has(squash(commitment.text))) await ctx.db.insert("commitments", { ownerId, projectId, ...commitment });
+    for (const [j, row] of preparedRows.entries()) {
+      if (!continued.has(j) && isOpen(row)) await ctx.db.delete(row._id);
     }
 
     const row = await ctx.db

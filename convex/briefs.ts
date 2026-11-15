@@ -111,6 +111,7 @@ async function loadCommitments(ctx: Ctx, ownerId: string, projectIds: readonly s
         evidenceIds: row.evidenceIds as EvidenceId[],
         state: row.state,
         ...(row.dueAt === undefined ? {} : { dueAt: row.dueAt }),
+        ...(row.key === undefined ? {} : { key: row.key }),
       });
     }
   }
@@ -288,7 +289,7 @@ async function nudgeCommitment(ctx: Ctx, nudge: Doc<"nudges">) {
     .query("commitments")
     .withIndex("by_owner_project", (q) => q.eq("ownerId", nudge.ownerId).eq("projectId", nudge.projectId))
     .collect();
-  return rows.find((c) => c.ownership === "user" && commitmentKey({ projectId: c.projectId as ProjectId, text: c.text }) === nudge.key) ?? null;
+  return rows.find((c) => c.ownership === "user" && commitmentKey(c) === nudge.key) ?? null;
 }
 
 /** Offers showing now whose commitment is still open and not yet due. */
@@ -327,11 +328,13 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
     .query("commitments")
     .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
     .collect();
-  for (const commitment of rows) {
+  // Soonest due first, so when several are new the one offer opened is the most urgent.
+  const soonestFirst = rows.filter((c) => c.dueAt !== undefined).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!));
+  for (const commitment of soonestFirst) {
     if (commitment.ownership !== "user" || commitment.state !== "open" || commitment.dueAt === undefined) continue;
     const dueAt = commitment.dueAt;
     if (Date.parse(dueAt) <= now) continue;
-    const key = commitmentKey({ projectId: projectId as ProjectId, text: commitment.text });
+    const key = commitmentKey(commitment);
     const existing = await ctx.db
       .query("nudges")
       .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", key))
@@ -363,6 +366,61 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
     }
   }
 }
+
+/**
+ * One-off repair, run by hand for one owner: nudge rows written under reworded keys are merged into
+ * the earliest row for the same commitment (same project and key, or same due time), which takes the
+ * commitment's stable key; surplus offers close so at most one stays open. Thread messages and drafts
+ * are left as they are.
+ */
+export const mergeDuplicateNudges = internalMutation({
+  args: { ownerId: v.string() },
+  returns: v.object({ removed: v.number(), closedOffers: v.number() }),
+  handler: async (ctx, { ownerId }) => {
+    const now = Date.now();
+    let removed = 0;
+    let closedOffers = 0;
+    const nudges = (await ownerNudges(ctx, ownerId)).sort((a, b) => a._creationTime - b._creationTime);
+    const merged = new Set<string>();
+    const commitments = (
+      await ctx.db
+        .query("commitments")
+        .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId))
+        .collect()
+    ).filter((c) => c.ownership === "user" && c.dueAt !== undefined);
+    for (const commitment of commitments) {
+      const key = commitmentKey(commitment);
+      const group = nudges.filter((n) => !merged.has(n._id) && n.projectId === commitment.projectId && (n.key === key || n.dueAt === commitment.dueAt));
+      const [keep, ...rest] = group;
+      if (keep === undefined) continue;
+      group.forEach((n) => merged.add(n._id));
+      if (commitment.key === undefined) await ctx.db.patch(commitment._id, { key });
+      const cancel = async (job: Doc<"nudges">["dueJob"]) => {
+        if (job !== undefined && (await ctx.db.system.get(job))?.state.kind === "pending") await ctx.scheduler.cancel(job);
+      };
+      for (const extra of rest) {
+        await cancel(extra.dueJob);
+        if (extra.offer !== undefined) closedOffers++;
+        await ctx.db.delete(extra._id);
+        removed++;
+      }
+      const lastNudgedAt = Math.max(...group.map((n) => n.lastNudgedAt ?? 0));
+      const dueAt = commitment.dueAt!;
+      // The reminder is looked up by key: reschedule it under the stable key.
+      await cancel(keep.dueJob);
+      const remindAt = dueSoonAt(Date.parse(dueAt));
+      const dueJob = remindAt > now ? await ctx.scheduler.runAt(remindAt, internal.briefs.nudgeDueSoon, { ownerId, key, dueAt }) : undefined;
+      await ctx.db.patch(keep._id, { key, dueAt, dueJob, ...(lastNudgedAt > 0 ? { lastNudgedAt } : {}) });
+    }
+    // At most one open offer: keep the soonest due, close the rest.
+    const open = (await ownerNudges(ctx, ownerId)).filter((n) => n.offer !== undefined);
+    for (const extra of open.slice(1)) {
+      await ctx.db.patch(extra._id, { offer: undefined });
+      closedOffers++;
+    }
+    return { removed, closedOffers };
+  },
+});
 
 /** The one due-1h reminder. Stale (due time changed) or done: nothing. */
 export const nudgeDueSoon = internalMutation({
@@ -598,7 +656,7 @@ export const resolveTradeoff = mutation({
     if (commitment === null || commitment.ownerId !== ownerId) throw new ConvexError("Commitment not found");
     const flag = await ctx.db
       .query("tradeoffFlags")
-      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", commitmentKey({ projectId: commitment.projectId as ProjectId, text: commitment.text })))
+      .withIndex("by_owner_key", (q) => q.eq("ownerId", ownerId).eq("key", commitmentKey(commitment)))
       .first();
     if (flag?.state !== "open") throw new ConvexError("No open tradeoff for this commitment");
     await ctx.db.patch(flag._id, { state: "resolved", choice });
