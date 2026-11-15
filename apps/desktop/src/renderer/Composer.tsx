@@ -24,6 +24,8 @@ const clock = (ms: number) => `${String(Math.floor(ms / 60_000)).padStart(2, "0"
  * `send`: the project chat's composer. The text goes to TARS (stored in the thread) instead of the
  * capture queue; Return sends, Shift+Return is a new line.
  * `brainDump`: once saved, the capture is sorted into the user's projects and shown here, by project.
+ * `pill`: the main window's docked composer ("Message TARS"): Return saves or sends, the round Send key,
+ * and the sort shows in the thread instead of here. The panel keeps the capture card.
  */
 export function Composer({
   projectId,
@@ -32,6 +34,7 @@ export function Composer({
   autoFocus,
   send,
   brainDump,
+  pill,
 }: {
   projectId?: string;
   onSaved?(): void;
@@ -39,6 +42,7 @@ export function Composer({
   autoFocus?: boolean;
   send?(text: string): Promise<void>;
   brainDump?: BrainDumpProps;
+  pill?: boolean;
 }) {
   const id = useId();
   const box = useRef<HTMLTextAreaElement>(null);
@@ -197,20 +201,21 @@ export function Composer({
   }
 
   const busy = voice.kind === "starting" || voice.kind === "transcribing";
+  const returnSubmits = send !== undefined || pill === true;
   return (
-    <form className={send ? "capture chat-composer" : "capture"} onSubmit={save} aria-label={send ? "Message TARS" : "Capture"}>
-      <label htmlFor={id} className={send ? "sr-only" : "block-title"}>
-        {send ? "Message TARS" : "Capture an idea"}
+    <form className={pill ? "capture composer-pill" : send ? "capture chat-composer" : "capture"} onSubmit={save} aria-label={send || pill ? "Message TARS" : "Capture"}>
+      <label htmlFor={id} className={send || pill ? "sr-only" : "block-title"}>
+        {send || pill ? "Message TARS" : "Capture an idea"}
       </label>
       <textarea
         id={id}
         ref={box}
         value={text}
-        rows={send ? 2 : 3}
-        placeholder={send ? "Tell TARS what to change, ask about this project, or say send it." : "Type, or press Record to dictate. Nothing is saved until you press Save."}
+        rows={pill ? 1 : send ? 2 : 3}
+        placeholder={pill ? "Message TARS" : send ? "Tell TARS what to change, ask about this project, or say send it." : "Type, or press Record to dictate. Nothing is saved until you press Save."}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (send && !e.shiftKey))) {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (returnSubmits && !e.shiftKey))) {
             e.preventDefault();
             void save();
           }
@@ -220,7 +225,9 @@ export function Composer({
       {brainDump && (
         <p className="hint" id={`${id}-cloud`}>
           {brainDump.cloud
-            ? "Save keeps it on this Mac, then sends the text to our cloud and to OpenAI to sort it into your projects. The sorted lines are kept in our cloud."
+            ? pill
+              ? "Saved on this Mac, then sorted into your projects by our cloud and OpenAI."
+              : "Save keeps it on this Mac, then sends the text to our cloud and to OpenAI to sort it into your projects. The sorted lines are kept in our cloud."
             : "Saved on this Mac only while you are signed out or offline; it is sorted when you press Sort again."}
         </p>
       )}
@@ -254,11 +261,25 @@ export function Composer({
       </div>
       <div className="capture-foot">
         <p className="hint">
-          {voice.kind === "recording" ? "Recording now. Stop to transcribe, or Cancel to keep nothing." : send ? "Return sends. Shift Return adds a line." : `${LIMIT_TEXT} ⌘ Return saves.`}
+          {voice.kind === "recording"
+            ? "Recording now. Stop to transcribe, or Cancel to keep nothing."
+            : send
+              ? "Return sends. Shift Return adds a line."
+              : pill
+                ? `Return saves. Shift Return adds a line. ${LIMIT_TEXT}`
+                : `${LIMIT_TEXT} ⌘ Return saves.`}
         </p>
-        <button type="submit" className="secondary" disabled={saving || text.trim() === ""}>
-          {send ? (saving ? "Sending…" : "Send") : "Save"}
-        </button>
+        {pill ? (
+          <button type="submit" className="send-key" disabled={saving || text.trim() === ""} aria-label={send ? (saving ? "Sending…" : "Send") : "Save"}>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        ) : (
+          <button type="submit" className="secondary" disabled={saving || text.trim() === ""}>
+            {send ? (saving ? "Sending…" : "Send") : "Save"}
+          </button>
+        )}
       </div>
       {failed.map((f) => (
         <StateNote key={f.recoveryId} state={{ kind: "needs-retry", detail: f.message }}>
@@ -275,7 +296,7 @@ export function Composer({
       <p role="status" aria-live="polite" className="capture-status">
         {saving ? (send ? "" : "Saving…") : status}
       </p>
-      {brainDump?.view && <SortedDump {...brainDump} view={brainDump.view} />}
+      {brainDump?.view && !pill && <SortedDump {...brainDump} view={brainDump.view} />}
     </form>
   );
 }

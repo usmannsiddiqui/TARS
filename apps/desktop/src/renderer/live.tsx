@@ -387,7 +387,7 @@ const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; und
 /** One send's live status: a Convex subscription, never a timer. */
 const useDeliveryStatus = (actionId: string) => useQuery(api.delivery.status, { actionId });
 
-export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
+export function ProjectLive(props: { projectId: string; mode?: "help" | "improve" }) {
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
@@ -428,8 +428,6 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   return (
     <ProjectView
       projectId={projectId}
-      name={props.name}
-      isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}
       {...(prepared === undefined ? { preparedState: { kind: "loading" } as Honest } : {})}
@@ -447,9 +445,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
       editor={editor}
       sharing={sharing}
       onReportDone={async (taskId) => void (await reportDone({ taskId }))}
-      onMakeFocus={props.onMakeFocus}
       onPrepare={async () => void (await prepare({ projectId }))}
-      onStop={props.onStop}
     />
   );
 }

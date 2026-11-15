@@ -2,9 +2,11 @@
 // dictation docked at the bottom; beside it the editable draft (the run-through as timed segments,
 // direct edits, Undo and its share link) and commitments grouped by who holds them. Sending happens
 // in one place only: the approval in the thread. Presentational: data and actions arrive as props.
-import { useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DeliveryStatus } from "@companion/domain/thread";
 import { Composer } from "./Composer";
+import { PaneSlot } from "./Shell";
 import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type ThreadMessage } from "./model";
 import { Thread, type ApproveArgs } from "./Thread";
 import { formatWhen, reason, StateNote } from "./ui";
@@ -46,8 +48,6 @@ export type ChatActions = {
 
 export type ProjectViewProps = {
   projectId: string;
-  name: string;
-  isFocus: boolean;
   /** "improve" puts the caret in the composer. */
   mode?: "help" | "improve";
   /** undefined = nothing prepared yet; `preparedState` overrides with loading / retry states. */
@@ -63,9 +63,7 @@ export type ProjectViewProps = {
   sharing: Sharing;
   /** "I did this myself": recorded as reported by you, never as verified. */
   onReportDone(taskId: string): Promise<void>;
-  onMakeFocus(): void;
   onPrepare(): Promise<void>;
-  onStop(): void;
 };
 
 export function ProjectView(props: ProjectViewProps) {
@@ -88,7 +86,9 @@ export function ProjectView(props: ProjectViewProps) {
 
   // "Open draft" and "Keep editing" bring the editable draft into view with its text box focused.
   const draftRef = useRef<HTMLDivElement>(null);
+  const pane = useContext(PaneSlot);
   const openDraft = () => {
+    pane.open(); // below 1024px the desk pane is an overlay: open it first
     draftRef.current?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     draftRef.current?.querySelector<HTMLElement>("textarea.doc, .segment-title")?.focus({ preventScroll: true });
   };
@@ -113,39 +113,17 @@ export function ProjectView(props: ProjectViewProps) {
           ? { kind: "partial", detail: "Something it relied on was forgotten, so it was removed." }
           : null);
 
+  const openItems = commitments?.filter((c) => c.state === "open" || c.state === "waiting").length;
   return (
-    <div className="screen project chat">
-      <header className="screen-head">
-        <h1>{props.name}</h1>
-        <p className="screen-sub">
-          {props.isFocus ? (
-            "Your focus"
-          ) : (
-            <>
-              Not your focus.{" "}
-              <button type="button" className="text-button inline" onClick={props.onMakeFocus}>
-                Work on this now
-              </button>
-            </>
-          )}
-          {prepared?.status === "ready" && <span className="quiet">Prepared {formatWhen(prepared.updatedAt)}</span>}
-        </p>
-      </header>
-
-      <div className="chat-grid">
-        <section className="chat-main" aria-label="Chat with TARS">
+    <div className="screen chat-screen project">
+      <section className="chat-scroll" aria-label="Chat with TARS">
           {doneText && (
             <section className="completion" aria-labelledby="done-h">
               <h2 id="done-h" ref={doneRef} tabIndex={-1}>
                 Done
               </h2>
               <p className="completion-what">{doneText}</p>
-              <p className="quiet small">Nothing else starts on its own.</p>
-              <div className="actions">
-                <button type="button" className="secondary" onClick={props.onStop}>
-                  Stop for now
-                </button>
-              </div>
+              <p className="quiet small">Nothing else starts on its own. Stop for now is at the top whenever you want it.</p>
             </section>
           )}
           {preparedState && <StateNote state={preparedState} />}
@@ -176,21 +154,23 @@ export function ProjectView(props: ProjectViewProps) {
               }}
             />
           )}
-          <div className="chat-dock">
-            <Composer projectId={props.projectId} send={props.chat.send} autoFocus={props.mode === "improve"} />
-          </div>
-        </section>
-
-        <aside className="chat-side" ref={draftRef}>
-          <RunThrough
-            artifact={props.artifact}
-            canCreate={work !== undefined}
-            editor={props.editor}
-            sharing={props.sharing}
-          />
-          <Commitments commitments={commitments} onReportDone={props.onReportDone} />
-        </aside>
+      </section>
+      <div className="dock">
+        <Composer pill projectId={props.projectId} send={props.chat.send} autoFocus={props.mode === "improve"} />
       </div>
+      {pane.slot &&
+        createPortal(
+          <div className="pane-project" ref={draftRef}>
+            <RunThrough artifact={props.artifact} canCreate={work !== undefined} editor={props.editor} sharing={props.sharing} />
+            <details className="open-items">
+              <summary>
+                Open items {openItems !== undefined && <span className="count num">{openItems}</span>}
+              </summary>
+              <Commitments commitments={commitments} onReportDone={props.onReportDone} />
+            </details>
+          </div>,
+          pane.slot,
+        )}
     </div>
   );
 }

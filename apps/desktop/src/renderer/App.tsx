@@ -1,15 +1,16 @@
-// The full app window: routes between Today, the project index, schedule, TARS's calendar, a project,
-// memory and connections. Focus changes
+// The full app window: routes between Today, a project, and under More the schedule, TARS's calendar,
+// connections and memory. Focus changes
 // only when the user picks a project here (switchProject with userInitiated: true).
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CaptureInput } from "@companion/domain";
 import type { ClosingRecap } from "@companion/domain/recap";
 import { api } from "../../../../convex/_generated/api";
+import { DeskPane } from "./Desk";
 import { Home } from "./Home";
 import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
-import { ProjectsIndex } from "./ProjectsIndex";
-import { railProject, Shell, Stopped, type RecapTextState, type Route } from "./Shell";
+import { rowPreview, todayPreview, type PetState } from "./model";
+import { Shell, Stopped, type RecapTextState, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -99,35 +100,57 @@ export function App() {
 
   if (stopped) return <StoppedLive ready={cloud.ready} {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} {...(session.error ? { note: session.error } : {})} onResume={() => setStopped(false)} />;
 
+  // The desk draws only what this window knows: ideas in, prepared work out, the session's light.
+  const working = session.state === "working";
+  const desk = {
+    state: (today.brief?.kind === "evening" ? "done" : working ? "working" : "idle") as PetState,
+    inTray: ideas.length,
+    outTray: summaries?.filter((p) => p.prepared?.status === "ready" && p.prepared.work).length,
+    signal: working,
+  };
+
   let screen;
+  let title = "Today";
+  let sub: ReactNode = dateLabel.format(new Date());
+  let pane: ReactNode | null = <DeskPane desk={desk} />;
   if (route.view === "project") {
     const name = nameOf(route.projectId);
-    screen = name ? (
-      <ProjectLive
-        key={route.projectId}
-        projectId={route.projectId}
-        name={name}
-        isFocus={route.projectId === focusId}
-        {...(route.mode ? { mode: route.mode } : {})}
-        onMakeFocus={() => pick(route.projectId)}
-        onStop={stop}
-      />
-    ) : null;
+    title = name ?? "Project";
+    sub =
+      route.projectId === focusId ? (
+        "Your focus"
+      ) : (
+        <button type="button" className="text-button inline" onClick={() => pick(route.projectId)}>
+          Work on this now
+        </button>
+      );
+    screen = name ? <ProjectLive key={route.projectId} projectId={route.projectId} {...(route.mode ? { mode: route.mode } : {})} /> : null;
   } else if (route.view === "memory") {
+    [title, sub, pane] = ["What I remember", undefined, null];
     const projectId = route.projectId ?? focusId ?? projects?.[0]?.id;
     screen = <MemoryLive projects={projects ?? []} {...(projectId ? { projectId } : {})} onSelectProject={(id) => setRoute({ view: "memory", projectId: id })} />;
   } else if (route.view === "connections") {
+    [title, sub, pane] = ["Connections", undefined, null];
     screen = <ConnectionsLive projects={projects ?? null} />;
-  } else if (route.view === "projects") {
-    screen = <ProjectsIndex projects={summaries} {...(cloud.honest ? { cloud: cloud.honest } : {})} {...(focusId ? { focusProjectId: focusId } : {})} onOpenProject={open} onCreateProject={create} />;
   } else if (route.view === "schedule") {
+    [title, sub, pane] = ["Schedule", undefined, null];
     screen = <ScheduleLive projects={projects ?? null} />;
   } else if (route.view === "calendar") {
+    [title, sub, pane] = ["TARS's calendar", undefined, null];
     screen = <CalendarLive projects={summaries} />;
   } else {
+    const brief = today.brief;
+    pane = (
+      <DeskPane
+        desk={desk}
+        routines={today.routines}
+        // A routine row scrolls the thread to that brief, when it is the one shown.
+        {...(brief ? { onRoutine: (id: string) => id === brief.kind && document.getElementById(`msg-${brief.key}`)?.scrollIntoView({ block: "start" }) } : {})}
+      />
+    );
     screen = (
       <Home
-        dateLabel={dateLabel.format(new Date())}
+        now={Date.now()}
         {...helpers}
         projects={summaries}
         {...(cloud.honest ? { cloud: cloud.honest } : {})}
@@ -147,7 +170,6 @@ export function App() {
         }}
         ideas={ideas}
         brainDump={brainDump}
-        sessionWorking={session.state === "working"}
         onCaptured={() => void loadIdeas()}
         onStart={(projectId, mode) => {
           pick(projectId); // accepting the recommended start is the user's pick
@@ -155,7 +177,6 @@ export function App() {
           setRoute({ view: "project", projectId, mode });
         }}
         onOpenProject={open}
-        onCreateProject={create}
       />
     );
   }
@@ -163,8 +184,12 @@ export function App() {
   return (
     <Shell
       route={route}
-      projects={summaries && summaries.map(railProject)}
-      {...(focusId ? { focusProjectId: focusId } : {})}
+      today={todayPreview(today.brief, today.schedule, summaries ?? [])}
+      projects={summaries && summaries.map((p) => ({ id: p.id, name: p.name, focus: p.id === focusId, preview: rowPreview(p, { helpers: helpers.helpers, ...(today.nudge ? { nudgeProjectId: today.nudge.projectId } : {}) }) }))}
+      title={title}
+      sub={sub}
+      pane={pane}
+      onCreateProject={create}
       account={{ signedIn: cloud.signedIn, busy: cloud.signingIn, onSignIn: () => void cloud.signIn().then(loadIdeas) }}
       pet={{
         visible: petVisible,

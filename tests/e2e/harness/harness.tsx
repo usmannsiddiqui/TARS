@@ -14,11 +14,11 @@ import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import type { BrainDumpProps, DumpLine, DumpView } from "../../../apps/desktop/src/renderer/BrainDump";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
-import { railProject, Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
-import { ProjectsIndex } from "../../../apps/desktop/src/renderer/ProjectsIndex";
+import { Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
+import { DeskPane } from "../../../apps/desktop/src/renderer/Desk";
 import { Schedule } from "../../../apps/desktop/src/renderer/Schedule";
 import { TarsCalendar } from "../../../apps/desktop/src/renderer/TarsCalendar";
-import { briefSchedule, tarsCalendar } from "../../../apps/desktop/src/renderer/model";
+import { briefSchedule, routineRows, rowPreview, tarsCalendar, todayPreview } from "../../../apps/desktop/src/renderer/model";
 import "../../../apps/desktop/src/renderer/styles.css";
 import "../../../apps/desktop/src/renderer/screens.css";
 
@@ -190,6 +190,13 @@ const reentry: Reentry = {
   recommendedAction: "Venue walk-through with the AV lead",
   reason: "Due today at 15:00.",
 };
+const nudge = { nudgeId: "n1", projectId: "guides", key: "nudge:n1", title: "The slide order is due Friday 2:00 PM", body: "I started a draft of the slide order while you were busy. Finish it together, or leave it for now.", startedForYou: true, delivered: false };
+// The closing recap (recap.getClosingRecap's shape) for the stopped scene.
+const recap = {
+  done: { items: ["Sent the final slide order to the co-presenter (checked: it arrived)"], more: 0 },
+  parked: { items: ["Run through the AI Studio demo for the co-presentation"], more: 0 },
+  left: { items: ["Confirm the equipment list with the venue", "Reading response 4"], more: 0 },
+};
 const tradeoff = { commitmentId: "c9", text: '"Launch the AVT landing page this week" is due within a day of "Venue walk-through with the AV lead". Choose what goes first; nothing will be moved or sent.' };
 
 function useEditor(): { artifact: ArtifactView; editor: EditorActions } {
@@ -287,8 +294,10 @@ const dumpViews: Record<string, DumpView> = {
   sortfailed: { kind: "failed", detail: "the sorting model did not answer (timeout)." },
 };
 /** As the live hook would: Save starts a sort, and a few seconds later the lines arrive; Fix changes them in place. */
+const dumpSaid = "finish the thermo lab report by thursday night, sam still owes me the wiring diagram, order the second battery pack after the budget meeting, sponsor deck can wait till december, maybe a short video on choosing a tool, email everyone the deck, look into a standing desk";
 function useHarnessDump(variant: string): BrainDumpProps | undefined {
   const [view, setView] = useState<DumpView | undefined>(dumpViews[variant]);
+  const [said, setSaid] = useState(variant in dumpViews ? { text: dumpSaid, at: NOW.getTime() - 60_000 } : undefined);
   if (!(variant in dumpViews) && variant !== "dump") return undefined;
   const lines = view?.kind === "sorted" ? view.lines : [];
   const change = (id: string, patch: Partial<DumpLine> | null) =>
@@ -297,7 +306,9 @@ function useHarnessDump(variant: string): BrainDumpProps | undefined {
     cloud: true,
     projects: projects.map(({ id, name }) => ({ id, name })),
     ...(view ? { view } : {}),
-    onSaved: (id) => {
+    ...(said ? { said } : {}),
+    onSaved: (id, text) => {
+      setSaid({ text, at: Date.now() });
       record("sortCapture", id);
       setView({ kind: "sorting", projects: projects.length });
       setTimeout(() => setView({ kind: "sorted", lines: dumpLines }), 2400);
@@ -368,13 +379,43 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
     setSession("idle");
     setStopped(true);
   }
-  if (stopped) return <Stopped projectName="AI Guides" onResume={() => setStopped(false)} />;
+  if (stopped || variant === "stopped") return <Stopped projectName="AI Guides" recap={recap} onResume={() => setStopped(false)} />;
   const project = route.view === "project" ? projects.find((p) => p.id === route.projectId) : undefined;
+  const helpers = variant === "helpers" || variant === "play" ? played : [];
+  const brief = ((b) => b && { ...b, delivered: delivered.includes(b.key) })(variant in briefStates ? briefStates[variant] : variant === "evening" ? evening : morning);
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const schedule = briefSchedule(Date.parse(inDays(1, 9)), timezone, NOW.getTime());
+  const desk = { state: (session === "working" ? "working" : "idle") as PetState, inTray: ideas.length, outTray: projects.filter((p) => p.prepared?.work).length, signal: session === "working" };
+  const more = ["schedule", "calendar", "memory", "connections"].includes(route.view);
+  const title = project?.name ?? { today: "Today", schedule: "Schedule", calendar: "TARS's calendar", memory: "What I remember", connections: "Connections", project: "Project" }[route.view];
+  const sub =
+    route.view === "today" ? (
+      new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" }).format(NOW)
+    ) : project ? (
+      project.id === focus ? (
+        "Your focus"
+      ) : (
+        <button type="button" className="text-button inline" onClick={() => pick(project.id)}>
+          Work on this now
+        </button>
+      )
+    ) : undefined;
   return (
     <Shell
       route={route}
-      projects={projects.map(railProject)}
-      focusProjectId={focus}
+      today={todayPreview(brief, schedule, projects)}
+      projects={projects.map((p) => ({ id: p.id, name: p.name, focus: p.id === focus, preview: rowPreview(p, { helpers }) }))}
+      title={title}
+      sub={sub}
+      pane={
+        more ? null : (
+          <DeskPane
+            desk={desk}
+            {...(route.view === "today" ? { routines: routineRows({ timezone, morningAt: Date.parse(inDays(1, 9)), eveningAt: Date.parse(inDays(0, 19)) + 30 * 60_000 }), onRoutine: (id: string) => record("routine", id) } : {})}
+          />
+        )
+      }
+      onCreateProject={async (name) => record("createProject", name)}
       account={{ signedIn: true, busy: false, onSignIn: () => record("signIn") }}
       pet={{ visible: pet, onToggle: () => (record("setPetVisible", !pet), setPet(!pet)) }}
       session={{ state: session, onEvent: (e) => (record("session", e), setSession({ start: "working", resume: "working", break: "break" }[e] as SessionState)) }}
@@ -383,33 +424,34 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
     >
       {route.view === "today" && (
         <Home
-          dateLabel={new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" }).format(NOW)}
-          projects={projects}
-          helpers={variant === "helpers" || variant === "play" ? played : []}
+          now={NOW.getTime()}
+          projects={variant === "noprojects" ? [] : projects}
+          helpers={helpers}
           helperActions={helperActions}
           focusProjectId={focus}
-          brief={((b) => b && { ...b, delivered: delivered.includes(b.key) })(variant in briefStates ? briefStates[variant] : variant === "evening" ? evening : morning)}
+          brief={brief}
           {...(variant === "failed" ? { briefError: briefFailure } : {})}
-          schedule={briefSchedule(Date.parse(inDays(1, 9)), Intl.DateTimeFormat().resolvedOptions().timeZone, NOW.getTime())}
+          schedule={schedule}
           {...(variant === "reentry" ? { reentry } : {})}
           {...(variant === "" ? { tradeoff } : {})}
+          {...(variant === "nudge" ? { nudge } : {})}
           onBriefShown={(key) => (record("markDelivered", key, "panel"), setDelivered((d) => [...d, key]))}
           onResolveTradeoff={async (id, choice) => record("resolveTradeoff", id, choice)}
-          ideas={ideas}
+          onNudge={async (choice) => {
+            record("respondToNudge", nudge.nudgeId, choice);
+            if (choice === "finish") setRoute({ view: "project", projectId: nudge.projectId });
+          }}
+          ideas={variant === "waiting" ? [] : ideas}
           {...(brainDump ? { brainDump } : {})}
-          sessionWorking={session === "working"}
           onCaptured={() => undefined}
           onStart={(id, mode) => (pick(id), session === "idle" && (record("session", "start"), setSession("working")), setRoute({ view: "project", projectId: id, mode }))}
           onOpenProject={(id) => setRoute({ view: "project", projectId: id })}
-          onCreateProject={async (name) => record("createProject", name)}
         />
       )}
       {project && route.view === "project" && (
         <ProjectView
           key={project.id}
           projectId={project.id}
-          name={project.name}
-          isFocus={project.id === focus}
           {...(route.mode ? { mode: route.mode } : {})}
           {...(project.prepared ? { prepared: project.prepared } : {})}
           thread={project.id === "guides" ? thread : []}
@@ -419,13 +461,8 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           editor={editor}
           sharing={{ state: null, share: async (r) => record("share", r), update: async (r) => record("updateShare", r), stop: async () => record("stopSharing") }}
           onReportDone={async (taskId) => record("reportDone", taskId)}
-          onMakeFocus={() => pick(project.id)}
           onPrepare={async () => record("prepare", project.id)}
-          onStop={stop}
         />
-      )}
-      {route.view === "projects" && (
-        <ProjectsIndex projects={variant === "empty" ? [] : projects} focusProjectId={focus} onOpenProject={(id) => setRoute({ view: "project", projectId: id })} onCreateProject={async (name) => record("createProject", name)} />
       )}
       {route.view === "schedule" && (
         <Schedule brief={variant === "empty" ? null : morning} nextBriefAt={Date.parse(inDays(1, 9))} now={NOW.getTime()} nameOf={(id) => projects.find((p) => p.id === id)?.name} />
@@ -499,7 +536,6 @@ const routes: Record<string, Route> = {
   // project-<id>: another illustrative project (avt: partial; personal: nothing prepared; course: needs retry).
   memory: { view: "memory" },
   connections: { view: "connections" },
-  projects: { view: "projects" },
   schedule: { view: "schedule" },
   calendar: { view: "calendar" },
 };
