@@ -7,7 +7,7 @@ const call = (name: string, args = "{}") => ({ name, args });
 describe("agent run rules", () => {
   test("a run started by someone else's message is never offered propose_send", () => {
     expect(toolsFor("message")).toEqual(["read_project", "start_request", "write_draft"]);
-    expect(toolsFor("chat")).toEqual(["read_project", "write_draft", "propose_send"]);
+    expect(toolsFor("chat")).toEqual(["read_project", "write_draft", "propose_send", "cite_sources"]);
   });
 
   test("a call is refused past the call limit or the time limit", () => {

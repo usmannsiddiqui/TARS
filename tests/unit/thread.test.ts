@@ -7,6 +7,7 @@ import {
   formatDuration,
   isMailAddress,
   primaryBlockId,
+  sayParts,
   stripEvidenceIds,
   viewBlock,
   workSummary,
@@ -202,5 +203,26 @@ describe("primaryBlockId (the one navy action on screen)", () => {
 
   it("never picks a work, document, receipt or sorted block", () => {
     expect(primaryBlockId([msg("m1", [{ type: "work", props: { steps: [] } }, { type: "sorted", props: { view: { kind: "sorting", projects: 1 } } }])])).toBeNull();
+  });
+});
+
+describe("sayParts (TARS's words, formatted for reading)", () => {
+  it("splits paragraphs on blank lines and marks bold runs", () => {
+    expect(sayParts("Dana asked for the budget.\nIt is due **Monday at 5 PM**.\n\nTell me what to change.")).toEqual([
+      { kind: "p", lines: [[{ text: "Dana asked for the budget. It is due " }, { text: "Monday at 5 PM", bold: true }, { text: "." }]] },
+      { kind: "p", lines: [[{ text: "Tell me what to change." }]] },
+    ]);
+  });
+
+  it("groups list lines into one list, bulleted or numbered", () => {
+    expect(sayParts("Coming up:\n- **Nov 16:** class\n- Nov 19: homework\n\n1. First\n2. Second")).toEqual([
+      { kind: "p", lines: [[{ text: "Coming up:" }]] },
+      { kind: "ul", lines: [[{ text: "Nov 16:", bold: true }, { text: " class" }], [{ text: "Nov 19: homework" }]] },
+      { kind: "ol", lines: [[{ text: "First" }], [{ text: "Second" }]] },
+    ]);
+  });
+
+  it("leaves a lone asterisk pair or a heading mark as plain words", () => {
+    expect(sayParts("## Budget\n2 ** 3 is 8")).toEqual([{ kind: "p", lines: [[{ text: "Budget 2 ** 3 is 8" }]] }]);
   });
 });

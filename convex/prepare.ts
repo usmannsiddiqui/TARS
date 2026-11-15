@@ -63,6 +63,7 @@ const runSources = v.array(v.object({ kind: v.string(), count: v.number() }));
 const preparationContext = v.object({
   projectName: v.string(),
   evidence: v.array(v.object(evidenceFields)),
+  kinds: v.array(v.object({ sourceId: v.string(), kind: v.string() })), // each source's kind, for a source chip's mark
   sources: runSources, // the source kinds of `evidence`, with item counts: what the helper card names
   omitted: v.number(),
   memory: v.array(v.object({ key: v.string(), value: v.string() })),
@@ -97,6 +98,7 @@ export const loadPreparationContext = internalQuery({
     return {
       projectName: project.name,
       evidence: selected,
+      kinds: [...kindOf].map(([sourceId, kind]) => ({ sourceId, kind })),
       sources: [...counts].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind)),
       omitted,
       memory: (await loadVisibleFacts(ctx, ownerId, projectId)).map(({ key, value }) => ({ key, value })),

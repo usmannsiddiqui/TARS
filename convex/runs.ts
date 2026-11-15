@@ -22,7 +22,7 @@ import { grantInScope } from "./prepare";
 import { threadBlocks } from "./schema";
 import { approvalBlock } from "./thread";
 
-const MAX_SAY = 1_200;
+const MAX_SAY = 2_000;
 const MAX_ITEM_TEXT = 2_000;
 const CHAT_TURNS = 12;
 
@@ -204,6 +204,9 @@ type Run = {
   messageId?: Id<"threadMessages">;
   key?: string;
   steps: Step[];
+  /** Items this run read, by id: the only things it can name as sources. */
+  items: Map<string, { label: string; kind?: string; url?: string }>;
+  sources?: { id: string; label: string; kind?: string; url?: string }[];
   calls: string[]; // tool names in the order the model called them, for the one log line
   document?: Block;
   approval?: Block;
@@ -215,7 +218,7 @@ const fail = (error: string) => ({ error });
 const blocksOf = (run: Run, say?: string): Block[] => [
   block("work", "work", { steps: run.steps }),
   ...(run.document ? [run.document] : []),
-  ...(say ? [block("say", "say", { text: say.slice(0, MAX_SAY) })] : []),
+  ...(say ? [block("say", "say", { text: say.slice(0, MAX_SAY), ...(run.sources?.length ? { sources: run.sources } : {}) })] : []),
   ...(run.approval ? [run.approval] : []),
 ];
 
@@ -228,7 +231,7 @@ const TOOLS: { [T in RunToolName]: (ctx: ActionCtx, run: Run, args: RunToolArgs<
     const name = run.projects.get(projectId);
     if (name === undefined) return fail("That project is not available to this piece of work.");
     Object.assign(step, { label: `Reading ${name}`, doneLabel: `Read ${name}` });
-    const { evidence, sources, memory } = await ctx.runQuery(internal.prepare.loadPreparationContext, { ownerId: run.ownerId, projectId });
+    const { evidence, sources, memory, kinds } = await ctx.runQuery(internal.prepare.loadPreparationContext, { ownerId: run.ownerId, projectId });
     const state = await ctx.runQuery(internal.runs.loadProjectState, { ownerId: run.ownerId, projectId, ...(run.trigger === "chat" && run.messageId ? { beforeMessage: run.messageId } : {}) });
     step.sources = sources;
     const items = [];
@@ -238,6 +241,9 @@ const TOOLS: { [T in RunToolName]: (ctx: ActionCtx, run: Run, args: RunToolArgs<
       size += JSON.stringify(item).length;
       if (size > MAX_TOOL_RESULT) break; // newest first: what does not fit is left out, never cut mid-item
       items.push(item);
+      const label = (e.subject ?? e.text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Source").slice(0, 48);
+      const kind = kinds.find((k) => k.sourceId === e.sourceId)?.kind;
+      run.items.set(e.id, { label, ...(kind ? { kind } : {}), ...(e.sourceUrl?.startsWith("https://") ? { url: e.sourceUrl } : {}) });
     }
     return { project: name, ...state, remembered: memory, items, itemsLeftOut: evidence.length - items.length };
   },
@@ -265,6 +271,16 @@ const TOOLS: { [T in RunToolName]: (ctx: ActionCtx, run: Run, args: RunToolArgs<
     run.document = block("document", "document", { artifactId: artifact.id, title, revision: artifact.revision, ...(undoRevision ? { changeSummary, undoRevision } : {}) });
     delete run.approval; // an approval shown for an earlier revision in this run no longer matches
     return { saved: true, revision: artifact.revision };
+  },
+
+  async cite_sources(_ctx, run, { itemIds }, step) {
+    Object.assign(step, { label: "Noting the sources", doneLabel: "Noted the sources" });
+    // Only items this run read, with their stored links: the model never writes a link.
+    run.sources = [...new Set(itemIds)].flatMap((id) => {
+      const item = run.items.get(id);
+      return item ? [{ id, ...item }] : [];
+    });
+    return { noted: run.sources.length };
   },
 
   async propose_send(ctx, run, _args, step) {
@@ -353,7 +369,7 @@ export const onMessage = internalAction({
   handler: async (ctx, { ownerId, evidenceId }): Promise<null> => {
     const c = await ctx.runQuery(internal.runs.loadMessage, { ownerId, evidenceId });
     if (c === null || c.projects.length === 0) return null;
-    const run: Run = { ownerId, trigger: "message", projects: new Map(c.projects.map((p) => [p.id, p.name])), evidenceId, timezone: c.timezone, steps: [], calls: [] };
+    const run: Run = { ownerId, trigger: "message", projects: new Map(c.projects.map((p) => [p.id, p.name])), evidenceId, timezone: c.timezone, steps: [], items: new Map(), calls: [] };
     const now = new Date();
     const localNow = c.timezone ? new Intl.DateTimeFormat("sv-SE", { timeZone: c.timezone, dateStyle: "short", timeStyle: "short" }).format(now) : now.toISOString();
     try {
@@ -380,7 +396,7 @@ export async function answerChat(ctx: ActionCtx, ownerId: string, messageId: Id<
   const state = await ctx.runQuery(internal.runs.loadProjectState, { ownerId, projectId: c.projectId, beforeMessage: messageId });
   const projects = await ctx.runQuery(internal.runs.listProjects, { ownerId });
   const read: Step = { id: "read", label: "Reading your message", doneLabel: "Read your message", status: "running", startedAt: c.startedAt };
-  const run: Run = { ownerId, trigger: "chat", projects: new Map(projects.map((p) => [p.id, p.name])), timezone, projectId: c.projectId, messageId, steps: [read], calls: [] };
+  const run: Run = { ownerId, trigger: "chat", projects: new Map(projects.map((p) => [p.id, p.name])), timezone, projectId: c.projectId, messageId, steps: [read], items: new Map(), calls: [] };
   try {
     // His message is the last entry of the stored chat; it goes in `message`, the rest is context.
     const said = await work(ctx, run, { project: { id: c.projectId, name: projectName }, projects, chat: state.chat.slice(0, -1), draft: state.draft, message: c.text });

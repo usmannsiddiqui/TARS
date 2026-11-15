@@ -7,7 +7,9 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties
 import {
   blockHasContent,
   deliverySteps,
+  sayParts,
   stripEvidenceIds,
+  type SaySpan,
   formatDuration,
   isMailAddress,
   primaryBlockId,
@@ -471,14 +473,37 @@ function DocumentBlock({ props, actions }: { props: Partial<BlockProps<"document
 }
 
 function SayBlock({ props }: { props: Partial<BlockProps<"say">> }) {
+  const line = (spans: SaySpan[]) => spans.map((span, i) => (span.bold ? <strong key={i}>{span.text}</strong> : span.text));
   return (
     <div className="say">
-      <p className="say-text">{props.text ? stripEvidenceIds(props.text) : <span className="quiet">…</span>}</p>
+      {props.text ? (
+        <div className="say-text">
+          {sayParts(stripEvidenceIds(props.text)).map((part, i) =>
+            part.kind === "p" ? (
+              <p key={i}>{line(part.lines[0]!)}</p>
+            ) : part.kind === "ul" ? (
+              <ul key={i}>{part.lines.map((spans, j) => <li key={j}>{line(spans)}</li>)}</ul>
+            ) : (
+              <ol key={i}>{part.lines.map((spans, j) => <li key={j}>{line(spans)}</li>)}</ol>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="say-text">
+          <span className="quiet">…</span>
+        </p>
+      )}
       {props.sources && props.sources.length > 0 && (
         <p className="say-sources" aria-label="From your sources">
-          {props.sources.map((s) => (
-            <SourceChip key={s.id} kind="link" label={s.label} />
-          ))}
+          {props.sources.map((s) =>
+            s.url ? (
+              <a key={s.id} className="say-source-link" href={s.url} target="_blank" rel="noreferrer noopener" aria-label={`Open ${s.label}`}>
+                <SourceChip kind={s.kind ?? "link"} label={s.label} />
+              </a>
+            ) : (
+              <SourceChip key={s.id} kind={s.kind ?? "link"} label={s.label} />
+            ),
+          )}
         </p>
       )}
     </div>

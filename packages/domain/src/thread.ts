@@ -34,8 +34,8 @@ export const BLOCKS = {
     }),
   },
   say: {
-    description: "TARS's two or three sentences, with source chips when it answers from evidence.",
-    props: z.object({ text: z.string(), sources: z.array(z.object({ id: z.string(), label: z.string() })).optional() }),
+    description: "TARS's words (short paragraphs, lists and **bold**: sayParts), with a chip per source it used; a chip with a url opens the item where it lives.",
+    props: z.object({ text: z.string(), sources: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string().optional(), url: z.string().optional() })).optional() }),
   },
   approval: {
     description:
@@ -268,3 +268,39 @@ export function blockHasContent(view: BlockView): boolean {
   }
 }
 
+
+export type SaySpan = { text: string; bold?: true };
+export type SayPart = { kind: "p" | "ul" | "ol"; lines: SaySpan[][] };
+
+const spans = (line: string): SaySpan[] =>
+  line
+    .split(/\*\*(\S(?:.*?\S)?)\*\*/)
+    .flatMap((text, i): SaySpan[] => (text === "" ? [] : [i % 2 === 1 ? { text, bold: true } : { text }]));
+
+/**
+ * TARS's words as paragraphs and lists: a blank line ends a paragraph, lines starting "- " or "1."
+ * form one list, **bold** marks a run. Anything else the model wrote (a heading mark) is shown as words.
+ */
+export function sayParts(text: string): SayPart[] {
+  const parts: SayPart[] = [];
+  let open: { kind: SayPart["kind"]; lines: string[] } | null = null;
+  const close = () => {
+    if (open === null) return;
+    parts.push({ kind: open.kind, lines: open.kind === "p" ? [spans(open.lines.join(" "))] : open.lines.map(spans) });
+    open = null;
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim().replace(/^#+\s+/, "");
+    if (line === "") {
+      close();
+      continue;
+    }
+    const item = /^(?:[-*•]|(\d+)[.)])\s+(.*)$/.exec(line);
+    const kind = item === null ? "p" : item[1] === undefined ? "ul" : "ol";
+    if (open !== null && open.kind !== kind) close();
+    open ??= { kind, lines: [] };
+    open.lines.push(item === null ? line : item[2]!);
+  }
+  close();
+  return parts;
+}

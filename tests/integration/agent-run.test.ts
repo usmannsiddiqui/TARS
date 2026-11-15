@@ -46,8 +46,8 @@ async function setup() {
   await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
   const budget = ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name: "Budget" }));
   let sourceId: string | undefined;
-  const mail = async (text: string, headers: Partial<typeof DANA> = DANA): Promise<Evidence> => {
-    const record = makeEvidence(alice.ownerId, [budget], { text, ...headers, ...(sourceId ? { sourceId: sourceId as Evidence["sourceId"] } : {}) });
+  const mail = async (text: string, headers: Partial<typeof DANA> = DANA, sourceUrl?: string): Promise<Evidence> => {
+    const record = makeEvidence(alice.ownerId, [budget], { text, ...headers, ...(sourceUrl ? { sourceUrl } : {}), ...(sourceId ? { sourceId: sourceId as Evidence["sourceId"] } : {}) });
     if (sourceId === undefined) {
       sourceId = record.sourceId;
       await asAlice.mutation(api.evidence.setGrant, { id: sourceId, kind: "gmail", selectors: ["illustrative-label"], projectIds: [budget], read: true, writeTargets: [], cloudProcessing: true, version: 1, state: "active" });
@@ -204,6 +204,24 @@ describe("his chat message starts a run in that project", () => {
     const input = JSON.parse(requestBody(0).input[0]!.content!) as { message: string; chat: { role: string; text: string }[] };
     expect(input.message).toBe("make it shorter");
     expect(input.chat).toEqual([{ role: "tars", text: "Dana asked for the budget. I drafted it; tell me what to change." }]);
+  });
+
+  test("an_answer_names_the_items_it_used_as_sources_with_their_links", async () => {
+    const s = await opened();
+    const note = await s.mail("Illustrative calendar: class on Monday at 1:30 PM.", { ...DANA, subject: "Calendar" }, "https://canvas.example.com/calendar");
+    stubModel([[says("")]]); // the note's own run: it asks for nothing
+    await s.settle();
+    stubModel([
+      [call("read_project", { projectId: s.budget })],
+      [call("cite_sources", { itemIds: [note.id, "not-an-item-it-read"] })],
+      [says("You have **class on Monday** at 1:30 PM.")],
+    ]);
+    await s.asAlice.action(api.thread.sendMessage, { projectId: s.budget, text: "what is on my calendar?" });
+
+    const reply = (await s.thread()).at(-1)!;
+    expect(types(reply)).toEqual(["work", "say"]);
+    // Only items this run really read become sources; each carries its stored link, never one the model wrote.
+    expect(blockOf(reply, "say")).toEqual({ text: "You have **class on Monday** at 1:30 PM.", sources: [{ id: note.id, label: "Calendar", kind: "gmail", url: "https://canvas.example.com/calendar" }] });
   });
 
   test("looks_good_shows_exactly_what_would_go_out_and_sends_nothing", async () => {
