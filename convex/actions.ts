@@ -33,6 +33,7 @@ import * as outlook from "./connectors/outlook";
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { requireOwnedProject } from "./memory";
+import { reportSendOutcome } from "./whatsapp";
 
 const MAIL_KINDS = ["gmail", "outlook-mail"];
 const normalizePage = (id: string) => id.replace(/-/g, "").toLowerCase();
@@ -283,6 +284,7 @@ export const recordOutcome = internalMutation({
       // A later check that proves delivery closes the send and verify stages it left open.
       ...(verified && row.stages !== undefined ? { stages: row.stages.map((s) => (s.state === "done" ? s : { name: s.name, state: "done" as const, ...(s.startedAt === undefined ? {} : { startedAt: s.startedAt }), endedAt: Date.now() })) } : {}),
     });
+    await reportSendOutcome(ctx, row, state); // a send he started with SEND on WhatsApp: one message
     if (verified && row.taskId !== undefined) {
       const taskId = ctx.db.normalizeId("commitments", row.taskId);
       const task = taskId === null ? null : await ctx.db.get(taskId);

@@ -1,7 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { AttentionInput } from "@companion/domain";
 import { startAttentionDelivery, type AttentionState } from "../../apps/desktop/src/main/attention";
-import { createSelfText, type SelfTextSetting } from "../../apps/desktop/src/main/self-text";
 
 const input: AttentionInput = {
   kind: "morning",
@@ -24,18 +23,8 @@ const nudge: AttentionState = {
   body: "Send the deck to Bob. Your draft is here whenever you want it.",
 };
 
-function fakes(panelOpen = false, texting: SelfTextSetting = { enabled: true, handle: "+15551234567" }) {
+function fakes(panelOpen = false) {
   let push: (state: AttentionState) => void = () => {};
-  const texts: string[][] = [];
-  let textFails = false;
-  const selfText = createSelfText({
-    run: async (_file, args) => {
-      texts.push(args.slice(args.indexOf("--") + 1));
-      if (textFails) throw Object.assign(new Error("Command failed"), { stderr: "Not authorized to send Apple events to Messages. (-1743)" });
-    },
-    load: () => texting,
-    save: () => {},
-  });
   const deps = {
     showNotification: vi.fn(async () => {}),
     isPanelOpen: vi.fn(() => panelOpen),
@@ -44,10 +33,9 @@ function fakes(panelOpen = false, texting: SelfTextSetting = { enabled: true, ha
       return vi.fn();
     }),
     markDelivered: vi.fn(async () => {}),
-    textNudge: (body: string) => selfText.sendNudge(body),
   };
   const delivery = startAttentionDelivery(deps);
-  return { deps, delivery, texts, failTexts: () => void (textFails = true), push: (state: AttentionState) => push(state) };
+  return { deps, delivery, push: (state: AttentionState) => push(state) };
 }
 
 describe("attention delivery", () => {
@@ -98,14 +86,6 @@ describe("attention delivery", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  test("a_delivered_nudge_is_also_texted_once_to_the_own_number", async () => {
-    const { deps, delivery, texts } = fakes();
-    expect(await delivery.handle(nudge)).toBe("notified");
-    expect(await delivery.handle(nudge)).toBe("skipped");
-    expect(deps.showNotification).toHaveBeenCalledTimes(1);
-    expect(texts).toEqual([["+15551234567", "Send the deck to Bob. Your draft is here whenever you want it. Open TARS to finish it together."]]);
-  });
-
   test("clicking_a_nudge_opens_that_projects_chat_and_everything_else_opens_the_panel", async () => {
     const { deps, delivery } = fakes();
     expect(await delivery.handle({ ...nudge!, projectId: "project-budget" })).toBe("notified");
@@ -113,28 +93,5 @@ describe("attention delivery", () => {
     // Only a nudge that names its project opens a chat.
     expect(await delivery.handle({ ...nudge!, key: "nudge:n2@1", projectId: undefined })).toBe("notified");
     expect(deps.showNotification).toHaveBeenLastCalledWith({ title: nudge!.title, body: nudge!.body, opens: "panel" });
-  });
-
-  test("no_text_when_off_or_for_non_nudge_keys", async () => {
-    const off = fakes(false, { enabled: false, handle: "+15551234567" });
-    expect(await off.delivery.handle(nudge)).toBe("notified");
-    expect(off.texts).toEqual([]);
-    const on = fakes();
-    expect(await on.delivery.handle(morning)).toBe("notified");
-    expect(on.texts).toEqual([]);
-    // A nudge the panel shows (no notification) is not texted either.
-    const panel = fakes(true);
-    expect(await panel.delivery.handle(nudge)).toBe("skipped");
-    expect(panel.texts).toEqual([]);
-  });
-
-  test("a_failed_text_is_not_retried_and_the_receipt_still_lands", async () => {
-    const { deps, delivery, texts, failTexts } = fakes();
-    failTexts();
-    expect(await delivery.handle(nudge)).toBe("notified");
-    expect(await delivery.handle(nudge)).toBe("skipped");
-    expect(texts).toHaveLength(1);
-    expect(deps.markDelivered).toHaveBeenCalledTimes(1);
-    expect(deps.markDelivered).toHaveBeenCalledWith({ key: nudge!.key, channel: "notification" });
   });
 });

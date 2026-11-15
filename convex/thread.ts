@@ -10,11 +10,11 @@ import { MAX_ARTIFACT_TEXT } from "../packages/domain/src/artifacts";
 import { mailSubject } from "../packages/domain/src/actions";
 import { deliveryMail, type Requester } from "../packages/domain/src/delivery";
 import { asksToSend, block, dueLabel, type Block, type Step } from "../packages/domain/src/thread";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { validOutput } from "./artifacts";
-import { requesterFor } from "./delivery";
+import { approveAs, requesterFor } from "./delivery";
 import { requireOwnerId } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { requireOwnedProject } from "./memory";
@@ -328,14 +328,21 @@ async function answer(ctx: ActionCtx, ownerId: string, messageId: Id<"threadMess
   return unclear(said || "What would you like me to do with the draft?");
 }
 
-/** His chat message: stored, then answered with one model call. */
+/**
+ * His message to a project, from the app's chat or his linked WhatsApp: stored, then answered with one
+ * model call. Returns TARS's reply message. The caller resolves `ownerId` from a verified identity.
+ */
+export async function chatAs(ctx: ActionCtx, ownerId: string, projectId: string, text: string): Promise<Id<"threadMessages">> {
+  const messageId: Id<"threadMessages"> = await ctx.runMutation(internal.thread.postUser, { ownerId, projectId, text });
+  await answer(ctx, ownerId, messageId);
+  return messageId;
+}
+
 export const sendMessage = action({
   args: { projectId: v.string(), text: v.string() },
   returns: v.null(),
   handler: async (ctx, { projectId, text }): Promise<null> => {
-    const ownerId = await requireOwnerId(ctx);
-    const messageId: Id<"threadMessages"> = await ctx.runMutation(internal.thread.postUser, { ownerId, projectId, text });
-    await answer(ctx, ownerId, messageId);
+    await chatAs(ctx, await requireOwnerId(ctx), projectId, text);
     return null;
   },
 });
@@ -415,7 +422,8 @@ export const recordSend = internalMutation({
   },
 });
 
-type SendResult = { actionId: string } | { status: "needs-clarification"; reason: string } | { status: "missing-send-permission" };
+export type SendResult = { actionId: string } | { status: "needs-clarification"; reason: string } | { status: "missing-send-permission" };
+type SendArgs = { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string };
 
 /**
  * THE SEND: the approval's primary action, and the only way the chat sends. A Word document of
@@ -430,42 +438,44 @@ export const send = action({
     v.object({ status: v.literal("needs-clarification"), reason: v.string() }),
     v.object({ status: v.literal("missing-send-permission") }),
   ),
-  handler: async (ctx, args): Promise<SendResult> => {
-    const ownerId = await requireOwnerId(ctx);
-    const reply = (blocks: Block[]) => ctx.runMutation(internal.thread.postReply, { ownerId, projectId: args.projectId, blocks });
-    let result: { actionId: string } | { status: "needs-clarification"; reason: string };
-    try {
-      result = await ctx.runAction(api.delivery.approveAndSend, args);
-    } catch (error) {
-      if (!(error instanceof ConvexError) || error.data !== "missing-send-permission") throw error;
-      // The permission is asked for right here, for the Gmail the send would go through; it never sends by itself.
-      const senders: string[] = await ctx.runQuery(internal.thread.gmailSenders, { ownerId, projectId: args.projectId });
-      await reply(
-        senders.length === 0
-          ? [block("say", "say", { text: NO_GMAIL })]
-          : [block("say", "say", { text: MISSING_SEND_PERMISSION }), ...senders.map((sourceId) => block(`allow-${sourceId}`, "allowSend", { sourceId, account: "Gmail" }))],
-      );
-      return { status: "missing-send-permission" };
-    }
-    if ("actionId" in result) {
-      await ctx.runMutation(internal.thread.recordSend, {
-        ownerId,
-        projectId: args.projectId,
-        artifactId: args.artifactId,
-        revision: args.revision,
-        actionId: result.actionId,
-        recipient: args.recipient.trim(),
-      });
-      return result;
-    }
-    // The draft moved on since the approval was shown: say so, and offer exactly the current revision.
-    const current: ApprovalContext = await ctx.runQuery(internal.thread.loadApprovalContext, { ownerId, projectId: args.projectId });
-    const fresh = current.artifact !== null && current.artifact.revision !== args.revision ? current.artifact : null;
-    await reply([
-      block("say", "say", { text: fresh ? `${result.reason} Here is revision ${fresh.revision}, ready to send.` : result.reason }),
-      ...(fresh ? [approvalBlock(args.projectId, fresh, current.commitmentKey, current.requester)] : []),
-    ]);
-    return result;
-  },
+  handler: async (ctx, args): Promise<SendResult> => sendAs(ctx, await requireOwnerId(ctx), args),
 });
+
+/** The send itself: the approval's button in the app, or his exact SEND from the linked phone. */
+export async function sendAs(ctx: ActionCtx, ownerId: string, args: SendArgs): Promise<SendResult> {
+  const reply = (blocks: Block[]) => ctx.runMutation(internal.thread.postReply, { ownerId, projectId: args.projectId, blocks });
+  let result: { actionId: string } | { status: "needs-clarification"; reason: string };
+  try {
+    result = await approveAs(ctx, ownerId, args);
+  } catch (error) {
+    if (!(error instanceof ConvexError) || error.data !== "missing-send-permission") throw error;
+    // The permission is asked for right here, for the Gmail the send would go through; it never sends by itself.
+    const senders: string[] = await ctx.runQuery(internal.thread.gmailSenders, { ownerId, projectId: args.projectId });
+    await reply(
+      senders.length === 0
+        ? [block("say", "say", { text: NO_GMAIL })]
+        : [block("say", "say", { text: MISSING_SEND_PERMISSION }), ...senders.map((sourceId) => block(`allow-${sourceId}`, "allowSend", { sourceId, account: "Gmail" }))],
+    );
+    return { status: "missing-send-permission" };
+  }
+  if ("actionId" in result) {
+    await ctx.runMutation(internal.thread.recordSend, {
+      ownerId,
+      projectId: args.projectId,
+      artifactId: args.artifactId,
+      revision: args.revision,
+      actionId: result.actionId,
+      recipient: args.recipient.trim(),
+    });
+    return result;
+  }
+  // The draft moved on since the approval was shown: say so, and offer exactly the current revision.
+  const current: ApprovalContext = await ctx.runQuery(internal.thread.loadApprovalContext, { ownerId, projectId: args.projectId });
+  const fresh = current.artifact !== null && current.artifact.revision !== args.revision ? current.artifact : null;
+  await reply([
+    block("say", "say", { text: fresh ? `${result.reason} Here is revision ${fresh.revision}, ready to send.` : result.reason }),
+    ...(fresh ? [approvalBlock(args.projectId, fresh, current.commitmentKey, current.requester)] : []),
+  ]);
+  return result;
+}
 

@@ -23,20 +23,24 @@ export type ConnectionsProps = {
   shortcut: { status: ShortcutStatus | null; onSet(accelerator: string): Promise<void> };
   /** The held talk key, shown beside the capture shortcut. */
   talkKey: { status: TalkKeyStatus | null; onOpenAccessibility(): Promise<void> };
-  selfText: SelfTextActions;
+  whatsapp: WhatsAppActions;
 };
 
-export type SelfTextResult = "sent" | "not-permitted" | "no-messages-account" | "failed";
-export type SelfTextActions = {
-  /** Null while loading; handle is "" until the user saves one. */
-  setting: { enabled: boolean; handle: string; lastNudge?: SelfTextResult } | null;
-  onSave(setting: { enabled: boolean; handle: string }): Promise<void>;
-  onTest(): Promise<SelfTextResult>;
+/** whatsapp.status as the card reads it (convex/whatsapp.ts). */
+export type WhatsAppStatus = {
+  sandbox: string | null;
+  linked: boolean;
+  phone: string | null;
+  windowClosed: boolean;
+  last: { state: "waiting" | "queued" | "sent" | "refused" | "failed"; at: number } | null;
 };
-
-/** Texts-to-me consent: what is sent, to whom, and what is never touched. */
-export const selfTextConsent =
-  "When TARS notifies you about something due, it also texts that short nudge to your own number through Messages on this Mac. It sends only to the number you enter here, never to anyone else, and never reads your messages or chats. Your number stays on this Mac.";
+export type WhatsAppActions = {
+  /** Undefined while loading. */
+  status: WhatsAppStatus | undefined;
+  onLink(): Promise<string>;
+  onUnlink(): Promise<void>;
+  onTest(): Promise<void>;
+};
 
 export type TalkKeyStatus = { key: string; state: "starting" | "ready" | "permission-missing" | "unavailable" };
 
@@ -128,7 +132,7 @@ export function Connections(props: ConnectionsProps) {
           );
         })}
         <ShortcutSetting {...props.shortcut} talkKey={props.talkKey} />
-        <SelfTextSetting {...props.selfText} />
+        <WhatsAppCard {...props.whatsapp} />
       </div>
     </div>
   );
@@ -196,94 +200,65 @@ function TalkKeyNote({ status, onOpenAccessibility }: ConnectionsProps["talkKey"
   );
 }
 
-/** A text result in words: never "sent" unless osascript said so. */
-const TEXT_RESULT: Record<SelfTextResult, ["done" | "missing-access" | "needs-retry", string]> = {
-  sent: ["done", "Sent to your number."],
-  "not-permitted": ["missing-access", "macOS did not allow TARS to use Messages. Allow it under System Settings, Privacy & Security, Automation."],
-  "no-messages-account": ["missing-access", "No Messages account on this Mac. Sign in to iMessage in Messages, then try again."],
-  failed: ["needs-retry", "The text failed to send."],
-};
-const textNote = (result: SelfTextResult, prefix = ""): Honest => ({ kind: TEXT_RESULT[result][0], detail: prefix + TEXT_RESULT[result][1] });
+/** The last message to the phone in words: "sent" only when Twilio accepted it. */
+function lastNote(status: WhatsAppStatus): Honest | null {
+  if (status.windowClosed) return { kind: "missing-access", detail: "Message TARS on WhatsApp once to reopen the 24-hour window." };
+  if (status.last?.state === "sent") return { kind: "done", detail: "Last message: sent to your phone." };
+  if (status.last?.state === "failed") return { kind: "needs-retry", detail: "Last message: Twilio did not send it." };
+  return null;
+}
 
-/** Off by default: turning it on, with the user's own number, is the user's act after the consent wording. */
-function SelfTextSetting({ setting, onSave, onTest }: SelfTextActions) {
-  const field = useId();
-  const [step, setStep] = useState<"idle" | "consent">("idle");
-  const [handle, setHandle] = useState("");
+/** His one phone: linked by a code he sends from WhatsApp; that phone alone can instruct TARS by message. */
+function WhatsAppCard({ status, onLink, onUnlink, onTest }: WhatsAppActions) {
+  const [code, setCode] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<SelfTextResult>();
-  const on = setting?.enabled === true;
-  const row: SourceRow = { id: "self-text", name: "Texts to me", coverage: "Nudges about things due, as a text to your own phone", group: "mac", state: on ? "on" : "off" };
+  const linked = status?.linked === true;
+  const row: SourceRow = { id: "whatsapp", name: "TARS on WhatsApp", coverage: "Message TARS from your phone; nudges and your stop recap come there too", group: "mac", state: linked ? "on" : "off" };
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
     setError(undefined);
     try {
       await action();
-      setStep("idle");
     } catch (err) {
       setError(reason(err));
     } finally {
       setBusy(false);
     }
   }
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    await act(() => onSave({ enabled: true, handle: handle.trim() }));
-  }
+  const note = status && linked ? lastNote(status) : null;
 
   return (
-    <section className="block" aria-labelledby="self-text-h">
-      <h2 id="self-text-h" className="block-title">
-        Texts to me
+    <section className="block" aria-labelledby="whatsapp-h">
+      <h2 id="whatsapp-h" className="block-title">
+        TARS on WhatsApp
       </h2>
-      <ul className="source-rows" aria-labelledby="self-text-h">
+      <ul className="source-rows" aria-labelledby="whatsapp-h">
         <li className="source" data-state={row.state}>
           <CardHead
             row={row}
-            by="with Messages on this Mac · sends only to your own number"
-            add={!on && step === "idle" ? { label: "Turn on texts to me", disabled: setting === null, onClick: () => (setHandle(setting?.handle ?? ""), setStep("consent")) } : undefined}
+            by="through Twilio · only your linked phone can instruct TARS"
+            add={!linked && status?.sandbox ? { label: "Link my phone", disabled: busy, onClick: () => void act(async () => setCode(await onLink())) } : undefined}
           />
-          {setting === null && <StateNote state={{ kind: "loading" }} />}
-          {on && (
-            <>
-              <p className="small">Texts go to {setting.handle}.</p>
-              {setting.lastNudge && <StateNote state={textNote(setting.lastNudge, "Last nudge text: ")} />}
-              <button type="button" className="secondary" disabled={busy} onClick={() => act(async () => setTest(await onTest()))}>
-                Send me a test text
-              </button>
-              <button type="button" className="text-button" disabled={busy} onClick={() => act(() => onSave({ enabled: false, handle: setting.handle }))}>
-                Turn off
-              </button>
-              {test && <StateNote state={textNote(test)} />}
-            </>
+          {status === undefined && <StateNote state={{ kind: "loading" }} />}
+          {status && status.sandbox === null && <StateNote state={{ kind: "missing-access", detail: "WhatsApp is not set up on this TARS backend yet." }} />}
+          {status && !linked && code && (
+            <p role="status">
+              From WhatsApp, send <strong>{code}</strong> to {status.sandbox}. The code works once, for 10 minutes. Nothing is sent to your phone until it is linked.
+            </p>
           )}
-          {step === "consent" && (
-            <form className="confirm consent connect-form" aria-label="Turn on texts to me" onSubmit={submit}>
-              <p>{selfTextConsent}</p>
-              <div className="field-row">
-                <label htmlFor={field}>Your own number or Apple ID email</label>
-                <input
-                  id={field}
-                  value={handle}
-                  autoComplete="tel"
-                  spellCheck={false}
-                  maxLength={254}
-                  aria-describedby={`${field}-hint`}
-                  onChange={(e) => setHandle(e.target.value)}
-                />
-              </div>
-              <p id={`${field}-hint`} className="quiet small">
-                A phone number in international form with no spaces, like +15551234567, or the email you use for iMessage.
-              </p>
-              <button type="submit" className="secondary" disabled={busy || handle.trim() === ""}>
-                Turn on texts to me
+          {linked && (
+            <>
+              <p className="small">Linked to {status.phone}. Sending anything still needs your exact SEND.</p>
+              {note && <StateNote state={note} />}
+              <button type="button" className="secondary" disabled={busy} onClick={() => void act(onTest)}>
+                Send me a test message
               </button>
-              <button type="button" className="text-button" onClick={() => setStep("idle")}>
-                Not now
+              <button type="button" className="text-button" disabled={busy} onClick={() => void act(async () => (setCode(undefined), await onUnlink()))}>
+                Unlink
               </button>
-            </form>
+            </>
           )}
           {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
         </li>
