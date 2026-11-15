@@ -66,9 +66,9 @@ const SHARED = [
 export const RUN_INSTRUCTIONS: Record<RunTrigger, string> = {
   message: [
     ...SHARED,
-    "A new message has arrived (input.message). Decide whether it asks the user to do or deliver something.",
-    "If it asks the user for nothing (news, notifications, promotions, receipts, things addressed to others), or it does not belong to any project in input.projects, stop at once: call no tools and reply with an empty message.",
-    "If it does ask: read the project it belongs to, record the request with start_request, then do as much of the work as the project's material allows and save it with write_draft. Draft only this request; never fold other requests into it.",
+    "A new message has arrived (input.message). Decide whether it asks the user for something: to do or deliver something, to answer a question, or to decide or confirm something.",
+    "If it asks the user for nothing (news, notifications, promotions, receipts, things addressed to others), or it does not belong to any project in input.projects, stop at once: call no tools and reply with an empty message. A question put to the user by a person is a request, however small.",
+    "If it does ask: read the project it belongs to, record the request with start_request, then do as much of the work as the project's material allows and save it with write_draft. When a short answer is all that is asked, the draft is that answer, as a reply. Draft only this request; never fold other requests into it.",
     "Then tell the user, in your last message: who asked for what, when it is due or that no due time was given, what you drafted and from what, and what you still need from them. End by asking what to change.",
   ].join("\n"),
   chat: [
