@@ -36,6 +36,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // ---- fetch stub: longest matching URL prefix wins.
@@ -73,13 +74,24 @@ function fakeComposio(account: { id: string; userId: () => Promise<string>; tool
   } satisfies Record<string, Stub>;
 }
 
-async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams", selectors: string[]) {
+/** Cloud-processing consent is off unless a test is about automatic preparation, so no model run is scheduled. */
+async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams", selectors: string[], opts: { cloudProcessing?: boolean } = {}) {
   const t = convexTest(schema, modules);
   const { alice, bob } = makeOwners();
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice" });
   const projectId = ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name: "AVT" }));
   const sourceId = `source-${kind}-${crypto.randomUUID()}`;
-  const grant = { id: sourceId, kind, selectors, projectIds: [projectId as ProjectId], read: true, writeTargets: [], cloudProcessing: true, version: 1, state: "active" };
+  const grant = {
+    id: sourceId,
+    kind,
+    selectors,
+    projectIds: [projectId as ProjectId],
+    read: true,
+    writeTargets: [],
+    cloudProcessing: opts.cloudProcessing ?? false,
+    version: 1,
+    state: "active",
+  };
   await asAlice.mutation(api.evidence.setGrant, grant);
   const evidence = () => t.run((ctx) => ctx.db.query("evidence").collect());
   const connection = () => asAlice.query(api.connections.listConnections, {}).then((rows) => rows[0]);
@@ -210,6 +222,29 @@ describe("composio events", () => {
       grantVersion: 1,
       projectIds: [ctx.projectId],
     });
+  });
+
+  test("a webhook message on a consenting grant leads to exactly one automatic preparation", async () => {
+    // Hold scheduled jobs (convex-test runs them on setTimeout) so the run is observed while pending.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ctx = await setup("slack", [CHANNEL], { cloudProcessing: true });
+    await connect(ctx);
+    const automatic = async () =>
+      (await ctx.t.run((db) => db.db.system.query("_scheduled_functions").collect())).filter(
+        (job) => job.name.includes("runAutomatic") && job.state.kind === "pending",
+      );
+    expect(await automatic()).toHaveLength(0);
+    await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage());
+    // A second new message and a redelivery of the first coalesce into the same pending run.
+    await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage(CHANNEL, "1763150460.000300"));
+    await deliver(ctx, "SLACK_CHANNEL_MESSAGE_RECEIVED", slackMessage());
+    expect(await ctx.evidence()).toHaveLength(2);
+    const jobs = await automatic();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.args[0]).toEqual({ ownerId: ctx.alice.ownerId, projectId: ctx.projectId });
+    expect(await ctx.t.run((db) => db.db.query("preparationRuns").collect())).toMatchObject([
+      { ownerId: ctx.alice.ownerId, projectId: ctx.projectId, state: "pending", followUp: false },
+    ]);
   });
 
   test("the same event delivered twice is stored once", async () => {
