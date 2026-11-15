@@ -51,7 +51,7 @@ const toArtifact = (row: Doc<"artifacts"> | Doc<"artifactVersions">, id: Id<"art
   evidenceIds: row.evidenceIds as EvidenceId[],
 });
 
-async function requireOwnedArtifact(ctx: Pick<QueryCtx, "db">, ownerId: string, artifactId: string) {
+export async function requireOwnedArtifact(ctx: Pick<QueryCtx, "db">, ownerId: string, artifactId: string) {
   const id = ctx.db.normalizeId("artifacts", artifactId);
   const row = id === null ? null : await ctx.db.get(id);
   if (row === null || row.ownerId !== ownerId) throw new ConvexError("Artifact not found");

@@ -227,6 +227,22 @@ export default defineSchema({
     evidenceIds: v.array(v.string()),
   }).index("by_artifact", ["artifactId"]),
 
+  // At most one live read-only link per artifact, and the row is the receipt of the user's share.
+  // title/text are a snapshot of the shared revision: only shares.updateShare changes them.
+  // Deleting the row kills the link for good; a re-share makes a new token.
+  artifactShares: defineTable({
+    ownerId: v.string(),
+    artifactId: v.id("artifacts"),
+    tokenHash: v.string(), // SHA-256 hex of the 32-byte random token in the link
+    sealedToken: v.string(), // encryptSecret(token), so only the owner can copy the link again
+    revision: v.string(),
+    title: v.string(),
+    text: v.string(),
+    sharedAt: v.number(), // when the user shared or last moved the page to `revision`
+  })
+    .index("by_token_hash", ["tokenHash"])
+    .index("by_artifact", ["artifactId"]),
+
   // The chosen FocusState, one row per owner. Written only by user-initiated functions in projects.ts.
   focus: defineTable({ ownerId: v.string(), ...focusFields }).index("by_owner", ["ownerId"]),
 
