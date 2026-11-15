@@ -109,6 +109,20 @@ export function readRows(read: Brief["read"]): { kind: string; text: string }[] 
     .map((r) => ({ kind: r.kind, text: READ_WORDS[r.kind]!(r.count) }));
 }
 
+export type BriefListItem = { text: string; projectId: string; kind: HardItem["kind"] | "suggested"; dueAt?: string; recommended: boolean };
+const BRIEF_LIST_MAX = 5;
+
+/** The brief as a short numbered list: the recommended start first, then meetings and real due dates, then suggestions; each once, at most five. */
+export function briefList(brief: Pick<Brief, "hard" | "suggested" | "recommendedAction">): BriefListItem[] {
+  const all: BriefListItem[] = [
+    ...brief.hard.map((h) => ({ text: h.text, projectId: h.projectId, kind: h.kind, dueAt: h.dueAt, recommended: false })),
+    ...brief.suggested.map((s) => ({ text: s.text, projectId: s.projectId, kind: "suggested" as const, recommended: false })),
+  ];
+  const start = all.find((i) => i.text === brief.recommendedAction);
+  const ordered = start ? [{ ...start, recommended: true }, ...all.filter((i) => i.text !== start.text)] : all;
+  return ordered.slice(0, BRIEF_LIST_MAX);
+}
+
 /** The brief's schedule in words, from the next scheduled run (briefs.getSchedule): it runs every day at that local time. */
 export function briefSchedule(morningAt: number, timezone: string, now: number): { routine: string; at: string; next: string } {
   const at = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(morningAt);
