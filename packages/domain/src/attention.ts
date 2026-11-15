@@ -335,6 +335,40 @@ export function assembleBrief(context: BriefContext, kind: "morning" | "evening"
   };
 }
 
+/** One kind of input a brief drew on and how many items: a source kind, or "commitments" (still open, yours). */
+export type BriefRead = { kind: SourceKind | "commitments"; count: number };
+
+// shortcut: "in range" for Canvas is the next seven days; tune from use.
+const CANVAS_RANGE = 7 * DAY;
+
+/**
+ * What a morning brief actually read, per kind, from the same context it was assembled from: today's
+ * calendar items, Canvas items due in range, other sources' items received since `sinceMs` (the last
+ * brief), and your open commitments. Kinds with nothing are left out; sorted by kind.
+ */
+export function briefReads(context: BriefContext, sinceMs: number): BriefRead[] {
+  const now = Date.parse(context.now);
+  const today = localDate(now, context.timezone);
+  const kinds = new Map(context.sources.map((s) => [s.id as string, s.kind]));
+  const counts = new Map<BriefRead["kind"], number>();
+  const add = (kind: BriefRead["kind"], n = 1) => counts.set(kind, (counts.get(kind) ?? 0) + n);
+  for (const record of context.evidence) {
+    const kind = kinds.get(record.sourceId);
+    if (kind === undefined) continue;
+    const at = Date.parse(record.occurredAt);
+    const read =
+      kind === "outlook-calendar"
+        ? localDate(at, context.timezone) === today
+        : kind === "canvas"
+          ? at >= now && at - now <= CANVAS_RANGE
+          : Date.parse(record.receivedAt) > sinceMs;
+    if (read) add(kind);
+  }
+  const open = userOpen(context.commitments).length;
+  if (open > 0) add("commitments", open);
+  return [...counts].map(([kind, count]) => ({ kind, count })).sort((a, b) => a.kind.localeCompare(b.kind));
+}
+
 // ---- Re-entry after time away.
 
 export type Reentry = {

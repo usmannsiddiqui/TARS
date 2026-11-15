@@ -32,8 +32,8 @@ function setup() {
   const project = async (name: string): Promise<ProjectId> =>
     ProjectIdSchema.parse(await asAlice.mutation(api.projects.createProject, { name }));
   /** Grant + one ingested illustrative record from a source of `kind`. */
-  const evidence = async (projectId: ProjectId, kind: SourceKind, text: string) => {
-    const record = makeEvidence(alice.ownerId, [projectId], { text });
+  const evidence = async (projectId: ProjectId, kind: SourceKind, text: string, occurredAt?: string) => {
+    const record = makeEvidence(alice.ownerId, [projectId], { text, ...(occurredAt === undefined ? {} : { occurredAt }) });
     await asAlice.mutation(api.evidence.setGrant, {
       id: record.sourceId,
       kind,
@@ -281,5 +281,50 @@ describe("briefs", () => {
     expect(await commitments()).toEqual(before);
     expect(reentry.drafts).toEqual([{ artifactId: draft, projectId: avt, revision: "r3", userEdited: true, preview: "Illustrative pitch draft." }]);
     expect((await pendingBriefs()).filter((row) => row.kind === "morning")).toHaveLength(1);
+  });
+
+  test("morning_brief_records_what_it_read", async () => {
+    const { t, asAlice, project, evidence, commitment, runDeadline, configure } = setup();
+    const avt = await project("AVT");
+    await evidence(avt, "gmail", "Illustrative: venue confirms Saturday");
+    await evidence(avt, "gmail", "Illustrative: co-presenter sends slides");
+    await evidence(avt, "outlook-mail", "Illustrative: invoice question");
+    await evidence(avt, "outlook-calendar", "Illustrative: rehearsal call", "2026-11-14T16:00:00.000Z"); // today, 11:00 in New York
+    await evidence(avt, "outlook-calendar", "Illustrative: stand-up", "2026-11-15T15:00:00.000Z"); // tomorrow
+    await evidence(avt, "canvas", "Illustrative: Essay 2 due", "2026-11-17T04:59:00.000Z"); // in range
+    await evidence(avt, "canvas", "Illustrative: final project due", "2026-12-10T04:59:00.000Z"); // weeks away
+    await commitment(avt, "Draft the AVT pitch outline");
+    await commitment(avt, "Confirm the equipment list");
+    await commitment(avt, "Book the room", { ownership: "other", state: "waiting" });
+    await configure();
+    await runDeadline("morning");
+
+    const first = await asAlice.query(api.briefs.getPendingBrief, { kind: "morning" });
+    expect(first?.read).toEqual([
+      { kind: "canvas", count: 1 },
+      { kind: "commitments", count: 2 },
+      { kind: "gmail", count: 2 },
+      { kind: "outlook-calendar", count: 1 },
+      { kind: "outlook-mail", count: 1 },
+    ]);
+    // Another owner reads none of it.
+    const asBob = t.withIdentity({ tokenIdentifier: makeOwners().bob.ownerId, subject: "bob" });
+    expect(await asBob.query(api.briefs.getPendingBrief, { kind: "morning" })).toBeNull();
+
+    // The next morning: no mail arrived since the last brief, so no mail is claimed as read; tomorrow's meeting is today's.
+    await runDeadline("morning");
+    const second = await asAlice.query(api.briefs.getPendingBrief, { kind: "morning" });
+    expect(second?.read).toEqual([
+      { kind: "canvas", count: 1 },
+      { kind: "commitments", count: 2 },
+      { kind: "outlook-calendar", count: 1 },
+    ]);
+  });
+
+  test("brief_with_nothing_connected_records_no_reads", async () => {
+    const { asAlice, runDeadline, configure } = setup();
+    await configure();
+    await runDeadline("morning");
+    expect((await asAlice.query(api.briefs.getPendingBrief, { kind: "morning" }))?.read).toEqual([]);
   });
 });

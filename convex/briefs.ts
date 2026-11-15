@@ -6,6 +6,7 @@ import {
   EVENING,
   MORNING,
   assembleBrief,
+  briefReads,
   assertTimezone,
   commitmentKey,
   decideAttention,
@@ -48,6 +49,7 @@ type Ctx = Pick<QueryCtx, "db">;
 type DailyKind = "morning" | "evening";
 
 const briefValidator = schema.tables.pendingBriefs.validator.fields.brief;
+const readValidator = schema.tables.pendingBriefs.validator.fields.read;
 const hardItemValidator = briefValidator.fields.hard.element;
 const quietHoursValidator = v.object({ start: v.string(), end: v.string() });
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -456,6 +458,8 @@ async function prepareDaily(ctx: MutationCtx, kind: DailyKind, ownerId: string, 
     key: `${kind}:${localDate(scheduledFor, settings.timezone)}`,
     preparedAt: now,
     brief: assembleBrief(context, kind),
+    // "New" means since the brief this one replaces, or the last day when there is none.
+    ...(kind === "morning" ? { read: briefReads(context, old?.preparedAt ?? now - 24 * 3_600_000) } : {}),
   });
   // From now, not from the missed deadline: no catch-up chain after downtime.
   const time = kind === "morning" ? MORNING : EVENING;
@@ -593,6 +597,7 @@ export const getPendingBrief = query({
       preparedAt: v.number(),
       delivered: v.boolean(),
       brief: briefValidator,
+      read: readValidator,
       tradeoffs: v.array(v.object({ commitmentId: v.id("commitments"), text: v.string() })),
     }),
   ),
@@ -611,7 +616,7 @@ export const getPendingBrief = query({
       const commitmentId = id === undefined ? null : ctx.db.normalizeId("commitments", id);
       return commitmentId === null || flag.text === undefined ? [] : [{ commitmentId, text: flag.text }];
     });
-    return { key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: await hasReceipt(ctx, ownerId, row.key), brief: row.brief, tradeoffs };
+    return { key: row.key, kind: row.kind, preparedAt: row.preparedAt, delivered: await hasReceipt(ctx, ownerId, row.key), brief: row.brief, ...(row.read === undefined ? {} : { read: row.read }), tradeoffs };
   },
 });
 
