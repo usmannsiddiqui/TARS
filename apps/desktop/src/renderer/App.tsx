@@ -9,6 +9,7 @@ import { DeskPane } from "./Desk";
 import { Home } from "./Home";
 import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
 import { rowPreview, todayPreview, type PetState } from "./model";
+import { scrollWithin } from "./ui";
 import { Shell, Stopped, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
@@ -130,7 +131,7 @@ export function App() {
         desk={desk}
         routines={today.routines}
         // A routine row scrolls the thread to that brief, when it is the one shown.
-        {...(brief ? { onRoutine: (id: string) => id === brief.kind && document.getElementById(`msg-${brief.key}`)?.scrollIntoView({ block: "start" }) } : {})}
+        {...(brief ? { onRoutine: (id: string) => id === brief.kind && scrollWithin(document.getElementById(`msg-${brief.key}`), ".chat-scroll", "start", true) } : {})}
       />
     );
     screen = (

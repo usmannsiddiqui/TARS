@@ -9,7 +9,7 @@ import { Composer } from "./Composer";
 import { PaneSlot } from "./Shell";
 import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type ThreadMessage } from "./model";
 import { Thread, type ApproveArgs } from "./Thread";
-import { formatWhen, reason, StateNote } from "./ui";
+import { formatWhen, reason, scrollWithin, StateNote } from "./ui";
 
 export type ArtifactView = {
   id: string;
@@ -89,7 +89,7 @@ export function ProjectView(props: ProjectViewProps) {
   const pane = useContext(PaneSlot);
   const openDraft = () => {
     pane.open(); // below 1024px the desk pane is an overlay: open it first
-    draftRef.current?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    scrollWithin(draftRef.current, ".pane", "start", true);
     draftRef.current?.querySelector<HTMLElement>("textarea.doc, .segment-title")?.focus({ preventScroll: true });
   };
 
@@ -344,7 +344,16 @@ function RunThrough({ artifact, canCreate, editor, sharing }: RunThroughProps) {
                     <label htmlFor={`${textId}-t${seg.line}`} className="sr-only">
                       Segment {i + 1} title
                     </label>
-                    <input id={`${textId}-t${seg.line}`} className="segment-title" value={seg.title} maxLength={200} onChange={(e) => edit(seg.line, { title: e.target.value, minutes: seg.minutes })} />
+                    {/* A one-line title that wraps in the narrow pane: Return never adds a line. */}
+                    <textarea
+                      id={`${textId}-t${seg.line}`}
+                      className="segment-title"
+                      rows={1}
+                      value={seg.title}
+                      maxLength={200}
+                      onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
+                      onChange={(e) => edit(seg.line, { title: e.target.value.replace(/\s*\n\s*/g, " "), minutes: seg.minutes })}
+                    />
                     <label htmlFor={`${textId}-m${seg.line}`} className="sr-only">
                       Minutes for segment {i + 1}
                     </label>
