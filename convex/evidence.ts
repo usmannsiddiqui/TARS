@@ -144,7 +144,7 @@ export async function intakeRecord(
 }
 
 /**
- * Coalesced: at most one pending or running automatic preparation per project. Evidence that lands
+ * Coalesced: at most one pending or running preparation per project (user-started ones included). Evidence that lands
  * while one is pending is read by it; while one is running, it earns exactly one follow-up run.
  */
 async function requestAutomaticPreparation(ctx: MutationCtx, ownerId: string, projectId: string) {
@@ -155,8 +155,10 @@ async function requestAutomaticPreparation(ctx: MutationCtx, ownerId: string, pr
     .query("preparationRuns")
     .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
     .unique();
-  if (run === null) {
-    await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "pending", followUp: false });
+  if (run === null || run.state === "failed") {
+    // New evidence is a new attempt: a failed run's card becomes this run.
+    if (run === null) await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "pending", followUp: false });
+    else await ctx.db.patch(run._id, { state: "pending" });
     await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
   } else if (run.state === "running" && !run.followUp) {
     await ctx.db.patch(run._id, { followUp: true });

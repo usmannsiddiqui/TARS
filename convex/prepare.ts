@@ -1,7 +1,7 @@
 // Grounded preparation: load in-scope evidence, ask the model once, validate, persist.
 // Source and model text are untrusted data. This module creates no ActionIntent: preparing
 // work can never send, update or act anywhere.
-import { v, type Infer } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { z } from "zod";
 import { suppressionVerdict } from "../packages/domain/src/memory";
 import {
@@ -11,29 +11,29 @@ import {
 } from "../packages/domain/src/prepare";
 import { EvidenceSchema, SourceGrantSchema, type ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
-import { action, internalAction, internalMutation, internalQuery, query, type ActionCtx, type QueryCtx } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type QueryCtx } from "./_generated/server";
 import { trackDueCommitments } from "./briefs";
 import { requireOwnerId, verifiedUser } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { loadSuppressions, loadVisibleFacts, requireOwnedProject } from "./memory";
-import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields } from "./schema";
+import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields, runStage } from "./schema";
 
 const StoredGrant = z.object(SourceGrantSchema.shape);
 
-/** Revoked/paused grants, old grant versions and unconfirmed projects are out of scope even if rows remain. */
+/** The grant when in scope, else null: revoked/paused grants, old grant versions and unconfirmed projects are out of scope even if rows remain. */
 async function grantInScope(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, sourceId: string, grantVersion: number) {
   const grantRow = await ctx.db
     .query("grants")
     .withIndex("by_source", (q) => q.eq("id", sourceId))
     .unique();
   const grant = grantRow === null ? null : StoredGrant.parse(grantRow);
-  return (
+  const inScope =
     grant?.ownerId === ownerId &&
     grant.state === "active" &&
     grant.read &&
     grant.version === grantVersion &&
-    grant.projectIds.includes(projectId as ProjectId)
-  );
+    grant.projectIds.includes(projectId as ProjectId);
+  return inScope ? grant : null;
 }
 
 const INSTRUCTIONS = [
@@ -47,9 +47,12 @@ const INSTRUCTIONS = [
   "facts are durable preferences or constraints for this project, with short snake_case keys. Never use, restate or relearn anything under forgottenKeys.",
 ].join("\n");
 
+const runSources = v.array(v.object({ kind: v.string(), count: v.number() }));
+
 const preparationContext = v.object({
   projectName: v.string(),
   evidence: v.array(v.object(evidenceFields)),
+  sources: runSources, // the source kinds of `evidence`, with item counts: what the helper card names
   omitted: v.number(),
   memory: v.array(v.object({ key: v.string(), value: v.string() })),
   forgottenKeys: v.array(v.string()),
@@ -66,17 +69,23 @@ export const loadPreparationContext = internalQuery({
       .withIndex("by_owner_current", (q) => q.eq("ownerId", ownerId).eq("isCurrent", true))
       .collect();
     const inScope = [];
+    const kindOf = new Map<string, string>();
     for (const { _id, _creationTime, isCurrent, ...record } of rows) {
       void [_id, _creationTime, isCurrent];
       if (!record.projectIds.includes(projectId)) continue;
-      if (!(await grantInScope(ctx, ownerId, projectId, record.sourceId, record.grantVersion))) continue;
+      const grant = await grantInScope(ctx, ownerId, projectId, record.sourceId, record.grantVersion);
+      if (grant === null) continue;
+      kindOf.set(record.sourceId, grant.kind);
       inScope.push(EvidenceSchema.parse(record));
     }
     const { selected, omitted } = selectEvidence(inScope, projectId as ProjectId);
+    const counts = new Map<string, number>();
+    for (const { sourceId } of selected) counts.set(kindOf.get(sourceId)!, (counts.get(kindOf.get(sourceId)!) ?? 0) + 1);
     const suppressions = await loadSuppressions(ctx, ownerId);
     return {
       projectName: project.name,
       evidence: selected,
+      sources: [...counts].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind)),
       omitted,
       memory: (await loadVisibleFacts(ctx, ownerId, projectId)).map(({ key, value }) => ({ key, value })),
       forgottenKeys: suppressions
@@ -99,8 +108,14 @@ export const prepareProject = action({
   args: { projectId: v.string() },
   returns: outcome,
   // Who the user is comes only from the verified token, never from evidence or model output.
-  handler: async (ctx, { projectId }): Promise<Outcome> =>
-    prepare(ctx, { ownerId: await requireOwnerId(ctx), projectId, user: await verifiedUser(ctx), automatic: false }),
+  handler: async (ctx, { projectId }): Promise<Outcome> => {
+    const ownerId = await requireOwnerId(ctx);
+    const user = await verifiedUser(ctx);
+    if (!(await ctx.runMutation(internal.prepare.claimRun, { ownerId, projectId }))) {
+      throw new ConvexError("TARS is already preparing this project. Its card on Today shows where it is.");
+    }
+    return tracked(ctx, { ownerId, projectId, user, automatic: false });
+  },
 });
 
 /** Scheduled by evidence intake (one per project at a time). Owner and user come from stored rows. */
@@ -110,11 +125,7 @@ export const runAutomatic = internalAction({
   handler: async (ctx, { ownerId, projectId }): Promise<null> => {
     const user: User | null = await ctx.runMutation(internal.prepare.startAutomatic, { ownerId, projectId });
     if (user === null) return null; // no pending run: stale job
-    try {
-      await prepare(ctx, { ownerId, projectId, user, automatic: true });
-    } finally {
-      await ctx.runMutation(internal.prepare.finishAutomatic, { ownerId, projectId });
-    }
+    await tracked(ctx, { ownerId, projectId, user, automatic: true });
     return null;
   },
 });
@@ -125,6 +136,22 @@ const runRow = (ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string) =
     .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
     .unique();
 
+/** The user started it: claim the project's run (none, pending or failed) as running; false when one already runs. */
+export const claimRun = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { ownerId, projectId }) => {
+    await requireOwnedProject(ctx, ownerId, projectId);
+    const run = await runRow(ctx, ownerId, projectId);
+    if (run?.state === "running") return false;
+    // A pending automatic run is taken over: this run reads the evidence it was scheduled for,
+    // and its scheduled job finds no pending row and stops.
+    if (run === null) await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "running", followUp: false, stage: "reading" });
+    else await ctx.db.patch(run._id, { state: "running", followUp: false, stage: "reading", sources: undefined });
+    return true;
+  },
+});
+
 /** pending -> running; returns who the user is (from their stored profile), or null when stale. */
 export const startAutomatic = internalMutation({
   args: { ownerId: v.string(), projectId: v.string() },
@@ -132,7 +159,7 @@ export const startAutomatic = internalMutation({
   handler: async (ctx, { ownerId, projectId }) => {
     const run = await runRow(ctx, ownerId, projectId);
     if (run?.state !== "pending") return null;
-    await ctx.db.patch(run._id, { state: "running" });
+    await ctx.db.patch(run._id, { state: "running", stage: "reading", sources: undefined });
     const profile = await ctx.db
       .query("ownerProfiles")
       .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
@@ -141,19 +168,95 @@ export const startAutomatic = internalMutation({
   },
 });
 
-/** End the run; evidence that landed during it gets exactly one follow-up. */
-export const finishAutomatic = internalMutation({
-  args: { ownerId: v.string(), projectId: v.string() },
+/** The running preparation reached `stage`, with the sources it sends to the model once they are known. */
+export const recordStage = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string(), stage: runStage, sources: runSources },
   returns: v.null(),
-  handler: async (ctx, { ownerId, projectId }) => {
+  handler: async (ctx, { ownerId, projectId, stage, sources }) => {
+    const run = await runRow(ctx, ownerId, projectId);
+    if (run?.state === "running") await ctx.db.patch(run._id, { stage, sources });
+    return null;
+  },
+});
+
+/**
+ * End the run. Evidence that landed during it earns exactly one follow-up; otherwise a finished run
+ * is deleted (its card leaves) and a failed one stays "failed" until it is retried or dismissed.
+ */
+export const finishRun = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string(), failed: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, projectId, failed }) => {
     const run = await runRow(ctx, ownerId, projectId);
     if (run === null) return null;
-    if (!run.followUp) {
+    if (run.followUp) {
+      await ctx.db.patch(run._id, { state: "pending", followUp: false, stage: undefined, sources: undefined });
+      await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
+    } else if (failed) {
+      await ctx.db.patch(run._id, { state: "failed", stage: undefined, sources: undefined });
+    } else {
       await ctx.db.delete(run._id);
-      return null;
     }
-    await ctx.db.patch(run._id, { state: "pending", followUp: false });
-    await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
+    return null;
+  },
+});
+
+/** `prepare` on a claimed run row, which always ends finished or failed: never stuck running. */
+async function tracked(ctx: ActionCtx, args: Parameters<typeof prepare>[1]): Promise<Outcome> {
+  let result: Outcome | undefined;
+  try {
+    result = await prepare(ctx, args);
+    return result;
+  } finally {
+    const failed = result === undefined || result.status === "needs-retry"; // undefined: it threw
+    await ctx.runMutation(internal.prepare.finishRun, { ownerId: args.ownerId, projectId: args.projectId, failed });
+  }
+}
+
+const activeRun = v.object({
+  projectId: v.string(),
+  projectName: v.string(),
+  state: v.union(v.literal("pending"), v.literal("running"), v.literal("failed")),
+  stage: v.optional(runStage),
+  sources: runSources,
+});
+
+/** The owner's preparations that are waiting, running or failed, across projects: one helper card each. */
+export const listActiveRuns = query({
+  args: {},
+  returns: v.array(activeRun),
+  handler: async (ctx) => {
+    const ownerId = await requireOwnerId(ctx);
+    const rows = await ctx.db
+      .query("preparationRuns")
+      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId))
+      .collect();
+    const runs = [];
+    for (const row of rows.sort((a, b) => a._creationTime - b._creationTime)) {
+      const id = ctx.db.normalizeId("projects", row.projectId);
+      const project = id === null ? null : await ctx.db.get(id);
+      if (project === null || project.ownerId !== ownerId) continue;
+      runs.push({
+        projectId: row.projectId,
+        projectName: project.name,
+        state: row.state,
+        ...(row.stage ? { stage: row.stage } : {}),
+        sources: row.sources ?? [],
+      });
+    }
+    return runs;
+  },
+});
+
+/** The user closes a failed run's card; the project's prepared work keeps saying it needs a retry. */
+export const dismissFailedRun = mutation({
+  args: { projectId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { projectId }) => {
+    const ownerId = await requireOwnerId(ctx);
+    await requireOwnedProject(ctx, ownerId, projectId);
+    const run = await runRow(ctx, ownerId, projectId);
+    if (run?.state === "failed") await ctx.db.delete(run._id);
     return null;
   },
 });
@@ -168,6 +271,8 @@ async function prepare(
     ownerId,
     projectId,
   });
+  const stage = (name: Infer<typeof runStage>) =>
+    ctx.runMutation(internal.prepare.recordStage, { ownerId, projectId, stage: name, sources: context.sources });
   if (context.evidence.length === 0) {
     await ctx.runMutation(internal.prepare.recordFailure, { ownerId, projectId, status: "empty", code: "no_evidence" });
     return { status: "empty" as const, code: "no_evidence" };
@@ -177,6 +282,7 @@ async function prepare(
     return { status: "needs-retry" as const, code };
   };
 
+  await stage("drafting");
   let output;
   try {
     output = await generateStructured({
@@ -197,6 +303,7 @@ async function prepare(
     throw error;
   }
 
+  await stage("saving"); // validate against the evidence, then store (which re-checks scope)
   const evidence = context.evidence.map((record) => EvidenceSchema.parse(record));
   const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
   if (!assembled.ok) return fail(`invalid_${assembled.reason}`);

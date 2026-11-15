@@ -67,6 +67,9 @@ export const preparationStatus = v.union(
   v.literal("empty"), // no in-scope evidence yet
 );
 
+/** Where a running preparation really is: loading evidence, waiting on the model, validating and storing. */
+export const runStage = v.union(v.literal("reading"), v.literal("drafting"), v.literal("saving"));
+
 export const artifactFields = {
   ownerId: v.string(),
   projectId: v.string(),
@@ -173,13 +176,18 @@ export default defineSchema({
     email: v.optional(v.string()),
   }).index("by_owner", ["ownerId"]),
 
-  // At most one automatic preparation per (owner, project): pending (scheduled) or running.
+  // At most one preparation per (owner, project), user-started or automatic: pending (scheduled),
+  // running, or failed (kept for its card until retried or dismissed). A finished run is deleted.
   // followUp: evidence landed during the run, so exactly one more run follows it.
   preparationRuns: defineTable({
     ownerId: v.string(),
     projectId: v.string(),
-    state: v.union(v.literal("pending"), v.literal("running")),
+    state: v.union(v.literal("pending"), v.literal("running"), v.literal("failed")),
     followUp: v.boolean(),
+    // Visible helper progress: the stage the run is really in, and once known, the source kinds
+    // (and item counts) of the evidence it sent to the model.
+    stage: v.optional(runStage),
+    sources: v.optional(v.array(v.object({ kind: v.string(), count: v.number() }))),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // Gentle nudges for one of the user's commitments with a due time (key = commitmentKey, stable
