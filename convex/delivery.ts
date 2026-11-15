@@ -7,7 +7,7 @@ import { ConvexError, v } from "convex/values";
 import { checkBinding, contentHash, mailSubject } from "../packages/domain/src/actions";
 import { commitmentKey } from "../packages/domain/src/attention";
 import { DOCX_TYPE, deliveryMail, docx, requesterFrom, safeFilename } from "../packages/domain/src/delivery";
-import type { Artifact, ProjectId } from "../packages/domain/src/types";
+import type { Artifact } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { action, httpAction, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type QueryCtx } from "./_generated/server";
@@ -40,7 +40,7 @@ async function findCommitment(ctx: Pick<QueryCtx, "db">, ownerId: string, projec
     .query("commitments")
     .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
     .collect();
-  return rows.find((c) => commitmentKey({ projectId: c.projectId as ProjectId, text: c.text }) === key) ?? null;
+  return rows.find((c) => commitmentKey(c) === key) ?? null;
 }
 
 /** The sender of the mail this commitment cites, from the stored header fields only. */

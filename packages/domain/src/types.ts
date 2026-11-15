@@ -110,6 +110,8 @@ export type Commitment = {
   dueAt?: string;
   evidenceIds: EvidenceId[];
   state: "open" | "waiting" | "user-reported-done" | "verified-done";
+  /** Stable identity once stored (commitmentKey). */
+  key?: string;
 };
 
 /** Never implicitly a Commitment. */

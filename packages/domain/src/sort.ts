@@ -28,7 +28,8 @@ export function validateSort(output: SortOutput, projectIds: ReadonlySet<string>
     const squashed = raw.text.replace(/\s+/g, " ").trim();
     if (squashed === "") continue;
     const text = squashed.length > SORT_LIMITS.maxText ? `${squashed.slice(0, SORT_LIMITS.maxText - 1)}…` : squashed;
-    const dueAt = zoneKnown ? dueInstant(raw.dueAt, [nowMs]) : undefined;
+    // shortcut: brain dumps still ask the model for a UTC instant (no zone passed); move them to local wall time like preparation.
+    const dueAt = zoneKnown ? dueInstant(raw.dueAt, [nowMs], null) : undefined;
     items.push({
       text,
       projectId: raw.projectId !== null && projectIds.has(raw.projectId) ? raw.projectId : null,

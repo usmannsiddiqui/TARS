@@ -2,6 +2,7 @@
 // Model output is untrusted: every ID it returns is checked against what was supplied, and
 // ownership is decided here by rules, not taken from the model's say-so.
 import { z } from "zod";
+import { localToUtc } from "./attention";
 import { normalizeKey } from "./memory";
 import type { Commitment, Evidence, EvidenceId, PreparedWork, ProjectId, SourceId } from "./types";
 
@@ -64,6 +65,8 @@ const VAGUE_OWNERSHIP = /\b(someone|somebody|anyone|anybody|we should|we need to
 const MAX_NEXT_ACTION = 200;
 const DAY_MS = 86_400_000;
 const MAX_DUE_AHEAD_MS = 2 * 365 * DAY_MS;
+// shortcut: "half a day apart" separates a misread deadline from a second task; tune from real mail.
+const SAME_DEADLINE_MS = DAY_MS / 2;
 const MAX_KEY = 80;
 const MAX_VALUE = 500;
 
@@ -94,6 +97,8 @@ export function assemblePreparation(
   projectId: ProjectId,
   supplied: readonly Evidence[],
   omitted: number,
+  /** The user's zone for local due times; null: none known, so a local due time is dropped. */
+  timezone: string | null = null,
 ): AssembledPreparation {
   const byId = new Map<string, Evidence>(supplied.map((record) => [record.id, record]));
   const valid = (ids: readonly string[]) => [...new Set(ids)].filter((id) => byId.has(id)) as EvidenceId[];
@@ -119,6 +124,7 @@ export function assemblePreparation(
   if (tainted.size > 0) gaps.push("A source contained instructions addressed to the assistant; they were ignored.");
 
   const commitments: CommitmentDraft[] = [];
+  const quotes: string[] = []; // squashed quote of each kept commitment
   for (const item of output.commitments) {
     const text = item.text.trim();
     const ids = valid(item.evidenceIds);
@@ -132,7 +138,27 @@ export function assemblePreparation(
         : clear && item.holder === "other" && (item.holderName ?? "").trim() !== ""
           ? "other"
           : "unassigned";
-    const dueAt = dueInstant(item.dueAt, ids.map((id) => Date.parse(byId.get(id)!.occurredAt)));
+    const dueAt = dueInstant(item.dueAt, ids.map((id) => Date.parse(byId.get(id)!.occurredAt)), timezone);
+    // One request read twice: both the user's, same evidence, one quote inside the other, due within
+    // half a day of each other (a misread deadline, not a second task). Keep the first wording and the
+    // earlier due time, since a late reminder costs more than an early one.
+    const same = commitments.findIndex(
+      (c, k) =>
+        ownership === "user" &&
+        c.ownership === "user" &&
+        quoted &&
+        c.evidenceIds.some((id) => ids.includes(id)) &&
+        (quotes[k]!.includes(quote) || quote.includes(quotes[k]!)) &&
+        dueAt !== undefined &&
+        c.dueAt !== undefined &&
+        Math.abs(Date.parse(dueAt) - Date.parse(c.dueAt)) <= SAME_DEADLINE_MS,
+    );
+    if (same >= 0) {
+      const kept = commitments[same]!;
+      if (Date.parse(dueAt!) < Date.parse(kept.dueAt!)) commitments[same] = { ...kept, dueAt: dueAt! };
+      continue;
+    }
+    quotes.push(quote);
     commitments.push({
       text,
       ownership,
@@ -161,12 +187,23 @@ export function assemblePreparation(
 }
 
 /**
- * A model-given due time as a UTC "Z" instant, or undefined when it is not an ISO datetime (Z or
- * offset) or is absurd: more than two years after, or more than a day before, the evidence it cites.
+ * A model-given due time as a UTC "Z" instant. The model gives local wall-clock time
+ * ("2026-11-16T17:00"), optionally followed by the IANA zone the evidence names for that deadline
+ * ("2026-11-16T17:00 America/Los_Angeles"); code converts it with that zone, else the user's, so
+ * the model does no offset arithmetic. A legacy instant (Z or offset) is taken as given. Undefined
+ * when malformed, when a local time has no zone to use, or when absurd: more than two years after,
+ * or more than a day before, the evidence it cites.
  */
-export function dueInstant(dueAt: string | null, writtenAt: readonly number[]): string | undefined {
-  if (dueAt === null || !z.iso.datetime({ offset: true }).safeParse(dueAt).success) return undefined;
-  const due = Date.parse(dueAt);
+export function dueInstant(dueAt: string | null, writtenAt: readonly number[], timezone: string | null): string | undefined {
+  if (dueAt === null) return undefined;
+  let due: number | undefined;
+  if (z.iso.datetime({ offset: true }).safeParse(dueAt).success) due = Date.parse(dueAt);
+  else {
+    const [local, named, ...rest] = dueAt.trim().split(/\s+/);
+    const zone = named ?? timezone;
+    if (rest.length === 0 && local !== undefined && zone !== null) due = localToUtc(local, zone);
+  }
+  if (due === undefined) return undefined;
   if (due < Math.min(...writtenAt) - DAY_MS || due > Math.max(...writtenAt) + MAX_DUE_AHEAD_MS) return undefined;
   return new Date(due).toISOString();
 }
@@ -197,6 +234,37 @@ export function preparationClock(nowMs: number, timezone: string | null): Prepar
     localWeekday: get("weekday"),
     localTime: `${get("hour")}:${get("minute")}`,
   };
+}
+
+type Matchable = { text: string; evidenceIds: readonly string[] };
+const words = (text: string) => new Set(squash(text).split(/[^a-z0-9]+/).filter((w) => w.length > 0));
+
+/**
+ * Which stored commitment each new one continues (index into `stored`, or null when it is new).
+ * Identity is the evidence it cites, not its wording: a pair must share a cited evidence ID. When
+ * one message holds several, pairs with more words in common win, then earlier positions; each
+ * stored commitment continues at most one new one.
+ */
+export function matchCommitments(stored: readonly Matchable[], incoming: readonly Matchable[]): (number | null)[] {
+  const pairs: { i: number; j: number; score: number }[] = [];
+  incoming.forEach((next, i) => {
+    const a = words(next.text);
+    stored.forEach((old, j) => {
+      if (!next.evidenceIds.some((id) => old.evidenceIds.includes(id))) return;
+      const b = words(old.text);
+      const shared = [...a].filter((w) => b.has(w)).length;
+      pairs.push({ i, j, score: shared / (a.size + b.size - shared || 1) });
+    });
+  });
+  pairs.sort((x, y) => y.score - x.score || x.i - y.i || x.j - y.j);
+  const match: (number | null)[] = incoming.map(() => null);
+  const taken = new Set<number>();
+  for (const { i, j } of pairs) {
+    if (match[i] !== null || taken.has(j)) continue;
+    match[i] = j;
+    taken.add(j);
+  }
+  return match;
 }
 
 /** Keep only proposals naming sources that were actually supplied. Proposals change nothing. */
