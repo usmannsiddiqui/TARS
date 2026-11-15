@@ -8,7 +8,8 @@ import type { LocalSourceView } from "../main/source-watch";
 import type { HoldKeyStatus, PanelShowing } from "../preload/index";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
-import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
+import type { HelperActions } from "./Helpers";
+import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
@@ -252,6 +253,21 @@ export function useSession() {
     record({ kind: event }).catch((err: unknown) => setError(`Not recorded: ${reason(err)}`));
   };
   return { state, error, onEvent };
+}
+
+/** TARS's helpers across projects (pushed by subscription), with Try again and Dismiss for a failed one. */
+export function useHelpers(): { helpers: HelperRun[]; helperActions: HelperActions } {
+  const cloud = useCloud();
+  const runs = useQuery(api.prepare.listActiveRuns, cloud.ready ? {} : "skip");
+  const prepare = useAction(api.prepare.prepareProject);
+  const dismiss = useMutation(api.prepare.dismissFailedRun);
+  return {
+    helpers: runs ?? [],
+    helperActions: {
+      onRetry: async (projectId) => void (await prepare({ projectId })),
+      onDismiss: async (projectId) => void (await dismiss({ projectId })),
+    },
+  };
 }
 
 // ---- Schedule and TARS's calendar.
@@ -683,7 +699,9 @@ function useCompanionContext(projectIdOverride: string | null) {
   const receipt = useQuery(api.actions.listReceipts, args)?.at(-1);
   const done = completionOf(commitments as Commitment[] | undefined);
   // Working is real: an instructed action of the focus project is in flight right now.
-  const working = receipt?.state === "pending" || receipt?.state === "running";
+  // Or one of TARS's helpers is preparing a project right now.
+  const preparing = useQuery(api.prepare.listActiveRuns, cloud.ready ? {} : "skip")?.some((r) => r.state !== "failed");
+  const working = receipt?.state === "pending" || receipt?.state === "running" || preparing === true;
   const petState: PetState = working ? "working" : done ? "done" : "idle";
   // The saved next step belongs to the focus project only, not to a project the panel was opened for.
   const step = projectId === focus?.projectId ? focus?.nextStep : undefined;
@@ -730,6 +748,7 @@ export function PanelLive() {
   useEffect(() => window.companion.onPanelShow((showing) => setShown({ ...showing, at: Date.now() })), []);
   usePointerOver();
   const ctx = useCompanionContext(shown.projectId);
+  const helpers = useHelpers();
   const work = ctx.prepared?.work;
   // Only the app window records a return; opening the panel must not move "since you were last here".
   const today = useToday({ recordReturn: false });
@@ -751,6 +770,7 @@ export function PanelLive() {
       capture={shown.capture}
       {...(shown.transcript ? { transcript: shown.transcript } : {})}
       petState={ctx.petState}
+      {...helpers}
       now={Date.now()}
       {...(ctx.projectId ? { projectId: ctx.projectId } : {})}
       {...(ctx.name

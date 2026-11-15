@@ -38,6 +38,7 @@ const HONEST_LABEL: Record<Honest["kind"], string> = {
   unknown: "Not confirmed",
   stale: "Stale",
   loading: "Loading",
+  working: "Working",
   empty: "Nothing yet",
   done: "Done",
   scheduled: "Scheduled",
@@ -113,6 +114,7 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
         </svg>
       );
     case "loading":
+    case "working":
       return (
         <svg {...common}>
           <rect x="1.5" y="5.5" width="3" height="3" fill="currentColor" />

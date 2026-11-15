@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
 import { Home } from "./Home";
-import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useCloud, useProjectSummaries, useSession, useToday } from "./live";
+import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
 import { ProjectsIndex } from "./ProjectsIndex";
 import { railProject, Shell, Stopped, type Route } from "./Shell";
 
@@ -29,6 +29,7 @@ export function App() {
   const switchProject = useMutation(api.projects.switchProject);
   const createProject = useMutation(api.projects.createProject);
   const today = useToday({ recordReturn: true });
+  const helpers = useHelpers();
   const session = useSession();
   const stop = () => {
     session.onEvent("stop");
@@ -89,6 +90,7 @@ export function App() {
     screen = (
       <Home
         dateLabel={dateLabel.format(new Date())}
+        {...helpers}
         projects={summaries}
         {...(cloud.honest ? { cloud: cloud.honest } : {})}
         {...(focusId ? { focusProjectId: focusId } : {})}

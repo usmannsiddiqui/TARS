@@ -2,7 +2,8 @@
 import { useEffect, useRef } from "react";
 import type { Transcript } from "../preload/index";
 import { Composer } from "./Composer";
-import type { HardItem, Honest, NudgeChoice, NudgeOffer, PetState, Receipt } from "./model";
+import { HelperCards, type HelperActions } from "./Helpers";
+import type { HardItem, HelperRun, Honest, NudgeChoice, NudgeOffer, PetState, Receipt } from "./model";
 import { NudgeCard, PET_LABEL, PetFigure, StateNote } from "./ui";
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
@@ -11,6 +12,9 @@ const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
 export type PanelProps = {
   petState: PetState;
+  /** TARS's helpers: preparations running (or failed) right now, one compact card each. */
+  helpers: HelperRun[];
+  helperActions: HelperActions;
   /** Render time, so "today" and "next" are decided once per showing. */
   now: number;
   projectId?: string;
@@ -142,6 +146,7 @@ export function Panel(props: PanelProps) {
               Stop for now
             </button>
           </div>
+          <HelperCards runs={props.helpers} actions={props.helperActions} compact />
           {props.recap && (
             <section className="panel-recap" aria-labelledby="recap-h">
               <h2 id="recap-h" className="block-title">
