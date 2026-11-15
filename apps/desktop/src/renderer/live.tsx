@@ -8,7 +8,7 @@ import type { LocalSourceView } from "../main/source-watch";
 import type { HoldKeyStatus, PanelShowing } from "../preload/index";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
-import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
+import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
@@ -187,6 +187,8 @@ export function useToday({ recordReturn }: { recordReturn: boolean }) {
   const handleReturn = useMutation(api.briefs.handleReturn);
   const markDelivered = useMutation(api.briefs.markDelivered);
   const resolveTradeoff = useMutation(api.briefs.resolveTradeoff);
+  const nudges = useQuery(api.briefs.listNudgeOffers, args);
+  const respondToNudge = useMutation(api.briefs.respondToNudge);
   const [returned, setReturned] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,6 +230,9 @@ export function useToday({ recordReturn }: { recordReturn: boolean }) {
     brief,
     reentry,
     tradeoff,
+    nudge: nudges?.[0],
+    /** Closes the offer; resolves to the project whose draft "Finish it together" opens. */
+    onNudge: async (nudgeId: string, choice: NudgeChoice) => (await respondToNudge({ nudgeId: nudgeId as Id<"nudges">, choice })).projectId,
     error,
     onBriefShown,
     onResolveTradeoff: async (commitmentId: string, choice: "keep" | "defer" | "renegotiate") =>
@@ -737,6 +742,12 @@ export function PanelLive() {
       {...(ctx.done ? { completion: { done: ctx.done, ...(work?.nextAction ? { next: work.nextAction } : {}) } } : {})}
       {...(recap ? { recap: { key: recap.key, items: recap.items, delivered: recap.delivered } } : {})}
       onRecapShown={today.onBriefShown}
+      {...(today.nudge ? { nudge: today.nudge } : {})}
+      onNudge={async (choice) => {
+        if (!today.nudge) return;
+        const projectId = await today.onNudge(today.nudge.nudgeId, choice);
+        if (choice === "finish") void window.companion.openApp(projectId); // the user's click opens the draft
+      }}
       {...(ctx.receipt ? { receipt: ctx.receipt } : {})}
       {...(note ? { note } : {})}
       onOpenApp={() => void window.companion.openApp(ctx.projectId ?? undefined)}

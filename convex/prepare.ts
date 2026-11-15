@@ -11,8 +11,9 @@ import {
 } from "../packages/domain/src/prepare";
 import { EvidenceSchema, SourceGrantSchema, type ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
-import { action, internalMutation, internalQuery, query, type QueryCtx } from "./_generated/server";
-import { requireOwnerId } from "./lib/auth";
+import { action, internalAction, internalMutation, internalQuery, query, type ActionCtx, type QueryCtx } from "./_generated/server";
+import { trackDueCommitments } from "./briefs";
+import { requireOwnerId, verifiedUser } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { loadSuppressions, loadVisibleFacts, requireOwnedProject } from "./memory";
 import { commitmentFields, evidenceFields, preparationStatus, preparedWorkFields } from "./schema";
@@ -90,71 +91,128 @@ const outcome = v.object({
   code: v.optional(v.string()),
 });
 
+type Outcome = Infer<typeof outcome>;
+type User = { name: string | null; email: string | null };
+
 /** Prepare the project's work from the caller's current in-scope evidence. */
 export const prepareProject = action({
   args: { projectId: v.string() },
   returns: outcome,
-  // Explicit types: this file's own `internal` reference would otherwise make inference circular.
-  handler: async (ctx, { projectId }): Promise<Infer<typeof outcome>> => {
-    const ownerId = await requireOwnerId(ctx);
-    // Who the user is comes only from the verified token, never from evidence or model output.
-    const identity = await ctx.auth.getUserIdentity();
-    const name =
-      identity?.name ||
-      [identity?.givenName, identity?.familyName].filter(Boolean).join(" ") ||
-      identity?.nickname ||
-      identity?.preferredUsername;
-    const email = identity?.email;
-    const user = name || email ? { name: name || null, email: email || null } : "The user's name is not known.";
-    const context: Infer<typeof preparationContext> = await ctx.runQuery(internal.prepare.loadPreparationContext, {
-      ownerId,
-      projectId,
-    });
-    if (context.evidence.length === 0) {
-      await ctx.runMutation(internal.prepare.recordFailure, { ownerId, projectId, status: "empty", code: "no_evidence" });
-      return { status: "empty" as const, code: "no_evidence" };
-    }
-    const fail = async (code: string) => {
-      await ctx.runMutation(internal.prepare.recordFailure, { ownerId, projectId, status: "needs-retry", code });
-      return { status: "needs-retry" as const, code };
-    };
+  // Who the user is comes only from the verified token, never from evidence or model output.
+  handler: async (ctx, { projectId }): Promise<Outcome> =>
+    prepare(ctx, { ownerId: await requireOwnerId(ctx), projectId, user: await verifiedUser(ctx), automatic: false }),
+});
 
-    let output;
+/** Scheduled by evidence intake (one per project at a time). Owner and user come from stored rows. */
+export const runAutomatic = internalAction({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, projectId }): Promise<null> => {
+    const user: User | null = await ctx.runMutation(internal.prepare.startAutomatic, { ownerId, projectId });
+    if (user === null) return null; // no pending run: stale job
     try {
-      output = await generateStructured({
-        name: "prepared_work",
-        schema: PreparationOutputSchema,
-        instructions: INSTRUCTIONS,
-        // JSON keeps evidence text inside string values: it cannot break out of its field.
-        input: JSON.stringify({
-          projectName: context.projectName,
-          user,
-          evidence: context.evidence.map(({ id, occurredAt, freshness, text }) => ({ id, occurredAt, freshness, text })),
-          memory: context.memory,
-          forgottenKeys: context.forgottenKeys,
-        }),
-      });
-    } catch (error) {
-      if (error instanceof ModelError) return fail(error.code);
-      throw error;
+      await prepare(ctx, { ownerId, projectId, user, automatic: true });
+    } finally {
+      await ctx.runMutation(internal.prepare.finishAutomatic, { ownerId, projectId });
     }
-
-    const evidence = context.evidence.map((record) => EvidenceSchema.parse(record));
-    const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
-    if (!assembled.ok) return fail(`invalid_${assembled.reason}`);
-
-    const persisted: Infer<typeof persistResult> = await ctx.runMutation(internal.prepare.persistPreparation, {
-      ownerId,
-      projectId,
-      work: assembled.work,
-      commitments: assembled.commitments,
-      facts: assembled.facts,
-      usedFactKeys: context.memory.map((fact) => fact.key),
-      sources: [...new Map(evidence.map((e) => [`${e.sourceId}@${e.grantVersion}`, { sourceId: e.sourceId, grantVersion: e.grantVersion }])).values()],
-    });
-    return persisted === "stored" ? { status: "ready" as const } : fail(persisted);
+    return null;
   },
 });
+
+const runRow = (ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string) =>
+  ctx.db
+    .query("preparationRuns")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+
+/** pending -> running; returns who the user is (from their stored profile), or null when stale. */
+export const startAutomatic = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.union(v.null(), v.object({ name: v.union(v.string(), v.null()), email: v.union(v.string(), v.null()) })),
+  handler: async (ctx, { ownerId, projectId }) => {
+    const run = await runRow(ctx, ownerId, projectId);
+    if (run?.state !== "pending") return null;
+    await ctx.db.patch(run._id, { state: "running" });
+    const profile = await ctx.db
+      .query("ownerProfiles")
+      .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
+      .unique();
+    return { name: profile?.name ?? null, email: profile?.email ?? null };
+  },
+});
+
+/** End the run; evidence that landed during it gets exactly one follow-up. */
+export const finishAutomatic = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, projectId }) => {
+    const run = await runRow(ctx, ownerId, projectId);
+    if (run === null) return null;
+    if (!run.followUp) {
+      await ctx.db.delete(run._id);
+      return null;
+    }
+    await ctx.db.patch(run._id, { state: "pending", followUp: false });
+    await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
+    return null;
+  },
+});
+
+/** The one preparation: load in-scope context, ask the model once, validate, persist. */
+async function prepare(
+  ctx: ActionCtx,
+  { ownerId, projectId, user: verified, automatic }: { ownerId: string; projectId: string; user: User; automatic: boolean },
+): Promise<Outcome> {
+  const user = verified.name || verified.email ? verified : "The user's name is not known.";
+  const context: Infer<typeof preparationContext> = await ctx.runQuery(internal.prepare.loadPreparationContext, {
+    ownerId,
+    projectId,
+  });
+  if (context.evidence.length === 0) {
+    await ctx.runMutation(internal.prepare.recordFailure, { ownerId, projectId, status: "empty", code: "no_evidence" });
+    return { status: "empty" as const, code: "no_evidence" };
+  }
+  const fail = async (code: string) => {
+    await ctx.runMutation(internal.prepare.recordFailure, { ownerId, projectId, status: "needs-retry", code });
+    return { status: "needs-retry" as const, code };
+  };
+
+  let output;
+  try {
+    output = await generateStructured({
+      name: "prepared_work",
+      schema: PreparationOutputSchema,
+      instructions: INSTRUCTIONS,
+      // JSON keeps evidence text inside string values: it cannot break out of its field.
+      input: JSON.stringify({
+        projectName: context.projectName,
+        user,
+        evidence: context.evidence.map(({ id, occurredAt, freshness, text }) => ({ id, occurredAt, freshness, text })),
+        memory: context.memory,
+        forgottenKeys: context.forgottenKeys,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof ModelError) return fail(error.code);
+    throw error;
+  }
+
+  const evidence = context.evidence.map((record) => EvidenceSchema.parse(record));
+  const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
+  if (!assembled.ok) return fail(`invalid_${assembled.reason}`);
+
+  const persisted: Infer<typeof persistResult> = await ctx.runMutation(internal.prepare.persistPreparation, {
+    ownerId,
+    projectId,
+    work: assembled.work,
+    commitments: assembled.commitments,
+    facts: assembled.facts,
+    usedFactKeys: context.memory.map((fact) => fact.key),
+    sources: [...new Map(evidence.map((e) => [`${e.sourceId}@${e.grantVersion}`, { sourceId: e.sourceId, grantVersion: e.grantVersion }])).values()],
+    automatic,
+  });
+  return persisted === "stored" ? { status: "ready" as const } : fail(persisted);
+}
 
 /** Mark the attempt; any previous `work` is kept untouched. */
 export const recordFailure = internalMutation({
@@ -196,9 +254,10 @@ export const persistPreparation = internalMutation({
     facts: v.array(v.object({ key: v.string(), value: v.string(), evidenceIds: v.array(v.string()) })),
     usedFactKeys: v.array(v.string()),
     sources: v.array(v.object({ sourceId: v.string(), grantVersion: v.number() })), // every source the model was sent
+    automatic: v.boolean(), // started by new evidence, not by the user
   },
   returns: persistResult,
-  handler: async (ctx, { ownerId, projectId, work, commitments, facts, usedFactKeys, sources }) => {
+  handler: async (ctx, { ownerId, projectId, work, commitments, facts, usedFactKeys, sources, automatic }) => {
     await requireOwnedProject(ctx, ownerId, projectId);
     for (const { sourceId, grantVersion } of sources) {
       if (!(await grantInScope(ctx, ownerId, projectId, sourceId, grantVersion))) return "sources_changed";
@@ -256,14 +315,17 @@ export const persistPreparation = internalMutation({
       .query("preparedWork")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .unique();
+    const updatedAt = new Date().toISOString();
     const next = {
       work,
       factKeys: [...new Set([...usedFactKeys, ...learnedKeys])],
       status: "ready" as const,
-      updatedAt: new Date().toISOString(),
+      updatedAt,
+      ...(automatic ? {} : { invitedAt: updatedAt }),
     };
     if (row === null) await ctx.db.insert("preparedWork", { ownerId, projectId, ...next });
     else await ctx.db.patch(row._id, { ...next, lastError: undefined });
+    await trackDueCommitments(ctx, ownerId, projectId, automatic);
     return "stored" as const;
   },
 });

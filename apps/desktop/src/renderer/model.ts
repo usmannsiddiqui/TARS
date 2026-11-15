@@ -86,6 +86,9 @@ export type Reentry = {
 };
 
 export type Tradeoff = { commitmentId: string; text: string };
+/** A gentle nudge for one of your due commitments ("started for you" the first time), as briefs.listNudgeOffers returns it. */
+export type NudgeOffer = { nudgeId: string; projectId: string; key: string; title: string; body: string; startedForYou: boolean; delivered: boolean };
+export type NudgeChoice = "finish" | "not-now";
 export type TradeoffChoice = "keep" | "defer" | "renegotiate";
 
 /** Explicit work-session state, changed only by the user's Start / Break / Stop. */
