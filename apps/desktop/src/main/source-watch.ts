@@ -175,6 +175,21 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
     }
   }
 
+  /**
+   * A folder that arrives whole (moved in, or created and filled inside one native event) is reported as
+   * the folder only, never as the notes inside it. Anything that is not a folder lists as nothing.
+   */
+  async function processFolder(folder: string, root: Root): Promise<void> {
+    const entries = await readdir(folder, { recursive: true, withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (disposed) return;
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const path = join(entry.parentPath, entry.name);
+      const id = idFor(root, path);
+      if (!isHidden(id) && reader.accepts(id)) await processFile(path, root);
+    }
+  }
+
   async function scan(): Promise<void> {
     const candidates: { path: string; root: Root; mtimeMs: number }[] = [];
     for (const root of roots) {
@@ -226,7 +241,9 @@ function track(grant: SourceGrant, emit: (evidence: Evidence) => void, options: 
           const path = join(dir, filename);
           if (root.isFile && path !== root.real) return;
           const id = idFor(root, path);
-          if (!isHidden(id) && reader.accepts(id)) void processFile(path, root);
+          if (isHidden(id)) return;
+          if (reader.accepts(id)) void processFile(path, root);
+          else if (!root.isFile) void processFolder(path, root);
         });
         root.watcher.on("error", () => markMissing(root, "file watcher stopped"));
       } catch {

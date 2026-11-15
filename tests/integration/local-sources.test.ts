@@ -103,9 +103,23 @@ describe("local sources (Obsidian folders/files)", () => {
     renameSync(join(dir, "plans", "avt.md"), join(dir, "plans", "avt-final.md"));
     const renamed = await c.next((e) => e.externalId === "plans/avt-final.md");
     expect(renamed.version).toBe(edited.version);
-    // Three native file events in a row: FSEvents delivery is slow when the whole suite runs in parallel
-    // on a busy machine (timed out at the 5 s default there, never when run alone).
-  }, 20_000);
+  });
+
+  it("folder_arriving_whole_emits_its_notes", async () => {
+    const { alice } = makeOwners();
+    const c = collector();
+    const h = watch(grantFor(alice.ownerId, [dir]), c);
+    await h.ready;
+    // A folder that arrives whole (moved in, or created and filled inside one native event) is reported
+    // as the folder only, never as the notes inside it. They must still be read.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "companion-outside-")));
+    mkdirSync(join(outside, "moved"));
+    writeFileSync(join(outside, "moved", "note.md"), "arrived inside a folder");
+    renameSync(join(outside, "moved"), join(dir, "moved"));
+    const got = await c.next((e) => e.externalId === "moved/note.md");
+    expect(got.text).toBe("arrived inside a folder");
+    rmSync(outside, { recursive: true, force: true });
+  });
 
   it("atomic_replace_still_emits_once", async () => {
     const { alice } = makeOwners();
