@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TARS: a chief of staff for founders with ADHD</title>
+<meta name="description" content="TARS is a Mac app that starts the work when an email asks you for something, drafts it, and sends only when you say so.">
+<style>
+  /* The same tokens as the app (apps/desktop/src/renderer/styles.css): studio grey, near-black ink, one navy accent, glass. */
+  :root {
+    --canvas: #d6d5d2; --well: #c9c8c4; --hairline: rgb(0 0 0 / 0.1); --line: rgb(0 0 0 / 0.2);
+    --ink: #0b0b0b; --ink-2: #393937; --ink-3: #52514e; --black: #111111; --on-black: #ffffff;
+    --accent: #1f3460; --on-accent: #ffffff; --backdrop-tint: #c7cedd;
+    --glass-frost: rgb(255 255 255 / 0.62);
+    --glass-edge: inset 0 1px 1px rgb(255 255 255 / 0.9), inset 1px 0 0 rgb(255 255 255 / 0.55), inset 0 -1px 1px rgb(0 0 0 / 0.06);
+    --glass-border: 1px solid rgb(255 255 255 / 0.65); --glass-shadow: 0 8px 24px rgb(0 0 0 / 0.08);
+    --sans: "Helvetica Neue", Helvetica, Arial, sans-serif; --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --r-card: 14px; --r-pill: 999px;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; color: var(--ink); font: 17px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(60vw 50vw at 78% 8%, var(--backdrop-tint), transparent 70%),
+      radial-gradient(50vw 40vw at 8% 62%, var(--backdrop-tint), transparent 72%),
+      var(--canvas);
+    background-attachment: fixed;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
+  .wrap { width: min(1040px, 100% - 32px); margin-inline: auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -0.01em; text-decoration: none; }
+  .brand svg { width: 34px; height: 34px; }
+  .link { font-size: 15px; font-weight: 500; text-underline-offset: 3px; }
+
+  .hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; padding: 56px 0 72px; }
+  h1 { margin: 0; font-size: clamp(40px, 6.4vw, 76px); line-height: 1.02; letter-spacing: -0.035em; font-weight: 700; text-wrap: balance; }
+  .lede { margin: 20px 0 0; max-width: 34em; font-size: 20px; color: var(--ink-2); }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+  .btn {
+    display: inline-flex; align-items: center; min-height: 46px; padding: 10px 22px; border-radius: var(--r-pill);
+    border: 1px solid var(--hairline); font-size: 16px; font-weight: 500; text-decoration: none;
+    transition: transform 160ms var(--ease-out), background-color 200ms ease;
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+  .btn.secondary { background: var(--glass-frost); }
+  @media (hover: hover) { .btn.primary:hover { background: #17284b; } .btn.secondary:hover { background: #fff; } }
+
+  .glass { background: var(--glass-frost); border: var(--glass-border); border-radius: var(--r-card); box-shadow: var(--glass-edge), var(--glass-shadow); -webkit-backdrop-filter: blur(12px) saturate(160%); backdrop-filter: blur(12px) saturate(160%); }
+
+  /* The hero's picture is the product's own moment: TARS speaking first in a project chat. */
+  .chat { padding: 22px; }
+  .chat-head { display: flex; align-items: baseline; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--hairline); }
+  .chat-head strong { font-size: 17px; } .chat-head span { font-size: 14px; color: var(--ink-3); }
+  .worked { display: flex; align-items: center; gap: 8px; margin: 16px 0 10px; font-size: 14px; color: var(--ink-2); }
+  .worked i { width: 8px; height: 8px; background: var(--black); }
+  .doc { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 12px; background: rgb(255 255 255 / 0.84); border: 1px solid var(--hairline); }
+  .doc b { display: block; font-size: 16px; letter-spacing: -0.01em; } .doc small { color: var(--ink-3); font-size: 13px; }
+  .pill { padding: 6px 14px; border: 1px solid var(--hairline); border-radius: var(--r-pill); font-size: 14px; font-weight: 500; white-space: nowrap; }
+  .say { margin: 14px 0 0; font-size: 16px; }
+  .approve { margin-top: 16px; border-radius: 12px; overflow: hidden; border: 1px solid var(--hairline); background: rgb(255 255 255 / 0.84); }
+  .approve h3 { margin: 0; padding: 9px 14px; background: var(--black); color: var(--on-black); font-size: 14px; font-weight: 600; }
+  .approve p { margin: 0; padding: 12px 14px; font-size: 14px; color: var(--ink-2); }
+  .approve .row { display: flex; gap: 8px; padding: 0 14px 14px; }
+  .approve .send { padding: 7px 16px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: 14px; font-weight: 500; }
+
+  section { padding: 56px 0; border-top: 1px solid var(--hairline); }
+  h2 { margin: 0 0 28px; font-size: clamp(28px, 3.6vw, 40px); line-height: 1.08; letter-spacing: -0.025em; text-wrap: balance; max-width: 18em; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  .steps li { padding: 0 24px 0 0; counter-increment: step; }
+  .steps li + li { padding-left: 24px; border-left: 1px solid var(--hairline); }
+  .steps li::before { content: counter(step); display: block; margin-bottom: 14px; font-size: 15px; font-weight: 700; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .steps h3 { margin: 0 0 6px; font-size: 19px; letter-spacing: -0.01em; }
+  .steps p { margin: 0; font-size: 16px; color: var(--ink-2); }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; }
+  .list { margin: 0; padding: 0; list-style: none; }
+  .list li { padding: 14px 0; border-top: 1px solid var(--hairline); font-size: 17px; }
+  .list li:first-child { border-top: 0; padding-top: 0; }
+  .list b { font-weight: 600; } .list span { color: var(--ink-2); }
+  .note { margin: 0; font-size: 17px; color: var(--ink-2); max-width: 30em; }
+  .note + .note { margin-top: 14px; }
+
+  footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 28px 0 44px; border-top: 1px solid var(--hairline); font-size: 14px; color: var(--ink-3); }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 32px; padding: 32px 0 48px; }
+    .steps { grid-template-columns: 1fr 1fr; row-gap: 32px; }
+    .steps li:nth-child(odd) { padding-left: 0; border-left: 0; }
+    .two { grid-template-columns: 1fr; gap: 36px; }
+    section { padding: 44px 0; }
+  }
+  @media (max-width: 520px) {
+    body { font-size: 16px; } .lede { font-size: 18px; }
+    .steps { grid-template-columns: 1fr; } .steps li, .steps li + li { padding: 0; border-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="#top" aria-label="TARS, home">
+      <!-- TARS: four slabs, the screen on the second. Drawn here, in the app's black and steel. -->
+      <svg viewBox="0 0 34 34" aria-hidden="true"><rect x="2" y="4" width="7" height="26" fill="#b9b9b6"/><rect x="10" y="4" width="7" height="26" fill="#a9a9a6"/><rect x="18" y="4" width="7" height="26" fill="#b9b9b6"/><rect x="26" y="4" width="6" height="26" fill="#a9a9a6"/><rect x="10.5" y="7" width="14" height="8" fill="#111"/><circle cx="14.5" cy="11" r="1.6" fill="#fff"/><circle cx="20.5" cy="11" r="1.6" fill="#fff"/></svg>
+      TARS
+    </a>
+    <a class="link" href="https://github.com/usmannsiddiqui/TARS">Source on GitHub</a>
+  </header>
+
+  <main id="top">
+    <div class="hero">
+      <div>
+        <h1>The email arrives. The work has already started.</h1>
+        <p class="lede">TARS is a Mac app for founders with ADHD. When someone asks you for something, it reads the request, drafts the work and tells you. Nothing leaves until you say so.</p>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/usmannsiddiqui/TARS">See the code</a>
+          <a class="btn secondary" href="#how">How it works</a>
+        </div>
+      </div>
+
+      <div class="glass chat" role="img" aria-label="A TARS project chat. TARS says: Dana asked for the budget summary by Friday at 5 PM. I drafted it from her email; tell me what to change. Below, an approval card shows a Word document to dana@example.com with a Send it button.">
+        <div class="chat-head"><strong>Budget</strong><span>Your focus</span></div>
+        <div class="worked"><i></i>Worked for 6s</div>
+        <div class="doc"><div><b>Budget summary</b><small>Revision 1</small></div><span class="pill">Open draft</span></div>
+        <p class="say"><b>Dana</b> asked for the budget summary by <b>Friday at 5 PM</b>. I drafted it from her email; tell me what to change.</p>
+        <div class="approve">
+          <h3>Ready when you are</h3>
+          <p>A Word document of “Budget summary”, sent as a link to dana@example.com.</p>
+          <div class="row"><span class="send">Send it</span><span class="pill">Not yet</span></div>
+        </div>
+      </div>
+    </div>
+
+    <section id="how" aria-labelledby="how-h">
+      <h2 id="how-h">Starting is the hard part. TARS does that part.</h2>
+      <ol class="steps">
+        <li><h3>A request lands</h3><p>An email asks you for something. TARS notices within seconds.</p></li>
+        <li><h3>TARS picks its steps</h3><p>It reads the project, records the request and writes a first draft.</p></li>
+        <li><h3>You steer in chat</h3><p>“Make it shorter.” “Looks good.” It remembers the conversation.</p></li>
+        <li><h3>You press Send</h3><p>It sends, checks it arrived, and messages your phone that it's done.</p></li>
+      </ol>
+    </section>
+
+    <section aria-labelledby="live-h">
+      <div class="two">
+        <div>
+          <h2 id="live-h">What it does today</h2>
+          <ul class="list">
+            <li><b>Starts from your inbox.</b> <span>A report with a deadline, a request with none, or a quick question.</span></li>
+            <li><b>Chooses the right shape.</b> <span>A Word document for real work, a short reply for a short question.</span></li>
+            <li><b>Ignores what isn't for you.</b> <span>Newsletters and notifications never reach your project chat.</span></li>
+            <li><b>Answers with sources.</b> <span>Ask what's on your Canvas calendar and tap through to each item.</span></li>
+            <li><b>Sorts a brain dump.</b> <span>Type everything on your mind; it files each line under the right project.</span></li>
+            <li><b>Messages your phone.</b> <span>A morning brief and a note when a send is checked, on Telegram.</span></li>
+          </ul>
+        </div>
+        <div>
+          <h2>What it never does</h2>
+          <p class="note">TARS reads and prepares on its own. Sending is yours: every email waits for your click, and you see exactly what will go out and to whom first.</p>
+          <p class="note">Mail, messages and notes are treated as information, never as instructions. A message that says “send this to everyone” is just a message.</p>
+          <p class="note">Built at HackUMass XIV on Electron, React, Convex and OpenAI. This is a hackathon build: the Mac app is unsigned and not yet packaged for download.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>TARS · HackUMass XIV · 2026</span>
+    <a class="link" href="https://github.com/usmannsiddiqui/TARS">github.com/usmannsiddiqui/TARS</a>
+  </footer>
+</div>
+</body>
+</html>
