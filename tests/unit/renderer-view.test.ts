@@ -63,6 +63,12 @@ describe("cloudRow", () => {
     });
   });
 
+  it("says how a Composio source was last checked", () => {
+    const via = (checkedVia: "pushed" | "opened") => cloudRow(slack, [{ ...base, state: "active", broker: "composio", checkedVia }], nameOf).status;
+    expect(via("pushed")).toEqual({ kind: "last-checked", at: base.lastCheckedAt, detail: "pushed by Composio" });
+    expect(via("opened")).toEqual({ kind: "last-checked", at: base.lastCheckedAt, detail: "checked when you opened TARS" });
+  });
+
   it("keeps a paused grant paused across reloads", () => {
     expect(cloudRow(slack, [{ ...base, state: "paused" }], nameOf)).toMatchObject({ id: "slack-1", state: "paused" });
   });
