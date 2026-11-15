@@ -1,7 +1,7 @@
 // The full app window: routes between Today, the project index, schedule, TARS's calendar, a project,
 // memory and connections. Focus changes
 // only when the user picks a project here (switchProject with userInitiated: true).
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
 import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
@@ -35,6 +35,21 @@ export function App() {
     session.onEvent("stop");
     setStopped(true);
   };
+
+  // Focus or becoming visible is the event to look for new mail (the backend debounces it); never a timer.
+  const checkMail = useAction(api.connectors.composio.checkMail);
+  useEffect(() => {
+    if (!cloud.ready) return;
+    const check = () => {
+      if (document.visibilityState === "visible") checkMail({}).catch(() => undefined); // a failure shows on the connector card
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [cloud.ready, checkMail]);
 
   const loadIdeas = useCallback(() => window.companion.loadPending().then(setIdeas), []);
   useEffect(() => {
