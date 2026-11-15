@@ -8,7 +8,7 @@ const StepSchema = z.object({
   id: z.string(),
   label: z.string(), // present participle with its object: "Reading 5 items"
   doneLabel: z.string().optional(), // past tense, shown once done: "Read 5 items"
-  status: z.enum(["waiting", "running", "done", "failed"]),
+  status: z.enum(["waiting", "running", "done", "failed", "unknown"]), // unknown: nobody could confirm it
   startedAt: z.number().optional(), // real ms timestamps, never estimated
   endedAt: z.number().optional(),
   sources: z.array(SourceChip).optional(),
@@ -37,19 +37,26 @@ export const BLOCKS = {
     props: z.object({ text: z.string(), sources: z.array(z.object({ id: z.string(), label: z.string() })).optional() }),
   },
   approval: {
-    description: "Exactly what will happen before anything leaves: recipient, subject, attachment. Built from stored data only; it emits an action and never acts.",
+    description:
+      "Exactly what will happen before anything leaves: a Word document of this revision, sent as a link by email. The recipient is a suggestion from the asking mail's header fields (empty when none), editable by the user. Built from stored data only; it emits an action and never acts.",
     props: z.object({
       projectId: z.string(),
       artifactId: z.string(),
       revision: z.string(),
-      commitmentKey: z.string().optional(),
-      recipient: z.string(),
-      subject: z.string(),
-      attachment: z.string(),
+      commitmentKey: z.string(),
+      recipient: z.string(), // the suggested address, "" when there is none
+      recipientName: z.string().optional(),
+      replySubject: z.string(), // the subject when it goes to the asker (a reply to their mail)
+      subject: z.string(), // the subject to anyone else
+      document: z.string(), // the draft's title
       primary: z.string(),
       secondary: z.string(),
       state: z.enum(["open", "approved"]),
     }),
+  },
+  delivery: {
+    description: "One approved send of the Word document; the renderer follows its live status (document, link, send, verify) by action id.",
+    props: z.object({ actionId: z.string(), recipient: z.string() }),
   },
   receipt: {
     description: "What was done, when, and what was checked.",
@@ -109,7 +116,7 @@ export function formatDuration(ms: number): string {
 
 export type WorkSummary =
   | { state: "running"; label: string; startedAt?: number }
-  | { state: "done" | "failed" | "waiting"; label: string };
+  | { state: "done" | "failed" | "unknown" | "waiting"; label: string };
 
 /** The one line above the steps. A duration only from real start and end times. */
 export function workSummary(steps: readonly Partial<Step>[]): WorkSummary {
@@ -118,17 +125,45 @@ export function workSummary(steps: readonly Partial<Step>[]): WorkSummary {
   const span = starts.length > 0 && ends.length > 0 ? formatDuration(Math.max(...ends) - Math.min(...starts)) : null;
   if (steps.some((s) => s.status === "running")) return { state: "running", label: "Working", ...(starts.length ? { startedAt: Math.min(...starts) } : {}) };
   if (steps.some((s) => s.status === "failed")) return { state: "failed", label: span ? `Stopped after ${span}` : "Stopped" };
+  if (steps.some((s) => s.status === "unknown")) return { state: "unknown", label: span ? `Not confirmed after ${span}` : "Not confirmed" };
   if (steps.some((s) => s.status === "waiting")) return { state: "waiting", label: "Waiting" };
   return { state: "done", label: span ? `Worked for ${span}` : "Worked" };
 }
 
-/** From and Subject of a mail evidence text ("From: …\nSubject: …\n\nbody"), when present. */
-export function mailHeaders(text: string): { from?: string; subject?: string } {
-  const head = text.split("\n\n")[0] ?? "";
-  const field = (name: string) => head.match(new RegExp(`^${name}:[ \\t]*(.+)$`, "mi"))?.[1]?.trim();
-  const from = field("From");
-  const subject = field("Subject");
-  return { ...(from ? { from } : {}), ...(subject ? { subject } : {}) };
+export { isMailAddress } from "./actions";
+
+/** delivery.status as the chat reads it (convex/delivery.ts). */
+export type DeliveryStatus = {
+  state: "pending" | "running" | "succeeded" | "failed" | "unknown";
+  verified: boolean;
+  recipient: string;
+  stages: { name: "document" | "link" | "send" | "verify"; state: "pending" | "running" | "done" | "failed" | "unknown"; startedAt?: number; endedAt?: number; detail?: string }[];
+};
+
+const STAGE_WORDS: Record<DeliveryStatus["stages"][number]["name"], (to: string) => [now: string, done: string]> = {
+  document: () => ["Making the Word document", "Made the Word document"],
+  link: () => ["Creating its link", "Created its link"],
+  send: (to) => [`Sending to ${to}`, `Sent to ${to}`],
+  verify: () => ["Checking it arrived", "Checked: it arrived"],
+};
+const STAGE_STATUS = { pending: "waiting", running: "running", done: "done", failed: "failed", unknown: "unknown" } as const;
+
+/** The send's real stages as work steps, with their real times and the backend's own words when it fails or is unconfirmed. */
+export function deliverySteps(status: DeliveryStatus): Step[] {
+  return status.stages.map((stage) => {
+    const [label, doneLabel] = STAGE_WORDS[stage.name](status.recipient);
+    // A verified send (also one a Check again settled) is done in every step.
+    const state = status.verified ? "done" : STAGE_STATUS[stage.state];
+    return {
+      id: stage.name,
+      label,
+      doneLabel,
+      status: state,
+      ...(stage.startedAt === undefined ? {} : { startedAt: stage.startedAt }),
+      ...(stage.endedAt === undefined ? {} : { endedAt: stage.endedAt }),
+      ...(stage.detail !== undefined && (state === "failed" || state === "unknown") ? { error: stage.detail } : {}),
+    };
+  });
 }
 
 /** "Saturday 5:00 PM" in the user's zone. */

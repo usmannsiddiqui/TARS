@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { asksToSend, block, dueLabel, formatDuration, mailHeaders, viewBlock, workSummary } from "../../packages/domain/src/thread";
+import { asksToSend, block, deliverySteps, dueLabel, formatDuration, isMailAddress, viewBlock, workSummary } from "../../packages/domain/src/thread";
+
+describe("deliverySteps (the send, in the product's nouns)", () => {
+  const status = (over: Partial<Parameters<typeof deliverySteps>[0]> = {}) => ({
+    state: "running" as const,
+    verified: false,
+    recipient: "dana@example.com",
+    stages: [
+      { name: "document" as const, state: "done" as const, startedAt: 0, endedAt: 900 },
+      { name: "link" as const, state: "done" as const, startedAt: 900, endedAt: 1_000 },
+      { name: "send" as const, state: "running" as const, startedAt: 1_000 },
+      { name: "verify" as const, state: "pending" as const },
+    ],
+    ...over,
+  });
+
+  it("maps the four real stages in order with their real times", () => {
+    expect(deliverySteps(status()).map((s) => [s.id, s.status, s.status === "done" ? s.doneLabel : s.label])).toEqual([
+      ["document", "done", "Made the Word document"],
+      ["link", "done", "Created its link"],
+      ["send", "running", "Sending to dana@example.com"],
+      ["verify", "waiting", "Checking it arrived"],
+    ]);
+    expect(deliverySteps(status())[0]).toMatchObject({ startedAt: 0, endedAt: 900 });
+  });
+
+  it("failed and unknown carry the backend's own words", () => {
+    const failed = deliverySteps(status({ state: "failed", stages: [{ name: "document", state: "failed", startedAt: 0, endedAt: 5, detail: "Not sent. Your draft is kept." }] }));
+    expect(failed[0]).toMatchObject({ status: "failed", error: "Not sent. Your draft is kept." });
+    const unknown = deliverySteps(status({ state: "unknown", stages: [{ name: "send", state: "unknown", startedAt: 0, endedAt: 5, detail: "We could not confirm this was sent." }] }));
+    expect(unknown[0]).toMatchObject({ status: "unknown", error: "We could not confirm this was sent." });
+    expect(workSummary(unknown)).toEqual({ state: "unknown", label: "Not confirmed after 1s" });
+  });
+
+  it("a verified send is done in every step, even after a check again settled it", () => {
+    const settled = deliverySteps(status({ state: "succeeded", verified: true, stages: [{ name: "send", state: "unknown", startedAt: 0, endedAt: 5 }] }));
+    expect(settled.map((s) => s.status)).toEqual(["done"]);
+    expect(settled[0]!.error).toBeUndefined();
+  });
+
+  it("an address is one plain mailbox", () => {
+    expect([isMailAddress("dana@example.com"), isMailAddress("Dana <dana@example.com>"), isMailAddress("a@b"), isMailAddress("a@b.co, c@d.co"), isMailAddress("")]).toEqual([true, false, false, false, false]);
+  });
+});
 
 describe("block catalog", () => {
   it("stores only complete, valid blocks", () => {
@@ -63,11 +106,6 @@ describe("workSummary (the working header)", () => {
 });
 
 describe("helpers from stored data", () => {
-  it("reads From and Subject from a mail evidence text", () => {
-    expect(mailHeaders("From: Dana Reyes <dana@example.com>\nSubject: Budget for Friday\n\nCan you send it?")).toEqual({ from: "Dana Reyes <dana@example.com>", subject: "Budget for Friday" });
-    expect(mailHeaders("Just a note")).toEqual({});
-  });
-
   it("says the due time in the user's own zone", () => {
     expect(dueLabel("2026-11-14T22:00:00.000Z", "America/New_York")).toBe("Saturday 5:00 PM");
   });

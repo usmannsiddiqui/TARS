@@ -1,17 +1,20 @@
 // The project chat. TARS speaks first when an automatic preparation finds a new due commitment of
 // the user's; after that each user message gets one model call that picks one of four outcomes.
 // The user's chat text is his instruction; evidence is untrusted data and can never instruct. The
-// model never fills an approval: recipient, subject and attachment come from stored rows. Nothing
-// here sends, shares or creates an `actions` row; `approve` is the seam where the send attaches.
+// model never fills an approval: the suggested recipient and subjects come from the asking mail's
+// stored header fields (delivery.requesterFor), never from body text, and the user can change the
+// recipient. Only `send`, the approval's primary action, sends: through delivery.approveAndSend.
 import { ConvexError, v, type Infer } from "convex/values";
 import { z } from "zod";
 import { MAX_ARTIFACT_TEXT } from "../packages/domain/src/artifacts";
 import { mailSubject } from "../packages/domain/src/actions";
-import { asksToSend, block, dueLabel, mailHeaders, type Block, type Step } from "../packages/domain/src/thread";
-import { internal } from "./_generated/api";
+import { deliveryMail, type Requester } from "../packages/domain/src/delivery";
+import { asksToSend, block, dueLabel, type Block, type Step } from "../packages/domain/src/thread";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { requireOwnedArtifact, validOutput } from "./artifacts";
+import { action, internalMutation, internalQuery, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { validOutput } from "./artifacts";
+import { requesterFor } from "./delivery";
 import { requireOwnerId } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { requireOwnedProject } from "./memory";
@@ -51,15 +54,6 @@ export const listThread = query({
     }));
   },
 });
-
-async function currentEvidence(ctx: Ctx, ownerId: string, id: string | undefined) {
-  if (id === undefined) return null;
-  return await ctx.db
-    .query("evidence")
-    .withIndex("by_owner_current", (q) => q.eq("ownerId", ownerId).eq("isCurrent", true))
-    .filter((q) => q.eq(q.field("id"), id))
-    .first();
-}
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
@@ -107,9 +101,8 @@ export async function writeOpening(
     steps.push({ id: "save", label: "Checking it against the sources and saving it", doneLabel: "Checked it against the sources and saved it", status: "done", startedAt: save, endedAt: now });
   }
 
-  const mail = await currentEvidence(ctx, ownerId, commitment.evidenceIds[0]);
-  const from = mail ? mailHeaders(mail.text).from?.replace(/\s*<[^>]*>$/, "") : undefined;
-  const asked = `${from ?? "A message"} asked: “${sentence(commitment.text)}”`;
+  const asker = await requesterFor(ctx, ownerId, projectId, key); // the mail's own From field, never its body
+  const asked = `${asker?.name ?? asker?.address ?? "A message"} asked: “${sentence(commitment.text)}”`;
   const due = commitment.dueAt && settings ? ` It's due ${dueLabel(commitment.dueAt, settings.timezone)}.` : "";
   const blocks: Block[] = [
     ...(steps.length > 0 ? [block("work", "work", { steps })] : []),
@@ -161,15 +154,55 @@ export const finishReply = internalMutation({
   },
 });
 
+const draftView = v.union(v.null(), v.object({ id: v.id("artifacts"), revision: v.string(), text: v.string(), title: v.string() }));
+const requesterView = v.union(v.null(), v.object({ name: v.optional(v.string()), address: v.string(), subject: v.optional(v.string()) }));
+
+/** The project's current draft, the due commitment TARS started from, and who asked (header fields only). */
+async function approvalContext(ctx: Ctx, ownerId: string, projectId: string) {
+  const artifact = await ctx.db
+    .query("artifacts")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+  const prepared = await ctx.db
+    .query("preparedWork")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique();
+  const commitmentKey = (await projectMessages(ctx, ownerId, projectId)).findLast((m) => m.commitmentKey !== undefined)?.commitmentKey ?? "";
+  return {
+    artifact: artifact && { id: artifact._id, revision: artifact.revision, text: artifact.text, title: prepared?.work?.title ?? "Your draft" },
+    commitmentKey,
+    requester: commitmentKey === "" ? null : await requesterFor(ctx, ownerId, projectId, commitmentKey),
+  };
+}
+type ApprovalContext = Awaited<ReturnType<typeof approvalContext>>;
+
+/** Exactly what `send` would do, from stored data: the subjects are the ones delivery's mail will carry. */
+function approvalBlock(projectId: string, artifact: NonNullable<ApprovalContext["artifact"]>, commitmentKey: string, requester: Requester | null): Block {
+  const fallbackSubject = mailSubject(artifact.text).replace(/^#+\s*/, "");
+  const mail = (replyTo?: string) => deliveryMail({ filename: "", link: "", fallbackSubject, ...(replyTo === undefined ? {} : { replyTo }) }).subject;
+  return block("approval", "approval", {
+    projectId,
+    artifactId: artifact.id,
+    revision: artifact.revision,
+    commitmentKey,
+    recipient: requester?.address ?? "",
+    ...(requester?.name ? { recipientName: requester.name } : {}),
+    replySubject: mail(requester?.subject),
+    subject: mail(),
+    document: artifact.title,
+    primary: "Send it",
+    secondary: "Not yet",
+    state: "open",
+  });
+}
+
 const answerContext = v.object({
   projectId: v.string(),
   text: v.string(),
   startedAt: v.number(),
-  artifact: v.union(v.null(), v.object({ id: v.id("artifacts"), revision: v.string(), text: v.string(), title: v.string() })),
-  // Stored facts for an approval: the due commitment TARS started from, and its mail's headers.
-  commitmentKey: v.optional(v.string()),
-  from: v.optional(v.string()),
-  subject: v.optional(v.string()),
+  artifact: draftView,
+  commitmentKey: v.string(),
+  requester: requesterView,
 });
 
 export const loadAnswerContext = internalQuery({
@@ -181,31 +214,7 @@ export const loadAnswerContext = internalQuery({
     if (reply === null || reply.ownerId !== ownerId || asked === null || asked.ownerId !== ownerId) throw new ConvexError("Message not found");
     const { projectId } = reply;
     await requireOwnedProject(ctx, ownerId, projectId);
-    const artifact = await ctx.db
-      .query("artifacts")
-      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-      .unique();
-    const prepared = await ctx.db
-      .query("preparedWork")
-      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-      .unique();
-    const commitmentKey = (await projectMessages(ctx, ownerId, projectId)).findLast((m) => m.commitmentKey !== undefined)?.commitmentKey;
-    const commitments = await ctx.db
-      .query("commitments")
-      .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
-      .collect();
-    const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
-    const commitment = commitments.find((c) => commitmentKey === `${projectId}:${squash(c.text)}`);
-    const mail = await currentEvidence(ctx, ownerId, commitment?.evidenceIds[0]);
-    const headers = mail ? mailHeaders(mail.text) : {};
-    return {
-      projectId,
-      text: asked.text ?? "",
-      startedAt: reply.createdAt,
-      artifact: artifact && { id: artifact._id, revision: artifact.revision, text: artifact.text, title: prepared?.work?.title ?? "Your draft" },
-      ...(commitmentKey ? { commitmentKey } : {}),
-      ...headers,
-    };
+    return { projectId, text: asked.text ?? "", startedAt: reply.createdAt, ...(await approvalContext(ctx, ownerId, projectId)) };
   },
 });
 
@@ -227,9 +236,9 @@ const INSTRUCTIONS = [
   "reply: two or three plain sentences to the user, no greeting. revisedText and changeSummary are null unless the outcome is revise.",
 ].join("\n");
 
-/** One short label for an evidence chip: its mail subject, else its first line. */
-function chipLabel(text: string) {
-  const label = mailHeaders(text).subject ?? text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Source";
+/** One short label for an evidence chip: its mail's subject field, else its first line. */
+function chipLabel({ text, subject }: { text: string; subject?: string }) {
+  const label = subject ?? text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Source";
   return label.length > 48 ? `${label.slice(0, 47)}…` : label;
 }
 
@@ -238,7 +247,7 @@ const doneStep = (step: Step, endedAt: number): Step => ({ ...step, status: "don
 /** One model call answers the stored message; the reply's blocks are written in place. */
 async function answer(ctx: ActionCtx, ownerId: string, messageId: Id<"threadMessages">) {
   const c: Infer<typeof answerContext> = await ctx.runQuery(internal.thread.loadAnswerContext, { ownerId, messageId });
-  const { evidence }: { evidence: { id: string; occurredAt: string; text: string }[] } = await ctx.runQuery(internal.prepare.loadPreparationContext, {
+  const { evidence }: { evidence: { id: string; occurredAt: string; text: string; subject?: string }[] } = await ctx.runQuery(internal.prepare.loadPreparationContext, {
     ownerId,
     projectId: c.projectId,
   });
@@ -300,22 +309,10 @@ async function answer(ctx: ActionCtx, ownerId: string, messageId: Id<"threadMess
   if (output.outcome === "approve") {
     // Only his own words can ask to send; a model steered by evidence gets a question back instead.
     if (!asksToSend(c.text) || c.artifact === null) return unclear("Do you want this sent? Say so in your own words and I'll show exactly what will go out.");
-    const { artifact } = c;
     return write([
       block("work", "work", { steps: [doneStep(read, Date.now())] }),
       block("say", "say", { text: said || "Here is exactly what will go out." }),
-      block("approval", "approval", {
-        projectId: c.projectId,
-        artifactId: artifact.id,
-        revision: artifact.revision,
-        ...(c.commitmentKey ? { commitmentKey: c.commitmentKey } : {}),
-        recipient: c.from ?? "",
-        subject: c.subject ? `Re: ${c.subject}` : mailSubject(artifact.text),
-        attachment: `${artifact.title}, revision ${artifact.revision}`,
-        primary: "Send it",
-        secondary: "Keep editing",
-        state: "open",
-      }),
+      approvalBlock(c.projectId, c.artifact, c.commitmentKey, c.requester),
     ]);
   }
 
@@ -323,7 +320,7 @@ async function answer(ctx: ActionCtx, ownerId: string, messageId: Id<"threadMess
     const byId = new Map(evidence.map((e) => [e.id, e]));
     const sources = [...new Set(output.evidenceIds)].flatMap((id) => {
       const e = byId.get(id); // only this project's in-scope evidence, whatever the model cited
-      return e ? [{ id, label: chipLabel(e.text) }] : [];
+      return e ? [{ id, label: chipLabel(e) }] : [];
     });
     return write([block("work", "work", { steps: [doneStep(read, Date.now())] }), block("say", "say", { text: said, ...(sources.length ? { sources } : {}) })]);
   }
@@ -355,37 +352,90 @@ export const retry = action({
   },
 });
 
-/**
- * THE SEAM FOR THE SEND. The approval block's primary action lands here with ids only. Today it
- * records the approval in the thread and shows one waiting step; the verified send attaches here.
- * It checks the approved revision is still the current draft, so a stale approval never goes out.
- */
-export const approve = mutation({
-  args: { projectId: v.string(), artifactId: v.string(), revision: v.string(), commitmentKey: v.optional(v.string()) },
-  returns: v.null(),
-  handler: async (ctx, { projectId, artifactId, revision }) => {
-    const ownerId = await requireOwnerId(ctx);
+const MISSING_SEND_PERMISSION = "Sending from Gmail hasn't been allowed yet. Allow it in Connections → Gmail, then press Send it again.";
+
+export const loadApprovalContext = internalQuery({
+  args: { ownerId: v.string(), projectId: v.string() },
+  returns: v.object({ artifact: draftView, commitmentKey: v.string(), requester: requesterView }),
+  handler: async (ctx, { ownerId, projectId }) => {
     await requireOwnedProject(ctx, ownerId, projectId);
-    const artifact = await requireOwnedArtifact(ctx, ownerId, artifactId);
-    if (artifact.projectId !== projectId) throw new ConvexError("Artifact not found");
-    if (artifact.revision !== revision) throw new ConvexError(`The draft changed since this was shown (now revision ${artifact.revision}). Review it again before sending.`);
-    const messages = await projectMessages(ctx, ownerId, projectId);
-    const isOpen = (b: Doc<"threadMessages">["blocks"][number]) =>
-      b.type === "approval" && b.props?.artifactId === artifactId && b.props?.revision === revision && b.props?.state === "open";
-    const asked = messages.findLast((m) => m.blocks.some(isOpen));
-    if (asked === undefined) throw new ConvexError("Nothing is waiting for your approval");
-    await ctx.db.patch(asked._id, { blocks: asked.blocks.map((b) => (isOpen(b) ? { ...b, props: { ...b.props, state: "approved" } } : b)) });
-    const now = Date.now();
-    await ctx.db.insert("threadMessages", {
-      ownerId,
-      projectId,
-      role: "tars",
-      blocks: [
-        block("receipt", "receipt", { text: `You approved revision ${revision}.`, at: now, check: `Revision ${revision} is the current draft.` }),
-        block("work", "work", { steps: [{ id: "send", label: "Waiting for the send to be wired", status: "waiting" }] }),
-      ],
-      createdAt: now,
-    });
+    return approvalContext(ctx, ownerId, projectId);
+  },
+});
+
+/** A TARS message with these blocks. */
+export const postReply = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string(), blocks: threadBlocks },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, projectId, blocks }) => {
+    await requireOwnedProject(ctx, ownerId, projectId);
+    await ctx.db.insert("threadMessages", { ownerId, projectId, role: "tars", blocks, createdAt: Date.now() });
     return null;
   },
 });
+
+/** The send is reserved: the approval reads approved and the thread follows this action (once per action). */
+export const recordSend = internalMutation({
+  args: { ownerId: v.string(), projectId: v.string(), artifactId: v.string(), revision: v.string(), actionId: v.string(), recipient: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ownerId, projectId, artifactId, revision, actionId, recipient }) => {
+    const messages = await projectMessages(ctx, ownerId, projectId);
+    const isOpen = (b: Doc<"threadMessages">["blocks"][number]) =>
+      b.type === "approval" && b.props?.artifactId === artifactId && b.props?.revision === revision && b.props?.state === "open";
+    for (const m of messages.filter((m) => m.blocks.some(isOpen))) {
+      await ctx.db.patch(m._id, { blocks: m.blocks.map((b) => (isOpen(b) ? { ...b, props: { ...b.props, state: "approved" } } : b)) });
+    }
+    if (messages.some((m) => m.blocks.some((b) => b.type === "delivery" && b.props?.actionId === actionId))) return null;
+    await ctx.db.insert("threadMessages", { ownerId, projectId, role: "tars", blocks: [block("delivery", "delivery", { actionId, recipient })], createdAt: Date.now() });
+    return null;
+  },
+});
+
+type SendResult = { actionId: string } | { status: "needs-clarification"; reason: string } | { status: "missing-send-permission" };
+
+/**
+ * THE SEND: the approval's primary action, and the only way the chat sends. A Word document of
+ * exactly `revision`, as a link, to the recipient as the user left the field (delivery.approveAndSend
+ * binds and verifies it, and never sends the same revision to the same address twice). A missing send
+ * permission or a needed clarification is answered in the thread in plain words.
+ */
+export const send = action({
+  args: { projectId: v.string(), artifactId: v.string(), revision: v.string(), commitmentKey: v.string(), recipient: v.string() },
+  returns: v.union(
+    v.object({ actionId: v.string() }),
+    v.object({ status: v.literal("needs-clarification"), reason: v.string() }),
+    v.object({ status: v.literal("missing-send-permission") }),
+  ),
+  handler: async (ctx, args): Promise<SendResult> => {
+    const ownerId = await requireOwnerId(ctx);
+    const reply = (blocks: Block[]) => ctx.runMutation(internal.thread.postReply, { ownerId, projectId: args.projectId, blocks });
+    let result: { actionId: string } | { status: "needs-clarification"; reason: string };
+    try {
+      result = await ctx.runAction(api.delivery.approveAndSend, args);
+    } catch (error) {
+      if (!(error instanceof ConvexError) || error.data !== "missing-send-permission") throw error;
+      await reply([block("say", "say", { text: MISSING_SEND_PERMISSION })]);
+      return { status: "missing-send-permission" };
+    }
+    if ("actionId" in result) {
+      await ctx.runMutation(internal.thread.recordSend, {
+        ownerId,
+        projectId: args.projectId,
+        artifactId: args.artifactId,
+        revision: args.revision,
+        actionId: result.actionId,
+        recipient: args.recipient.trim(),
+      });
+      return result;
+    }
+    // The draft moved on since the approval was shown: say so, and offer exactly the current revision.
+    const current: ApprovalContext = await ctx.runQuery(internal.thread.loadApprovalContext, { ownerId, projectId: args.projectId });
+    const fresh = current.artifact !== null && current.artifact.revision !== args.revision ? current.artifact : null;
+    await reply([
+      block("say", "say", { text: fresh ? `${result.reason} Here is revision ${fresh.revision}, ready to send.` : result.reason }),
+      ...(fresh ? [approvalBlock(args.projectId, fresh, current.commitmentKey, current.requester)] : []),
+    ]);
+    return result;
+  },
+});
+
