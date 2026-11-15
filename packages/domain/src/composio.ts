@@ -22,3 +22,36 @@ export function isWriteTool(tool: { slug: string; readOnlyHint?: boolean }): boo
   const words = tool.slug.split("_");
   return !words.some((word) => READS.has(word)) || words.some((word) => WRITES.has(word));
 }
+
+// ---- Connect-form selectors. One rule, used by the form and again by the server before any trigger exists.
+export type ParsedSelectors = { selectors: string[] } | { error: string };
+const items = (text: string) => text.split(",").map((s) => s.trim()).filter((s) => s !== "");
+
+// GitHub's own limits: an owner is letters, digits and hyphens (max 39); a repository adds `.` and `_`.
+const REPOSITORY = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
+/** Repositories as `owner/name`, lower-cased (GitHub names are case-insensitive) so events match reliably. */
+export function parseRepositories(text: string): ParsedSelectors {
+  const repos = items(text);
+  const bad = repos.find((r) => !REPOSITORY.test(r));
+  if (repos.length === 0 || bad !== undefined) {
+    return { error: `${bad === undefined ? "Add at least one repository" : `"${bad}" is not a repository`}: write each as owner/name, like octo-labs/website.` };
+  }
+  return { selectors: repos.map((r) => r.toLowerCase()) };
+}
+
+const CHANNEL = /^[CG][A-Z0-9]+$/;
+export function parseSlackChannels(text: string): ParsedSelectors {
+  const channels = items(text);
+  const bad = channels.find((c) => !CHANNEL.test(c));
+  if (channels.length === 0 || bad !== undefined) {
+    return { error: `${bad === undefined ? "Add at least one channel ID" : `"${bad}" is not a channel ID`}: a channel ID starts with C (or G for an older private channel), then capital letters and digits.` };
+  }
+  return { selectors: channels };
+}
+
+/** Gmail reads the inbox unless the user picks labels; picking labels and naming none is an error, never an empty trigger. */
+export function gmailSelectors(choice: "inbox" | "labels", text: string): ParsedSelectors {
+  if (choice === "inbox") return { selectors: ["INBOX"] };
+  const labels = items(text);
+  return labels.length > 0 ? { selectors: labels } : { error: "Add at least one label ID, or read the inbox instead." };
+}
