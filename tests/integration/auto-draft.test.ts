@@ -232,6 +232,39 @@ describe("automatic preparation on new evidence", () => {
   });
 });
 
+describe("offer on a new due commitment", () => {
+  test("new_due_commitment_opens_its_offer_at_once_even_when_the_user_already_has_a_draft", async () => {
+    const { asAlice, project, evidence, settle, all, offers } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const budget = await project("Budget");
+    const ids: string[] = [];
+    // First: plain evidence, no commitment; the user prepares and starts the draft himself.
+    stubModel(() => prepared({ evidenceIds: ids.slice(0, 1) }));
+    ids.push((await evidence(budget, "Illustrative note: the budget lives in the shared sheet.")).id);
+    await settle();
+    await asAlice.mutation(api.artifacts.createFromPrepared, { projectId: budget });
+    expect(await offers()).toEqual([]);
+
+    // Then a real-looking mail with a due task for the user arrives.
+    stubModel(() => prepared({ evidenceIds: [ids[1]!], commitments: [dueCommitment(ids[1]!, "Alice, please send the budget to Dana by 5pm")] }));
+    ids.push((await evidence(budget, "Alice, please send the budget to Dana by 5pm today.")).id);
+    await settle();
+
+    const shown = await offers();
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatchObject({ projectId: budget, startedForYou: false, delivered: false });
+    expect(shown[0]!.body).toMatch(/Your draft is here whenever you want it\./);
+    expect((await asAlice.query(api.briefs.getAttentionState, {}))?.key).toBe(shown[0]!.key);
+    expect(await all("artifacts")).toHaveLength(1); // the user's draft, untouched
+
+    // A second automatic run sees the same commitment: nothing new.
+    ids.push((await evidence(budget, "Illustrative follow-up: thanks!")).id);
+    await settle();
+    expect(await offers()).toEqual(shown);
+    expect(await all("nudges")).toHaveLength(1);
+  });
+});
+
 describe("ready-when-you-are invitation", () => {
   test("automatic_runs_never_re_raise_a_dismissed_invitation_but_a_user_started_preparation_does", async () => {
     const { asAlice, project, evidence, settle, all } = setup();

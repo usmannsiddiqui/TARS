@@ -344,9 +344,14 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
       continue;
     }
     const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
-    if (automatic && (await createDraftFromPrepared(ctx, ownerId, projectId)).created) {
-      await openOffer(ctx, (await ctx.db.get(id))!, now, true);
-    }
+    if (!automatic) continue;
+    // A newly seen due commitment is offered at once; "started for you" only when TARS made the draft now.
+    const started = (await createDraftFromPrepared(ctx, ownerId, projectId)).created;
+    if ((await liveOffers(ctx, ownerId, now)).length > 0) continue; // one at a time; return/due-soon pick it up
+    const settings = await loadSettings(ctx, ownerId);
+    const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
+    // A new row has no last nudge, so only the contact rules decide.
+    if (decideNudge({ trigger: "return", nowMs: now, commitment, ...state })) await openOffer(ctx, (await ctx.db.get(id))!, now, started);
   }
 }
 
