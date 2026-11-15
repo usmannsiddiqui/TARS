@@ -30,20 +30,9 @@ export async function verifyHmacSha256Base64(secret: string, message: string, ba
   return verifyHmac(secret, message, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
 }
 
-/**
- * Twilio's X-Twilio-Signature: base64 HMAC-SHA1, keyed by the auth token, over the full webhook URL
- * followed by every POST parameter's name and value, sorted by name, with no separators.
- */
-export async function verifyTwilioSignature(authToken: string, url: string, params: URLSearchParams, base64: string): Promise<boolean> {
-  if (!/^[A-Za-z0-9+/]{27}=$/.test(base64)) return false;
-  const sorted = [...params.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const message = url + sorted.map(([k, v]) => k + v).join("");
-  return verifyHmac(authToken, message, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)), "SHA-1");
-}
-
-async function verifyHmac(secret: string, message: string, signature: Uint8Array<ArrayBuffer>, hash: "SHA-256" | "SHA-1" = "SHA-256"): Promise<boolean> {
+async function verifyHmac(secret: string, message: string, signature: Uint8Array<ArrayBuffer>): Promise<boolean> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash }, false, ["verify"]);
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   return crypto.subtle.verify("HMAC", key, signature, encoder.encode(message));
 }
 

@@ -23,20 +23,18 @@ export type ConnectionsProps = {
   shortcut: { status: ShortcutStatus | null; onSet(accelerator: string): Promise<void> };
   /** The held talk key, shown beside the capture shortcut. */
   talkKey: { status: TalkKeyStatus | null; onOpenAccessibility(): Promise<void> };
-  whatsapp: WhatsAppActions;
+  telegram: TelegramActions;
 };
 
-/** whatsapp.status as the card reads it (convex/whatsapp.ts). */
-export type WhatsAppStatus = {
-  sandbox: string | null;
+/** telegram.status as the card reads it (convex/telegram.ts). */
+export type TelegramStatus = {
+  bot: string | null;
   linked: boolean;
-  phone: string | null;
-  windowClosed: boolean;
-  last: { state: "waiting" | "queued" | "sent" | "refused" | "failed"; at: number } | null;
+  last: { state: "waiting" | "queued" | "sent" | "failed"; at: number } | null;
 };
-export type WhatsAppActions = {
+export type TelegramActions = {
   /** Undefined while loading. */
-  status: WhatsAppStatus | undefined;
+  status: TelegramStatus | undefined;
   onLink(): Promise<string>;
   onUnlink(): Promise<void>;
   onTest(): Promise<void>;
@@ -132,7 +130,7 @@ export function Connections(props: ConnectionsProps) {
           );
         })}
         <ShortcutSetting {...props.shortcut} talkKey={props.talkKey} />
-        <WhatsAppCard {...props.whatsapp} />
+        <TelegramCard {...props.telegram} />
       </div>
     </div>
   );
@@ -200,21 +198,20 @@ function TalkKeyNote({ status, onOpenAccessibility }: ConnectionsProps["talkKey"
   );
 }
 
-/** The last message to the phone in words: "sent" only when Twilio accepted it. */
-function lastNote(status: WhatsAppStatus): Honest | null {
-  if (status.windowClosed) return { kind: "missing-access", detail: "Message TARS on WhatsApp once to reopen the 24-hour window." };
+/** The last message to the phone in words: "sent" only when Telegram accepted it. */
+function lastNote(status: TelegramStatus): Honest | null {
   if (status.last?.state === "sent") return { kind: "done", detail: "Last message: sent to your phone." };
-  if (status.last?.state === "failed") return { kind: "needs-retry", detail: "Last message: Twilio did not send it." };
+  if (status.last?.state === "failed") return { kind: "needs-retry", detail: "Last message: Telegram did not send it." };
   return null;
 }
 
-/** His one phone: linked by a code he sends from WhatsApp; that phone alone can instruct TARS by message. */
-function WhatsAppCard({ status, onLink, onUnlink, onTest }: WhatsAppActions) {
+/** His one Telegram chat: linked by a code he sends to the bot; that chat alone can instruct TARS by message. */
+function TelegramCard({ status, onLink, onUnlink, onTest }: TelegramActions) {
   const [code, setCode] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const linked = status?.linked === true;
-  const row: SourceRow = { id: "whatsapp", name: "TARS on WhatsApp", coverage: "Message TARS from your phone; nudges and your stop recap come there too", group: "mac", state: linked ? "on" : "off" };
+  const row: SourceRow = { id: "telegram", name: "TARS on Telegram", coverage: "Message TARS from your phone; nudges and your stop recap come there too", group: "mac", state: linked ? "on" : "off" };
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -230,27 +227,27 @@ function WhatsAppCard({ status, onLink, onUnlink, onTest }: WhatsAppActions) {
   const note = status && linked ? lastNote(status) : null;
 
   return (
-    <section className="block" aria-labelledby="whatsapp-h">
-      <h2 id="whatsapp-h" className="block-title">
-        TARS on WhatsApp
+    <section className="block" aria-labelledby="telegram-h">
+      <h2 id="telegram-h" className="block-title">
+        TARS on Telegram
       </h2>
-      <ul className="source-rows" aria-labelledby="whatsapp-h">
+      <ul className="source-rows" aria-labelledby="telegram-h">
         <li className="source" data-state={row.state}>
           <CardHead
             row={row}
-            by="through Twilio · only your linked phone can instruct TARS"
-            add={!linked && status?.sandbox ? { label: "Link my phone", disabled: busy, onClick: () => void act(async () => setCode(await onLink())) } : undefined}
+            by="through a Telegram bot · only your linked chat can instruct TARS"
+            add={!linked && status?.bot ? { label: "Link my phone", disabled: busy, onClick: () => void act(async () => setCode(await onLink())) } : undefined}
           />
           {status === undefined && <StateNote state={{ kind: "loading" }} />}
-          {status && status.sandbox === null && <StateNote state={{ kind: "missing-access", detail: "WhatsApp is not set up on this TARS backend yet." }} />}
+          {status && status.bot === null && <StateNote state={{ kind: "missing-access", detail: "Telegram is not set up on this TARS backend yet." }} />}
           {status && !linked && code && (
             <p role="status">
-              From WhatsApp, send <strong>{code}</strong> to {status.sandbox}. The code works once, for 10 minutes. Nothing is sent to your phone until it is linked.
+              In Telegram, send <strong>{code}</strong> to @{status.bot}. The code works once, for 10 minutes. Nothing is sent to your phone until it is linked.
             </p>
           )}
           {linked && (
             <>
-              <p className="small">Linked to {status.phone}. Sending anything still needs your exact SEND.</p>
+              <p className="small">Linked to your Telegram. Sending anything still needs your exact SEND.</p>
               {note && <StateNote state={note} />}
               <button type="button" className="secondary" disabled={busy} onClick={() => void act(onTest)}>
                 Send me a test message

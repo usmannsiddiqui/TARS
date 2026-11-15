@@ -16,7 +16,7 @@ import { Shell, Stopped, type Route } from "./Shell";
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/** Mounted only by the user's "Stop for now": today's recap. The backend sends it to his linked WhatsApp on the stop event. */
+/** Mounted only by the user's "Stop for now": today's recap. The backend sends it to his linked Telegram on the stop event. */
 function StoppedLive({ ready, ...props }: { ready: boolean; projectName?: string; note?: string; onResume(): void }) {
   const recap = useQuery(api.recap.getClosingRecap, ready ? { timezone } : "skip");
   return <Stopped {...props} {...(recap ? { recap } : {})} />;

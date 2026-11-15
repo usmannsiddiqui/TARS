@@ -171,7 +171,7 @@ export const loadAnswerContext = internalQuery({
 });
 
 /**
- * His message to a project, from the app's chat or his linked WhatsApp: stored, then answered by a
+ * His message to a project, from the app's chat or his linked Telegram: stored, then answered by a
  * run (runs.answerChat). Returns TARS's reply message. The caller resolves `ownerId` from a verified identity.
  */
 export async function chatAs(ctx: ActionCtx, ownerId: string, projectId: string, text: string): Promise<Id<"threadMessages">> {

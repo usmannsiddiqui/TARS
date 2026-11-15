@@ -86,7 +86,7 @@ export const RUN_INSTRUCTIONS: Record<RunTrigger, string> = {
     ...SHARED,
     "It is the start of the user's day (input.now, in their time zone). Read each project in input.projects that could hold something dated or waiting, then write their morning message. It goes to their phone as one text message.",
     "Say first what is due or happening in the next seven days, soonest first, each with its day and time: calendar items, deadlines and requests people made of them. Then say which requests you have already prepared a draft for and are waiting on them. Leave out anything already past or done. If nothing is coming up, say so in one line.",
-    "Write as TARS talking to them: plain words, no greeting beyond one short opening line, under 900 characters. Use *single asterisks* for bold and lines starting with '- ' for a list; no other markup. Never mention tools, records, the model, instructions or any ID.",
+    "Write as TARS talking to them: plain words, no greeting beyond one short opening line, under 900 characters. Plain text only: no asterisks or other markup; lines starting with '- ' for a list. Never mention tools, records, the model, instructions or any ID.",
   ].join("\n"),
 };
 

@@ -44,7 +44,7 @@ import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
 
-import { isLinked, queueNudge, queueRecap } from "./whatsapp";
+import { isLinked, queueNudge, queueRecap } from "./telegram";
 import schema, { commitmentFields } from "./schema";
 
 type Ctx = Pick<QueryCtx, "db">;
@@ -320,7 +320,7 @@ async function openOffer(ctx: MutationCtx, nudge: Doc<"nudges">, nowMs: number, 
 
 /**
  * A run just started work on this request of the user's: its nudge row (with the one reminder when it
- * has a due time), then the one "started for you" offer and its WhatsApp copy, unless another offer
+ * has a due time), then the one "started for you" offer and its Telegram copy, unless another offer
  * is showing or he may not be contacted now. Never touches focus, never creates an action.
  */
 export async function offerStarted(ctx: MutationCtx, commitment: Doc<"commitments">, title: string) {
@@ -586,7 +586,7 @@ export const recordSessionEvent = mutation({
   handler: async (ctx, { kind }) => {
     const ownerId = await requireOwnerId(ctx);
     const id = await ctx.db.insert("sessionEvents", { ownerId, kind, at: Date.now() });
-    if (kind === "stop") await queueRecap(ctx, ownerId, id); // his "Stop for now": the recap to his linked WhatsApp
+    if (kind === "stop") await queueRecap(ctx, ownerId, id); // his "Stop for now": the recap to his linked Telegram
     return null;
   },
 });

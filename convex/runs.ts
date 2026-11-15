@@ -411,7 +411,7 @@ export async function answerChat(ctx: ActionCtx, ownerId: string, messageId: Id<
   }
 }
 
-const MAX_PHONE = 1_500; // one WhatsApp message
+const MAX_PHONE = 1_500; // one Telegram message
 
 /** The owner's projects, name and time zone for a run nobody typed: only what the stored profile and settings hold. */
 export const loadOwner = internalQuery({
@@ -443,7 +443,7 @@ export const onMorning = internalAction({
     const run: Run = { ownerId, trigger: "brief", projects: new Map(c.projects.map((p) => [p.id, p.name])), timezone: c.timezone, steps: [], items: new Map(), calls: [] };
     try {
       const said = await work(ctx, run, { now: localNow(c.timezone), timezone: c.timezone, user: c.user, projects: c.projects });
-      if (said.length > 0) await ctx.runMutation(internal.whatsapp.queueBrief, { ownerId, key, body: said.slice(0, MAX_PHONE) });
+      if (said.length > 0) await ctx.runMutation(internal.telegram.queueBrief, { ownerId, key, body: said.slice(0, MAX_PHONE) });
       log(run, said.length > 0 ? "wrote the morning brief" : "had nothing to say");
     } catch (error) {
       await stopOnModelError(ctx, run, error, false);

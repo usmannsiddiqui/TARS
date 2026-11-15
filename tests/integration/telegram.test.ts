@@ -1,7 +1,7 @@
 // @vitest-environment edge-runtime
-// TARS on WhatsApp: the one linked phone instructs TARS by message (proven by Twilio's signature and
+// TARS on Telegram: the one linked phone instructs TARS by message (proven by Telegram's secret header and
 // the stored link), gets short plain replies, and gets the nudge and the closing recap. Sending still
-// needs his exact SEND. Fixture-only: Twilio, Composio and the model are fakes behind a stubbed `fetch`.
+// needs his exact SEND. Fixture-only: Telegram, Composio and the model are fakes behind a stubbed `fetch`.
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ProjectIdSchema, type ProjectId } from "@companion/domain";
@@ -18,12 +18,12 @@ const API = "https://backend.composio.dev/api/v3.1";
 const MODEL = "https://api.openai.com/v1/responses";
 const SITE = "https://illustrative.convex.site";
 const SECRET = "illustrative-composio-webhook-secret";
-const TOKEN = "illustrative-twilio-auth-token";
-const ACCOUNT = "ACillustrative";
-const TWILIO = `https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT}/Messages.json`;
-const SANDBOX = "whatsapp:+14155238886";
-const PHONE = "whatsapp:+15550001111";
-const OTHER = "whatsapp:+15550002222";
+const TOKEN = "illustrative-telegram-bot-token";
+const HOOK = "illustrative-telegram-webhook-secret";
+const BOT = "illustrative_tars_bot";
+const TELEGRAM = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
+const PHONE = "15550001111"; // his private chat's id
+const OTHER = "15550002222";
 const LABEL = "Label_budget";
 const DRAFT = "# Budget summary\n\nTravel 400, venue 1200.";
 const DANA = "dana@illustrative.example";
@@ -38,21 +38,14 @@ beforeEach(() => {
   vi.stubEnv("COMPOSIO_AUTH_CONFIG_GMAIL", "ac_gmail");
   vi.stubEnv("OPENAI_API_KEY", "test-key-not-real");
   vi.stubEnv("OPENAI_MODEL", "test-model");
-  vi.stubEnv("TWILIO_ACCOUNT_SID", ACCOUNT);
-  vi.stubEnv("TWILIO_AUTH_TOKEN", TOKEN);
-  vi.stubEnv("TWILIO_WHATSAPP_FROM", SANDBOX);
+  vi.stubEnv("TELEGRAM_BOT_TOKEN", TOKEN);
+  vi.stubEnv("TELEGRAM_BOT_NAME", BOT);
+  vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", HOOK);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
-
-/** Twilio's documented algorithm, written out independently: full URL + each sorted key and value, HMAC-SHA1, base64. */
-async function twilioSignature(url: string, params: Record<string, string>, token = TOKEN) {
-  const data = url + Object.keys(params).sort().map((k) => k + params[k]).join("");
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(token), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
-  return btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)))));
-}
 
 type Call = { method: string; url: string; body: string; auth?: string | null };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -79,18 +72,18 @@ async function setup() {
   // What the fake model answers: structured outputs by name; a run's requests take the next of `turns` (the last repeats).
   const model: { route: string | null; sort: unknown; turns: unknown[][]; turn: number } = { route: projectId, sort: { items: [] }, turns: [], turn: 0 };
   const run = (turns: unknown[][]) => Object.assign(model, { turns, turn: 0 });
-  const twilio: { mode: "ok" | "refuse" } = { mode: "ok" };
+  const telegram: { mode: "ok" | "blocked" } = { mode: "ok" };
   const routes: Record<string, (call: Call) => Response> = {
     [MODEL]: (call) => {
       const name = (JSON.parse(call.body) as { text?: { format: { name: string } } }).text?.format.name;
-      if (name === "whatsapp_route") return modelSays({ projectId: model.route });
+      if (name === "telegram_route") return modelSays({ projectId: model.route });
       if (name === "brain_dump") return modelSays(model.sort);
       if (name !== undefined) throw new Error(`Unexpected structured output ${name}`);
       return json({ status: "completed", output: model.turns[Math.min(model.turn++, model.turns.length - 1)] });
     },
-    [TWILIO]: () => {
-      if (twilio.mode === "refuse") return json({ code: 63016, message: "Outside messaging window", status: 400 }, 400);
-      return json({ sid: `SM${calls.length}`, status: "queued", error_code: null }, 201);
+    [TELEGRAM]: () => {
+      if (telegram.mode === "blocked") return json({ ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user" }, 403);
+      return json({ ok: true, result: { message_id: calls.length } });
     },
     [`${API}/connected_accounts/link`]: () => json({ redirect_url: "https://connect.composio.dev/link/ln_1", connected_account_id: account.id }, 201),
     [`${API}/connected_accounts/${account.id}`]: () => json({ id: account.id, status: "ACTIVE", user_id: account.userId, toolkit: { slug: "gmail" } }),
@@ -115,9 +108,13 @@ async function setup() {
     return routes[match]!(call);
   });
   const gmailSends = () => calls.filter((c) => c.url === `${API}/tools/execute/GMAIL_SEND_EMAIL`).map((c) => JSON.parse(c.body).arguments as Record<string, string>);
-  /** Every WhatsApp message TARS asked Twilio to send, as the form fields it posted. */
-  const texts = () => calls.filter((c) => c.url === TWILIO).map((c) => Object.fromEntries(new URLSearchParams(c.body)));
-  const routeCalls = () => calls.filter((c) => c.url === MODEL && c.body.includes("whatsapp_route")).length;
+  /** Every message TARS asked the bot to send: the chat it went to and its words. */
+  const texts = () =>
+    calls
+      .filter((c) => c.url === TELEGRAM)
+      .map((c) => JSON.parse(c.body) as { chat_id: string; text: string })
+      .map((m) => ({ To: m.chat_id, Body: m.text }));
+  const routeCalls = () => calls.filter((c) => c.url === MODEL && c.body.includes("telegram_route")).length;
   const settle = () => t.finishAllScheduledFunctions(() => {});
 
   await asAlice.action(api.connectors.composio.startConnect, { sourceId, kind: "gmail" });
@@ -149,91 +146,84 @@ async function setup() {
   const artifactId = artifact!._id;
   calls.length = 0;
 
-  let sids = 0;
-  /** One signed inbound WhatsApp message, as Twilio posts it; then the scheduled work runs. */
-  const inbound = async (from: string, text: string, sid = `SMin${++sids}`) => {
-    const params = { AccountSid: ACCOUNT, Body: text, From: from, MessageSid: sid, NumMedia: "0", To: SANDBOX };
-    const response = await t.fetch("/twilio/whatsapp", {
+  let updates = 0;
+  /** One inbound message as Telegram posts it, with its secret header; then the scheduled work runs. */
+  const inbound = async (from: string, text: string, updateId = ++updates) => {
+    const response = await t.fetch("/telegram/webhook", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", "x-twilio-signature": await twilioSignature(`${SITE}/twilio/whatsapp`, params) },
-      body: new URLSearchParams(params).toString(),
+      headers: { "content-type": "application/json", "x-telegram-bot-api-secret-token": HOOK },
+      body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, chat: { id: Number(from), type: "private" }, text } }),
     });
     expect(response.status).toBe(200);
     await settle();
     return response;
   };
   const link = async (as = asAlice, from = PHONE) => {
-    const { code } = await as.mutation(api.whatsapp.startLink, {});
+    const { code } = await as.mutation(api.telegram.startLink, {});
     await inbound(from, code);
     return code;
   };
   const thread = () => asAlice.query(api.thread.listThread, { projectId });
   const all = <T extends keyof typeof schema.tables>(table: T) => t.run((ctx) => ctx.db.query(table).collect());
-  return { t, alice, bob, asAlice, asBob, projectId, artifactId, model, run, twilio, calls, gmailSends, texts, routeCalls, settle, inbound, link, thread, all };
+  return { t, alice, bob, asAlice, asBob, projectId, artifactId, model, run, telegram, calls, gmailSends, texts, routeCalls, settle, inbound, link, thread, all };
 }
 
-describe("the signed webhook", () => {
-  const params = { AccountSid: ACCOUNT, Body: "hello", From: PHONE, MessageSid: "SMsig1", To: SANDBOX };
-  const post = async (t: ReturnType<typeof convexTest>, signature: string | null, body = new URLSearchParams(params).toString()) =>
-    t.fetch("/twilio/whatsapp", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", ...(signature === null ? {} : { "x-twilio-signature": signature }) },
-      body,
-    });
+describe("the webhook", () => {
+  const update = (type = "private") => JSON.stringify({ update_id: 1, message: { message_id: 1, chat: { id: Number(PHONE), type }, text: "hello" } });
+  const post = (t: ReturnType<typeof convexTest>, secret: string | null, body = update()) =>
+    t.fetch("/telegram/webhook", { method: "POST", headers: { "content-type": "application/json", ...(secret === null ? {} : { "x-telegram-bot-api-secret-token": secret }) }, body });
 
-  test("a good signature is answered with empty TwiML; bad, missing and wrong-URL signatures are refused", async () => {
+  test("Telegram's secret header is required: a wrong or missing one is refused", async () => {
     const t = convexTest(schema, modules);
-    const good = await post(t, await twilioSignature(`${SITE}/twilio/whatsapp`, params));
-    expect(good.status).toBe(200);
-    expect(await good.text()).toBe("<Response></Response>");
-    expect((await post(t, await twilioSignature(`${SITE}/twilio/whatsapp`, params, "another-token"))).status).toBe(403);
+    expect((await post(t, HOOK)).status).toBe(200);
+    expect((await post(t, "another-secret")).status).toBe(403);
+    expect((await post(t, `${HOOK}x`)).status).toBe(403);
     expect((await post(t, null)).status).toBe(403);
-    expect((await post(t, "not-a-signature")).status).toBe(403);
-    expect((await post(t, await twilioSignature(`${SITE}/twilio/other`, params))).status).toBe(403);
-    // A changed parameter breaks it.
-    expect((await post(t, await twilioSignature(`${SITE}/twilio/whatsapp`, params), new URLSearchParams({ ...params, Body: "SEND" }).toString())).status).toBe(403);
   });
 
-  test("the signature is over the sorted parameters, whatever order they arrive in", async () => {
-    const t = convexTest(schema, modules);
-    const reversed = new URLSearchParams(Object.entries(params).reverse()).toString();
-    expect((await post(t, await twilioSignature(`${SITE}/twilio/whatsapp`, params), reversed)).status).toBe(200);
+  test("a group chat's message and a body that is not an update are accepted and ignored", async () => {
+    const s = await setup();
+    await s.link();
+    s.calls.length = 0;
+    expect((await post(s.t, HOOK, update("group"))).status).toBe(200);
+    expect((await post(s.t, HOOK, "not json")).status).toBe(200);
+    await s.settle();
+    expect(s.calls).toEqual([]);
   });
 });
 
 describe("linking his phone", () => {
-  test("his code from WhatsApp links that phone to him once; a used, wrong or expired code links nothing", async () => {
+  test("his code from Telegram links that phone to him once; a used, wrong or expired code links nothing", async () => {
     const s = await setup();
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ linked: false, sandbox: "+14155238886" });
-    const { code } = await s.asAlice.mutation(api.whatsapp.startLink, {});
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ linked: false, bot: BOT });
+    const { code } = await s.asAlice.mutation(api.telegram.startLink, {});
     expect(code).toMatch(/^TARS-[A-Z0-9]{6}$/);
     await s.inbound(PHONE, "TARS-WRONG1");
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ linked: false });
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ linked: false });
     await s.inbound(PHONE, ` ${code.toLowerCase()} `);
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ linked: true, phone: "+15550001111" });
-    expect(s.texts().map((m) => [m.To, m.From])).toEqual([[PHONE, SANDBOX]]); // one confirmation, from the sandbox
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ linked: true });
+    expect(s.texts().map((m) => m.To)).toEqual([PHONE]); // one confirmation, to the chat that sent the code
     // Single use: the same code from another phone does nothing.
     await s.inbound(OTHER, code);
-    expect(await s.all("whatsappLinks")).toHaveLength(1);
-    expect((await s.all("whatsappLinks"))[0]!.phone).toBe(PHONE);
+    expect(await s.all("telegramLinks")).toHaveLength(1);
+    expect((await s.all("telegramLinks"))[0]!.chatId).toBe(PHONE);
 
-    const late = await s.asBob.mutation(api.whatsapp.startLink, {});
+    const late = await s.asBob.mutation(api.telegram.startLink, {});
     await s.t.run(async (ctx) => {
       for (const row of await ctx.db.query("oauthStates").collect()) await ctx.db.patch(row._id, { expiresAt: Date.now() - 1 });
     });
     await s.inbound(OTHER, late.code);
-    expect(await s.asBob.query(api.whatsapp.status, {})).toMatchObject({ linked: false });
+    expect(await s.asBob.query(api.telegram.status, {})).toMatchObject({ linked: false });
   });
 
   test("a second owner's code links only that owner; unlinking removes the link", async () => {
     const s = await setup();
     await s.link();
     await s.link(s.asBob, OTHER);
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ linked: true, phone: "+15550001111" });
-    expect(await s.asBob.query(api.whatsapp.status, {})).toMatchObject({ linked: true, phone: "+15550002222" });
-    await s.asAlice.mutation(api.whatsapp.unlink, {});
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ linked: false });
-    expect(await s.asBob.query(api.whatsapp.status, {})).toMatchObject({ linked: true });
+    expect((await s.all("telegramLinks")).map((l) => [l.ownerId, l.chatId]).sort()).toEqual([[s.alice.ownerId, PHONE], [s.bob.ownerId, OTHER]].sort());
+    await s.asAlice.mutation(api.telegram.unlink, {});
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ linked: false });
+    expect(await s.asBob.query(api.telegram.status, {})).toMatchObject({ linked: true });
     s.calls.length = 0;
     await s.inbound(PHONE, "make it shorter");
     expect(s.calls).toEqual([]); // unlinked: ignored, no model call, no reply
@@ -251,13 +241,13 @@ describe("messages from his phone", () => {
     expect(await s.thread()).toHaveLength(before);
   });
 
-  test("a redelivered MessageSid is dropped", async () => {
+  test("a redelivered update is dropped", async () => {
     const s = await setup();
     await s.link();
     s.run([[says("Travel is 400.")]]);
     s.calls.length = 0;
-    await s.inbound(PHONE, "what is travel?", "SMdup");
-    await s.inbound(PHONE, "what is travel?", "SMdup");
+    await s.inbound(PHONE, "what is travel?", 9001);
+    await s.inbound(PHONE, "what is travel?", 9001);
     expect(s.routeCalls()).toBe(1);
     expect(s.texts()).toHaveLength(1);
   });
@@ -475,46 +465,30 @@ describe("TARS to his phone", () => {
     expect(s.texts().map((m) => [m.To, m.Body!.split("\n")[0]])).toEqual([[PHONE, "TARS · done for now"]]);
   });
 
-  test("a refused outbound is recorded and shown, never retried, and his next message reopens it", async () => {
+  test("a message Telegram does not accept is recorded with its own words and never retried", async () => {
     const s = await setup();
     await s.link();
-    s.twilio.mode = "refuse";
+    s.telegram.mode = "blocked";
     s.calls.length = 0;
     await s.asAlice.mutation(api.briefs.recordSessionEvent, { kind: "stop" });
     await s.settle();
     await s.settle();
     expect(s.texts()).toHaveLength(1);
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ windowClosed: true, last: { state: "refused" } });
-    s.twilio.mode = "ok";
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ last: { state: "failed" } });
+    expect((await s.all("telegramOutbox")).find((r) => r.state === "failed")!.code).toBe("403: Forbidden: bot was blocked by the user");
+    s.telegram.mode = "ok";
     s.run([[says("Travel is 400.")]]);
     await s.inbound(PHONE, "what is travel?");
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ windowClosed: false, last: { state: "sent" } });
-  });
-
-  test("a failure Twilio reports later through the signed status callback is recorded the same way", async () => {
-    const s = await setup();
-    await s.link();
-    const [row] = (await s.all("whatsappOutbox")).filter((r) => r.state === "sent");
-    const params = { AccountSid: ACCOUNT, ErrorCode: "63016", MessageSid: row!.twilioSid!, MessageStatus: "failed" };
-    const unsigned = await s.t.fetch("/twilio/whatsapp/status", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(params).toString() });
-    expect(unsigned.status).toBe(403);
-    const signed = await s.t.fetch("/twilio/whatsapp/status", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", "x-twilio-signature": await twilioSignature(`${SITE}/twilio/whatsapp/status`, params) },
-      body: new URLSearchParams(params).toString(),
-    });
-    expect(signed.status).toBe(200);
-    expect(await s.asAlice.query(api.whatsapp.status, {})).toMatchObject({ windowClosed: true, last: { state: "refused" } });
+    expect(await s.asAlice.query(api.telegram.status, {})).toMatchObject({ last: { state: "sent" } });
   });
 
   test("Send me a test message goes to the linked phone only", async () => {
     const s = await setup();
-    await expect(s.asAlice.action(api.whatsapp.sendTest, {})).rejects.toThrow(/Link your phone/);
+    await expect(s.asAlice.action(api.telegram.sendTest, {})).rejects.toThrow(/Link your phone/);
     await s.link();
     s.calls.length = 0;
-    await s.asAlice.action(api.whatsapp.sendTest, {});
+    await s.asAlice.action(api.telegram.sendTest, {});
     await s.settle();
     expect(s.texts().map((m) => m.To)).toEqual([PHONE]);
-    expect(s.calls.find((c) => c.url === TWILIO)!.auth).toBe(`Basic ${btoa(`${ACCOUNT}:${TOKEN}`)}`);
   });
 });

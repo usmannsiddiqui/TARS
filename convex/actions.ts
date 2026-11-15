@@ -33,7 +33,7 @@ import * as outlook from "./connectors/outlook";
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { requireOwnedProject } from "./memory";
-import { reportSendOutcome } from "./whatsapp";
+import { reportSendOutcome } from "./telegram";
 
 const MAIL_KINDS = ["gmail", "outlook-mail"];
 const normalizePage = (id: string) => id.replace(/-/g, "").toLowerCase();
