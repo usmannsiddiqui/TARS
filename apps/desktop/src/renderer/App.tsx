@@ -7,7 +7,7 @@ import type { CaptureInput } from "@companion/domain";
 import type { ClosingRecap } from "@companion/domain/recap";
 import { api } from "../../../../convex/_generated/api";
 import { Home } from "./Home";
-import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
+import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
 import { ProjectsIndex } from "./ProjectsIndex";
 import { railProject, Shell, Stopped, type RecapTextState, type Route } from "./Shell";
 
@@ -52,6 +52,7 @@ export function App() {
   const createProject = useMutation(api.projects.createProject);
   const today = useToday({ recordReturn: true });
   const helpers = useHelpers();
+  const brainDump = useBrainDump();
   const session = useSession();
   const stop = () => {
     session.onEvent("stop");
@@ -145,6 +146,7 @@ export function App() {
           if (choice === "finish") open(projectId); // the user's click opens the project's draft
         }}
         ideas={ideas}
+        brainDump={brainDump}
         sessionWorking={session.state === "working"}
         onCaptured={() => void loadIdeas()}
         onStart={(projectId, mode) => {

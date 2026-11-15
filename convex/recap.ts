@@ -106,6 +106,14 @@ export const getClosingRecap = query({
           input.parked.push({ text: c.text, at: nudge.parkedAt });
       }
     }
+    // Lines he parked in a brain dump, at the time he said them (with or without a project).
+    const captured = await ctx.db
+      .query("captureItems")
+      .withIndex("by_owner_capture", (q) => q.eq("ownerId", ownerId))
+      .collect();
+    for (const line of captured) {
+      if (line.kind === "parked") input.parked.push({ text: line.text, at: line.createdAt });
+    }
     return closingRecap(input);
   },
 });

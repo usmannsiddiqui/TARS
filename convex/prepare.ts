@@ -418,19 +418,20 @@ export const persistPreparation = internalMutation({
       learnedKeys.push(fact.key);
     }
 
-    // Prepared commitments are replaced; ones the user marked done stay and are not recreated.
+    // Prepared commitments are replaced. Ones the user marked done, and ones filed from his own capture,
+    // stay and are not recreated from the same words.
     const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
     const existingCommitments = await ctx.db
       .query("commitments")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .collect();
-    const doneTexts = new Set<string>();
+    const keptTexts = new Set<string>();
     for (const row of existingCommitments) {
-      if (row.state === "open" || row.state === "waiting") await ctx.db.delete(row._id);
-      else doneTexts.add(squash(row.text));
+      if (row.origin !== "capture" && (row.state === "open" || row.state === "waiting")) await ctx.db.delete(row._id);
+      else keptTexts.add(squash(row.text));
     }
     for (const commitment of commitments) {
-      if (!doneTexts.has(squash(commitment.text))) await ctx.db.insert("commitments", { ownerId, projectId, ...commitment });
+      if (!keptTexts.has(squash(commitment.text))) await ctx.db.insert("commitments", { ownerId, projectId, ...commitment });
     }
 
     const row = await ctx.db

@@ -1,6 +1,7 @@
 // The compact panel the pet opens. Presentational: data and actions arrive as props.
 import { useEffect, useRef } from "react";
 import type { Transcript } from "../preload/index";
+import type { BrainDumpProps } from "./BrainDump";
 import { Composer } from "./Composer";
 import { HelperCards, type HelperActions } from "./Helpers";
 import type { HardItem, HelperRun, Honest, NudgeChoice, NudgeOffer, PetState, Receipt } from "./model";
@@ -41,6 +42,8 @@ export type PanelProps = {
   capture?: boolean;
   /** A hold-to-talk transcript for the capture box, editable and unsaved. */
   transcript?: Transcript;
+  /** Sorting a saved capture into projects, shown in the capture box. */
+  brainDump?: BrainDumpProps;
   onOpenApp(): void;
   onStop(): void;
   onClose(): void;
@@ -64,7 +67,12 @@ export function Panel(props: PanelProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, capture]);
   const composer = (
-    <Composer {...(props.projectId ? { projectId: props.projectId } : {})} {...(props.transcript ? { transcript: props.transcript } : {})} autoFocus={capture === true} />
+    <Composer
+      {...(props.projectId ? { projectId: props.projectId } : {})}
+      {...(props.transcript ? { transcript: props.transcript } : {})}
+      {...(props.brainDump ? { brainDump: props.brainDump } : {})}
+      autoFocus={capture === true}
+    />
   );
 
   return (

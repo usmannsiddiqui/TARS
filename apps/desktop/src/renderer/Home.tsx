@@ -4,6 +4,7 @@
 // stay one click away; adding a project lives on the project index. Presentational: data and actions arrive as props.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { briefList, preparedNote, readRows, type Brief, type HelperRun, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
+import type { BrainDumpProps } from "./BrainDump";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
 import { HelperCards, type HelperActions } from "./Helpers";
@@ -32,6 +33,8 @@ export type HomeProps = {
   /** The brief service could not be set up or reached. */
   briefError?: string;
   ideas: CapturedIdea[];
+  /** Sorting a saved capture into projects, shown in the capture card. */
+  brainDump?: BrainDumpProps;
   /** A work session is running (the desk's signal light). */
   sessionWorking: boolean;
   /** A capture was saved on this Mac: reload the list of ideas. */
@@ -299,7 +302,7 @@ export function Home(props: HomeProps) {
         </div>
 
         <aside className="home-side">
-          <Composer {...(props.focusProjectId ? { projectId: props.focusProjectId } : {})} onSaved={props.onCaptured} />
+          <Composer {...(props.focusProjectId ? { projectId: props.focusProjectId } : {})} onSaved={props.onCaptured} {...(props.brainDump ? { brainDump: props.brainDump } : {})} />
           <section className="block" aria-labelledby="ideas-h">
             <h2 id="ideas-h" className="block-title">
               Captured ideas

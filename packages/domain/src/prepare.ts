@@ -154,7 +154,7 @@ export function assemblePreparation(
  * A model-given due time as a UTC "Z" instant, or undefined when it is not an ISO datetime (Z or
  * offset) or is absurd: more than two years after, or more than a day before, the evidence it cites.
  */
-function dueInstant(dueAt: string | null, writtenAt: readonly number[]): string | undefined {
+export function dueInstant(dueAt: string | null, writtenAt: readonly number[]): string | undefined {
   if (dueAt === null || !z.iso.datetime({ offset: true }).safeParse(dueAt).success) return undefined;
   const due = Date.parse(dueAt);
   if (due < Math.min(...writtenAt) - DAY_MS || due > Math.max(...writtenAt) + MAX_DUE_AHEAD_MS) return undefined;
