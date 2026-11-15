@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { Evidence, ProjectId } from "@companion/domain";
 import {
   assemblePreparation,
+  preparationClock,
   selectEvidence,
   type PreparationOutput,
 } from "../../packages/domain/src/prepare";
@@ -158,19 +159,68 @@ describe("assemblePreparation", () => {
     expect(result.ok && result.facts).toEqual([{ key: "deck_tone", value: "plain", evidenceIds: [evidence.id] }]);
   });
 
-  test("an invalid due date is dropped, a valid one kept", () => {
+  test("due times: Z and offset forms are kept as a UTC Z instant; garbage and absurd dates are dropped", () => {
+    const written = makeEvidence(alice.ownerId, [guides], {
+      text: "Alice, you will run the demo.",
+      occurredAt: "2026-11-14T15:00:00.000Z",
+    });
+    const due = (text: string, dueAt: string) =>
+      commitment({ text, quote: "Alice, you will run the demo", dueAt, evidenceIds: [written.id] });
     const result = assemblePreparation(
       output({
-        evidenceIds: [evidence.id],
+        evidenceIds: [written.id],
         commitments: [
-          commitment({ text: "a", quote: "Alice, you will run the demo", dueAt: "Friday", evidenceIds: [evidence.id] }),
-          commitment({ text: "b", quote: "Alice, you will run the demo", dueAt: "2026-11-20T15:00:00Z", evidenceIds: [evidence.id] }),
+          due("z", "2026-11-20T15:00:00Z"),
+          due("offset", "2026-11-14T23:59:00-05:00"),
+          due("words", "Friday"),
+          due("date only", "2026-11-14"),
+          due("years away", "2029-01-01T00:00:00Z"),
+          due("long before it was written", "2026-11-12T15:00:00Z"),
+          due("same day earlier", "2026-11-14T05:00:00Z"),
         ],
       }),
       guides,
-      [evidence],
+      [written],
       0,
     );
-    expect(result.ok && result.commitments.map((c) => c.dueAt)).toEqual([undefined, "2026-11-20T15:00:00Z"]);
+    expect(result.ok && result.commitments.map((c) => [c.text, c.dueAt])).toEqual([
+      ["z", "2026-11-20T15:00:00.000Z"],
+      ["offset", "2026-11-15T04:59:00.000Z"],
+      ["words", undefined],
+      ["date only", undefined],
+      ["years away", undefined],
+      ["long before it was written", undefined],
+      ["same day earlier", "2026-11-14T05:00:00.000Z"],
+    ]);
+  });
+});
+
+describe("preparationClock", () => {
+  test("states the UTC instant and the local date, weekday and time in the user's zone", () => {
+    expect(preparationClock(Date.parse("2026-11-14T15:00:00.000Z"), "America/New_York")).toEqual({
+      utc: "2026-11-14T15:00:00.000Z",
+      timezone: "America/New_York",
+      localDate: "2026-11-14",
+      localWeekday: "Saturday",
+      localTime: "10:00",
+    });
+  });
+
+  test("23:30 in New York is already the next day in UTC: the local date is the user's", () => {
+    expect(preparationClock(Date.parse("2026-11-15T04:30:00.000Z"), "America/New_York")).toEqual({
+      utc: "2026-11-15T04:30:00.000Z",
+      timezone: "America/New_York",
+      localDate: "2026-11-14",
+      localWeekday: "Saturday",
+      localTime: "23:30",
+    });
+  });
+
+  test("no known zone: no local parts, and it says due times stay empty", () => {
+    expect(preparationClock(Date.parse("2026-11-14T15:00:00.000Z"), null)).toEqual({
+      utc: "2026-11-14T15:00:00.000Z",
+      timezone: null,
+      note: "The user's time zone is not known: set every dueAt to null.",
+    });
   });
 });

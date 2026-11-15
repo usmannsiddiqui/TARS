@@ -219,6 +219,7 @@ describe("automatic preparation and sharing", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key-not-real");
     vi.stubEnv("OPENAI_MODEL", "test-model");
     const { t, alice, asAlice, project, page, all } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
     const budget = await project("Budget");
     let mailId = "";
     const model = vi.fn<(url: string) => Promise<Response>>(async () => {
