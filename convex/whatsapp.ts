@@ -487,7 +487,7 @@ export const handle = internalAction({
     const project = list.find((p) => p.id === projectId);
     if (project !== undefined) {
       const messageId = await chatAs(ctx, ownerId, project.id, text.slice(0, 2_000));
-      const blocks: Block[] = await ctx.runQuery(internal.whatsapp.replyBlocks, { ownerId, messageId });
+      const blocks = (await ctx.runQuery(internal.whatsapp.replyBlocks, { ownerId, messageId })) as Block[]; // stored only through block()
       return reply(replyText(project.name, blocks));
     }
     const captureId = `whatsapp:${messageSid}`;

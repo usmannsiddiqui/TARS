@@ -268,7 +268,7 @@ describe("messages from his phone", () => {
     expect(reply!.Body).toContain("Revised “Budget summary”");
     expect(reply!.Body).toContain("I shortened it.");
     expect(reply!.Body).not.toContain("Travel 400"); // never the draft text
-    expect(reply!.Body.length).toBeLessThanOrEqual(1000);
+    expect(reply!.Body!.length).toBeLessThanOrEqual(1000);
   });
 
   test("a brain dump is sorted, not put in a thread", async () => {
@@ -321,6 +321,7 @@ describe("messages from his phone", () => {
     const s = await setup();
     await s.link();
     await s.inbound(PHONE, "looks good, send it");
+    expect((await s.thread()).flatMap((m) => m.blocks).some((b) => b.type === "approval" && (b.props as { state: string }).state === "open")).toBe(true);
     s.calls.length = 0;
     await s.inbound(PHONE, "send it please");
     await s.inbound(PHONE, "NOT YET");
