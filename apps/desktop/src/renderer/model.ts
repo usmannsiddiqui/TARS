@@ -78,7 +78,49 @@ export type Brief = {
   reason?: string;
   /** Sources the brief could not treat as current, named, with when they were last checked. */
   stale: { name: string; lastCheckedAt?: string }[];
+  /** Morning only: what it read, per kind (briefs.getPendingBrief `read`); absent on older briefs. */
+  read?: { kind: string; count: number }[];
 };
+
+// What each kind of input reads as, in the order the rows are shown (meetings, mail, deadlines, chat, notes, code, commitments).
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const READ_WORDS: Record<string, (n: number) => string> = {
+  "outlook-calendar": (n) => (n === 1 ? "Read today's meeting" : `Read today's ${n} meetings`),
+  gmail: (n) => `Read ${plural(n, "new email")}`,
+  "outlook-mail": (n) => `Read ${plural(n, "new email")}`,
+  canvas: (n) => `Checked ${plural(n, "Canvas deadline")}`,
+  slack: (n) => `Read ${plural(n, "new Slack message")}`,
+  teams: (n) => `Read ${plural(n, "new Teams message")}`,
+  notion: (n) => `Looked over ${plural(n, "Notion update")}`,
+  obsidian: (n) => `Looked over ${plural(n, "changed note")}`,
+  github: (n) => `Checked ${plural(n, "GitHub update")}`,
+  "claude-code": (n) => `Looked over ${plural(n, "Claude Code session note")}`,
+  codex: (n) => `Looked over ${plural(n, "Codex session note")}`,
+  observation: (n) => `Looked over ${plural(n, "note", "notes")} from your apps`,
+  commitments: (n) => `Went through ${plural(n, "open commitment")}`,
+};
+const READ_ORDER = Object.keys(READ_WORDS);
+
+/** One row per kind the brief really read: its kind (for the logo) and a sentence with the real count. Zero and unknown kinds get none. */
+export function readRows(read: Brief["read"]): { kind: string; text: string }[] {
+  return (read ?? [])
+    .filter((r) => r.count > 0 && READ_WORDS[r.kind])
+    .sort((a, b) => READ_ORDER.indexOf(a.kind) - READ_ORDER.indexOf(b.kind))
+    .map((r) => ({ kind: r.kind, text: READ_WORDS[r.kind]!(r.count) }));
+}
+
+/** The brief's schedule in words, from the next scheduled run (briefs.getSchedule): it runs every day at that local time. */
+export function briefSchedule(morningAt: number, timezone: string, now: number): { routine: string; at: string; next: string } {
+  const at = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(morningAt);
+  const day = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(ms); // YYYY-MM-DD
+  const when =
+    day(morningAt) === day(now)
+      ? "today"
+      : day(morningAt) === day(now + 864e5)
+        ? "tomorrow"
+        : new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long" }).format(morningAt);
+  return { routine: `Every day · ${at}`, at, next: `${when}, ${at}` };
+}
 
 /** Restart after days away (briefs.getReentry). */
 export type Reentry = {
