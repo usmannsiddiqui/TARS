@@ -740,20 +740,21 @@ test("cloud_connections_start_off_and_need_consent", async () => {
   await expect(form).toContainText("Only the items you select from Slack are read.");
   await expect(form).not.toContainText("Delete");
   expect(await calls(page)).toEqual([]);
-  await form.getByLabel("Bot token from your Slack app").fill("illustrative-not-a-token");
+  // Slack and Gmail connect through Composio's hosted sign-in: no token typed here.
+  await expect(form.getByRole("textbox")).toHaveCount(1);
+  await expect(form).toContainText("Composio holds your Slack sign-in for TARS");
   await form.getByLabel("Channel IDs to read, separated by commas").fill("C0123, C0456");
-  await form.getByRole("button", { name: "Connect Slack" }).click();
+  await form.getByRole("button", { name: "Continue to Composio sign-in" }).click();
   expect(await calls(page)).toEqual([["connect", "slack", { projectId: "guides", selectors: ["C0123", "C0456"], writeTargets: [] }]]);
-  // Gmail: no token here; Google's own page opens in the browser after the same consent wording.
   await source("Gmail").getByRole("button", { name: "Connect Gmail" }).click();
   const gmail = page.getByRole("form", { name: "Connect Gmail" });
   await expect(gmail).toContainText("Only the items you select from Gmail are read.");
-  await expect(gmail).toContainText("Google's sign-in page opens in your browser. Reading only; sending is a separate permission");
+  await expect(gmail).toContainText("Composio's sign-in page opens in your browser. Composio holds your Gmail sign-in for TARS");
   await expect(gmail.getByRole("textbox")).toHaveCount(1);
   await gmail.getByLabel("Gmail label IDs to read, separated by commas").fill("Label_42");
-  await gmail.getByRole("button", { name: "Continue to Google sign-in" }).click();
+  await gmail.getByRole("button", { name: "Continue to Composio sign-in" }).click();
   expect((await calls(page)).at(-1)).toEqual(["connect", "gmail", { projectId: "guides", selectors: ["Label_42"], writeTargets: [] }]);
-  await expect(source("Gmail")).toContainText("Finish in your browser. Gmail turns on here when Google confirms it.");
+  await expect(source("Gmail")).toContainText("Finish in your browser. Gmail turns on here when Composio confirms it.");
   await expect(source("Gmail").locator(".source-state")).toHaveText("Off");
   // Canvas asks for its address too.
   await source("Canvas").getByRole("button", { name: "Connect Canvas" }).click();

@@ -109,6 +109,8 @@ export default defineSchema({
     // Maps an incoming delivery to this connection (Slack team id, Canvas origin, ...).
     accountKey: v.string(),
     credential: v.string(), // sealed JSON object of named secrets
+    // "composio": Composio holds the provider tokens and accountKey is its connected account id.
+    broker: v.optional(v.literal("composio")),
     webhookSecret: v.optional(v.string()), // sealed per-subscription signing secret
     cursor: v.optional(v.string()),
     subscriptionExpiresAt: v.optional(v.number()),
@@ -333,14 +335,14 @@ export default defineSchema({
     ownerId: v.string(),
     projectId: v.string(),
     taskId: v.optional(v.string()),
-    kind: v.union(v.literal("update-note"), v.literal("send-mail")),
+    kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message")),
     destination: v.string(),
     artifactId: v.string(),
     revision: v.string(),
     contentHash: v.string(),
     instructionId: v.string(),
     sourceId: v.string(), // the source the effect goes through
-    provider: v.string(), // gmail | outlook-mail | notion
+    provider: v.string(), // gmail | outlook-mail | notion | composio-gmail | composio-slack
     body: v.string(), // the approved text at `revision`
     state: v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("unknown")),
     externalId: v.optional(v.string()), // provider message/block id, kept for lookup

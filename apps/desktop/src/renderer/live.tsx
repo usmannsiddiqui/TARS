@@ -307,6 +307,9 @@ export function CalendarLive({ projects }: { projects: ProjectSummary[] | null }
 // ---- Project.
 
 const MAILBOXES = ["gmail", "outlook-mail"];
+// Through Composio, Gmail sends and Slack posts; the other Composio toolkits only read.
+const COMPOSIO_SENDERS = ["gmail", "slack"];
+const canSend = (c: { provider: string; broker?: string }) => (c.broker === "composio" ? COMPOSIO_SENDERS : MAILBOXES).includes(c.provider);
 
 const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; undoRevision?: string; artifact: { revision: string } }): RevisionOutcome => ({
   status: r.status,
@@ -338,7 +341,8 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const connections = useQuery(api.connections.listConnections, {});
   const gmailSendConsent = useMutation(api.connectors.gmail.startSendConsent);
   const outlookSendConsent = useMutation(api.connectors.outlook.startSendConsent);
-  const mailboxes = (connections ?? []).filter((c) => MAILBOXES.includes(c.provider));
+  const composioAllowSend = useAction(api.connectors.composio.allowSend);
+  const mailboxes = (connections ?? []).filter(canSend);
   // Notes folders on this Mac, read once: a log note is picked inside one of them.
   const [notes, setNotes] = useState<{ id: string; name: string; cloudProcessing: boolean }[]>([]);
   useEffect(() => {
@@ -375,15 +379,18 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
         return picked && { target: picked.target, name: picked.name };
       },
     },
-    // Send consent is its own provider page, for exactly the mailbox that will send; it opens in the browser.
+    // Send consent is its own step for exactly the account that will send: a provider page in the browser,
+    // or, when Composio holds the sign-in, TARS's own permission recorded on the click.
     sendConsent:
       mailboxes.length === 0
-        ? { blocked: "Connect Gmail or Outlook mail in Connections first. Nothing was sent." }
+        ? { blocked: "Connect Gmail, Outlook mail or Slack in Connections first. Nothing was sent." }
         : {
             mailboxes: mailboxes.map((c) => ({
               name: SOURCE_NAME[c.provider] ?? c.provider,
               start: async () =>
-                window.companion.openExternalAuth(await (c.provider === "gmail" ? gmailSendConsent : outlookSendConsent)({ sourceId: c.sourceId })),
+                c.broker === "composio"
+                  ? void (await composioAllowSend({ sourceId: c.sourceId }))
+                  : window.companion.openExternalAuth(await (c.provider === "gmail" ? gmailSendConsent : outlookSendConsent)({ sourceId: c.sourceId })),
             })),
           },
   };
@@ -468,7 +475,11 @@ const CLOUD: { provider: CloudProvider; name: string; coverage: string }[] = [
   { provider: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh." },
   { provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select." },
   { provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting." },
+  { provider: "teams", name: "Microsoft Teams", coverage: "Connects now; new Teams messages cannot arrive yet, because Composio has no Teams message trigger." },
 ];
+/** These cards connect through Composio's hosted sign-in; the others connect directly. */
+const VIA_COMPOSIO: CloudProvider[] = ["slack", "gmail", "outlook-mail", "teams"];
+const viaComposio = (p: CloudProvider): p is "slack" | "gmail" | "outlook-mail" | "teams" => VIA_COMPOSIO.includes(p);
 // The Convex HTTP actions (provider webhooks) are served from the deployment's .site origin.
 const SITE_URL = import.meta.env.CONVEX_URL.replace(/\.convex\.cloud$/, ".convex.site");
 
@@ -476,15 +487,13 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
   const cloud = useCloud();
   const connections = useQuery(api.connections.listConnections, cloud.ready ? {} : "skip");
   const setGrant = useMutation(api.evidence.setGrant);
-  const connectSlack = useAction(api.connectors.slack.connect);
   const connectNotion = useAction(api.connectors.notion.connect);
   const connectCanvas = useAction(api.connectors.canvas.connect);
   const revealNotion = useAction(api.connectors.notion.revealVerificationToken);
   const refreshCanvas = useAction(api.connectors.canvas.refreshByUser);
-  const refreshGmail = useAction(api.connectors.gmail.refresh);
   const refreshOutlook = useAction(api.connectors.outlook.refresh);
-  const startGmail = useMutation(api.connectors.gmail.startConnect);
   const startOutlook = useMutation(api.connectors.outlook.startConnect);
+  const startComposio = useAction(api.connectors.composio.startConnect);
   const setGrantState = useMutation(api.evidence.setGrantState);
   const [local, setLocal] = useState<LocalSourceView[] | null>(null);
   const [missingPermission, setPermissionMissing] = useState<Set<string>>(new Set());
@@ -591,11 +600,11 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
       await setGrant(grant);
       try {
         const credential = form.credential ?? "";
-        if (provider === "slack") await connectSlack({ sourceId: grant.id, botToken: credential });
-        else if (provider === "notion") await connectNotion({ sourceId: grant.id, token: credential });
+        if (provider === "notion") await connectNotion({ sourceId: grant.id, token: credential });
         else if (provider === "canvas") await connectCanvas({ sourceId: grant.id, baseUrl: form.baseUrl ?? "", token: credential });
-        // OAuth: the provider's page opens in the system browser; the connection appears when its callback lands.
-        else await window.companion.openExternalAuth(await (provider === "gmail" ? startGmail : startOutlook)({ sourceId: grant.id }));
+        // Sign-in pages open in the system browser; the connection appears when its callback lands.
+        else if (viaComposio(provider)) await window.companion.openExternalAuth(await startComposio({ sourceId: grant.id, kind: provider }));
+        else await window.companion.openExternalAuth(await startOutlook({ sourceId: grant.id }));
       } catch (err) {
         // Never leave an active grant behind a failed connect; the original error is the one to show.
         await setGrant({ ...grant, selectors: [], writeTargets: [], read: false, version: grant.version + 1, state: "revoked" }).catch(() => undefined);
@@ -604,8 +613,7 @@ export function ConnectionsLive({ projects }: { projects: { id: string; name: st
     },
     onRefresh: async (row) => {
       if (row.provider === "canvas") await refreshCanvas({ sourceId: row.id });
-      else if (row.provider === "gmail") await refreshGmail({ sourceId: row.id });
-      else if (row.provider === "outlook-mail" || row.provider === "outlook-calendar") await refreshOutlook({ sourceId: row.id, kind: row.provider });
+      else if (row.provider === "outlook-calendar") await refreshOutlook({ sourceId: row.id, kind: row.provider });
     },
     // The stored grant's next version: the change survives a reload and every window sees it.
     onPause: async (row) => void (await setGrantState({ sourceId: row.id, state: "paused" })),

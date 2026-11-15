@@ -48,7 +48,7 @@ const EVENT_SELECT = "$select=subject,start,end,isCancelled,lastModifiedDateTime
 const TEXT_BODY = { prefer: 'outlook.body-content-type="text"' };
 
 type Secrets = { refreshToken: string; clientState: string; subscriptions: string };
-type GraphMessage = {
+export type GraphMessage = {
   id: string;
   subject?: string;
   from?: { emailAddress?: { name?: string; address?: string } };
@@ -121,7 +121,7 @@ async function accessToken(ctx: RunCtx, sourceId: string, kind: Kind, secrets: S
 
 // ---- Item mapping
 
-function mailItem(message: GraphMessage): ProviderItem | null {
+export function mailItem(message: GraphMessage): ProviderItem | null {
   if (message.receivedDateTime === undefined || Number.isNaN(Date.parse(message.receivedDateTime))) return null;
   const from = message.from?.emailAddress;
   const sender = from === undefined ? "" : `${from.name ?? ""} <${from.address ?? ""}>`.trim();

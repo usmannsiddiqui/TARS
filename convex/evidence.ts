@@ -75,21 +75,29 @@ const WATCHED_KINDS = new Set(["gmail", "outlook-mail", "outlook-calendar"]);
 
 /**
  * The one way a stored grant changes: a strictly newer version. Entering "revoked" on a connected
- * Gmail/Outlook source hands one provider cleanup (stop watch / delete subscriptions) to an action.
+ * Gmail/Outlook/Composio source hands one provider cleanup (stop watch / delete subscriptions /
+ * delete the Composio account) to an action.
  */
 async function replaceGrant(ctx: MutationCtx, existing: Doc<"grants">, next: Omit<Doc<"grants">, "_id" | "_creationTime">) {
   if (next.version <= existing.version) {
     throw new ConvexError(`Grant version must be greater than ${existing.version}`);
   }
   await ctx.db.replace(existing._id, next);
-  if (next.state !== "revoked" || existing.state === "revoked" || !WATCHED_KINDS.has(existing.kind)) return;
+  if (next.state !== "revoked" || existing.state === "revoked") return;
   const connection = await ctx.db
     .query("connections")
     .withIndex("by_source", (q) => q.eq("sourceId", existing.id))
     .unique();
   if (connection === null) return;
-  const stop = existing.kind === "gmail" ? internal.connectors.gmail.stopWatch : internal.connectors.outlook.stopSubscriptions;
-  await ctx.scheduler.runAfter(0, stop, { sourceId: existing.id, grantVersion: next.version });
+  const stop =
+    connection.broker === "composio"
+      ? internal.connectors.composio.disconnect // delete the connected account and its triggers
+      : !WATCHED_KINDS.has(existing.kind)
+        ? null
+        : existing.kind === "gmail"
+          ? internal.connectors.gmail.stopWatch
+          : internal.connectors.outlook.stopSubscriptions;
+  if (stop !== null) await ctx.scheduler.runAfter(0, stop, { sourceId: existing.id, grantVersion: next.version });
 }
 
 export const intakeResult = v.union(v.literal("accepted"), v.literal("duplicate"), v.literal("denied"));

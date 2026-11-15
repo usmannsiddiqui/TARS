@@ -13,6 +13,7 @@ import type * as artifacts from "../artifacts.js";
 import type * as briefs from "../briefs.js";
 import type * as connections from "../connections.js";
 import type * as connectors_canvas from "../connectors/canvas.js";
+import type * as connectors_composio from "../connectors/composio.js";
 import type * as connectors_gmail from "../connectors/gmail.js";
 import type * as connectors_notion from "../connectors/notion.js";
 import type * as connectors_outlook from "../connectors/outlook.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   briefs: typeof briefs;
   connections: typeof connections;
   "connectors/canvas": typeof connectors_canvas;
+  "connectors/composio": typeof connectors_composio;
   "connectors/gmail": typeof connectors_gmail;
   "connectors/notion": typeof connectors_notion;
   "connectors/outlook": typeof connectors_outlook;
