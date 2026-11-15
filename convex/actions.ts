@@ -14,7 +14,7 @@ import {
 } from "../packages/domain/src/actions";
 import type { Artifact } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   action,
   type ActionCtx,
@@ -22,6 +22,7 @@ import {
   internalMutation,
   internalQuery,
   mutation,
+  type MutationCtx,
   query,
   type QueryCtx,
 } from "./_generated/server";
@@ -38,7 +39,7 @@ const normalizePage = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 const receipt = v.object({
   id: v.string(),
-  kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message")),
+  kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message"), v.literal("send-document")),
   destination: v.string(), // the address or Notion page id the user named
   revision: v.string(), // the artifact revision the instruction was bound to
   state: v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("unknown")),
@@ -129,7 +130,7 @@ export const executeIntent = action({
     });
     if (!("actionId" in reserved)) return reserved;
     const row: Doc<"actions"> = await ctx.runQuery(internal.actions.loadAction, { ownerId, actionId: reserved.actionId });
-    return settle(ctx, row, await perform(ctx, row));
+    return runReserved(ctx, row);
   },
 });
 
@@ -137,73 +138,94 @@ export const executeIntent = action({
 export const reserve = internalMutation({
   args: { ownerId: v.string(), ...intentArgs },
   returns: v.union(v.object({ actionId: v.string() }), receipt, clarification),
-  handler: async (ctx, { ownerId, ...intent }): Promise<{ actionId: string } | Receipt | Clarification> => {
-    const existing = await ctx.db
-      .query("actions")
-      .withIndex("by_instruction", (q) => q.eq("ownerId", ownerId).eq("instructionId", intent.instructionId))
-      .unique();
-    if (existing !== null) return toReceipt(existing);
-    await requireOwnedProject(ctx, ownerId, intent.projectId);
-    const artifactId = ctx.db.normalizeId("artifacts", intent.artifactId);
-    const artifact = artifactId === null ? null : await ctx.db.get(artifactId);
-    // Text is immutable per revision, so an equal revision still carries the hashed text.
-    if (artifact === null || artifact.ownerId !== ownerId || artifact.revision !== intent.revision) {
-      return clarify("The draft changed after you asked. Check the current version and ask again.");
-    }
-    if (intent.taskId !== undefined) {
-      const taskId = ctx.db.normalizeId("commitments", intent.taskId);
-      const task = taskId === null ? null : await ctx.db.get(taskId);
-      if (task === null || task.ownerId !== ownerId || task.projectId !== intent.projectId) {
-        return clarify("That task is not part of this project.");
-      }
-    }
-
-    const grants = await activeGrants(ctx, ownerId, intent.projectId);
-    let route: { sourceId: string; provider: string };
-    if (intent.kind === "send-mail" || intent.kind === "post-message") {
-      const kinds = intent.kind === "send-mail" ? MAIL_KINDS : ["slack"];
-      const senders = [];
-      for (const grant of grants.filter((g) => kinds.includes(g.kind))) {
-        const permission = await ctx.db
-          .query("sendPermissions")
-          .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
-          .unique();
-        if (permission?.ownerId !== ownerId) continue;
-        const connection = await ctx.db
-          .query("connections")
-          .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
-          .unique();
-        senders.push({ sourceId: grant.id, provider: connection?.broker === "composio" ? `composio-${grant.kind}` : grant.kind });
-      }
-      // Never a silent downgrade: no send consent means no send.
-      if (senders.length === 0) throw new ConvexError("missing-send-permission");
-      if (senders.length > 1) return clarify(intent.kind === "send-mail" ? "Which mailbox should send it?" : "Which Slack workspace should post it?");
-      route = senders[0]!;
-    } else {
-      const page = grants.find(
-        (g) => g.kind === "notion" && g.writeTargets.some((w) => normalizePage(w) === normalizePage(intent.destination)),
-      );
-      // shortcut: update-note to an Obsidian note is not wired as an action (only as the log); add a desktop-reported path if needed.
-      if (page === undefined) return clarify("That page is not one you designated for TARS to write to.");
-      route = { sourceId: page.id, provider: "notion" };
-    }
-    const actionId = await ctx.db.insert("actions", {
-      ownerId,
-      ...intent,
-      ...route,
-      body: artifact.text,
-      state: "running",
-      logState: "not-due",
-    });
-    return { actionId };
-  },
+  handler: (ctx, { ownerId, ...intent }) => reserveAction(ctx, ownerId, intent),
 });
+
+/** What a send-document reservation binds beyond the intent: the mail itself and its document. */
+type DocumentMail = { subject: string; body: string; documentId: Id<"artifactDocuments">; stages: NonNullable<Doc<"actions">["stages"]> };
+type Intent = Omit<Infer<ReturnType<typeof v.object<typeof intentArgs>>>, "kind"> & { kind: Doc<"actions">["kind"] };
+
+/** The reservation itself; `mail` is required for (and only for) send-document. */
+export async function reserveAction(
+  ctx: MutationCtx,
+  ownerId: string,
+  intent: Intent,
+  mail?: DocumentMail,
+): Promise<{ actionId: string } | Receipt | Clarification> {
+  if ((intent.kind === "send-document") !== (mail !== undefined)) throw new ConvexError("A document send needs its mail");
+  const existing = await ctx.db
+    .query("actions")
+    .withIndex("by_instruction", (q) => q.eq("ownerId", ownerId).eq("instructionId", intent.instructionId))
+    .unique();
+  if (existing !== null) return toReceipt(existing);
+  await requireOwnedProject(ctx, ownerId, intent.projectId);
+  const artifactId = ctx.db.normalizeId("artifacts", intent.artifactId);
+  const artifact = artifactId === null ? null : await ctx.db.get(artifactId);
+  // Text is immutable per revision, so an equal revision still carries the hashed text.
+  if (artifact === null || artifact.ownerId !== ownerId || artifact.revision !== intent.revision) {
+    return clarify("The draft changed after you asked. Check the current version and ask again.");
+  }
+  if (intent.taskId !== undefined) {
+    const taskId = ctx.db.normalizeId("commitments", intent.taskId);
+    const task = taskId === null ? null : await ctx.db.get(taskId);
+    if (task === null || task.ownerId !== ownerId || task.projectId !== intent.projectId) {
+      return clarify("That task is not part of this project.");
+    }
+  }
+
+  const grants = await activeGrants(ctx, ownerId, intent.projectId);
+  let route: { sourceId: string; provider: string };
+  if (intent.kind !== "update-note") {
+    const kinds = intent.kind === "post-message" ? ["slack"] : MAIL_KINDS;
+    const senders = [];
+    for (const grant of grants.filter((g) => kinds.includes(g.kind))) {
+      const permission = await ctx.db
+        .query("sendPermissions")
+        .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
+        .unique();
+      if (permission?.ownerId !== ownerId) continue;
+      const connection = await ctx.db
+        .query("connections")
+        .withIndex("by_source", (q) => q.eq("sourceId", grant.id))
+        .unique();
+      senders.push({ sourceId: grant.id, provider: connection?.broker === "composio" ? `composio-${grant.kind}` : grant.kind });
+    }
+    // Never a silent downgrade: no send consent means no send.
+    if (senders.length === 0) throw new ConvexError("missing-send-permission");
+    if (senders.length > 1) return clarify(intent.kind === "post-message" ? "Which Slack workspace should post it?" : "Which mailbox should send it?");
+    route = senders[0]!;
+    // The document mail carries its own subject, which only the Composio Gmail send passes through.
+    if (intent.kind === "send-document" && route.provider !== "composio-gmail") return clarify("Connect Gmail through Composio to send the document.");
+  } else {
+    const page = grants.find(
+      (g) => g.kind === "notion" && g.writeTargets.some((w) => normalizePage(w) === normalizePage(intent.destination)),
+    );
+    // shortcut: update-note to an Obsidian note is not wired as an action (only as the log); add a desktop-reported path if needed.
+    if (page === undefined) return clarify("That page is not one you designated for TARS to write to.");
+    route = { sourceId: page.id, provider: "notion" };
+  }
+  const actionId = await ctx.db.insert("actions", {
+    ownerId,
+    ...intent,
+    ...route,
+    body: artifact.text,
+    ...(mail === undefined ? {} : mail),
+    state: "running",
+    logState: "not-due",
+  });
+  return { actionId };
+}
 
 // ---- Effects and lookups, one per supported write. No arbitrary tool executor.
 
-function perform(ctx: ActionCtx, row: Doc<"actions">): Promise<EffectOutcome> {
+/** The one effect for a reserved, running action, then its outcome. `onSent`: the provider accepted it, before read-back. */
+export async function runReserved(ctx: ActionCtx, row: Doc<"actions">, onSent?: () => Promise<void>): Promise<Receipt> {
+  return settle(ctx, row, await perform(ctx, row, onSent));
+}
+
+function perform(ctx: ActionCtx, row: Doc<"actions">, onSent?: () => Promise<void>): Promise<EffectOutcome> {
   const mail = { actionId: row._id, sourceId: row.sourceId, to: row.destination, body: row.body };
-  if (row.provider.startsWith("composio-")) return composio.perform(ctx, row);
+  if (row.provider.startsWith("composio-")) return composio.perform(ctx, row, onSent);
   if (row.provider === "gmail") return gmail.sendMail(ctx, mail);
   if (row.provider === "outlook-mail") return outlook.sendMail(ctx, mail);
   return notion.appendMarked(ctx, noteJob(row));
@@ -258,6 +280,8 @@ export const recordOutcome = internalMutation({
       externalId: externalId ?? row.externalId,
       reason: verified ? undefined : reason,
       ...(verified ? { verifiedAt: new Date().toISOString(), logState: destination === null ? "not-due" : "pending" } : {}),
+      // A later check that proves delivery closes the send and verify stages it left open.
+      ...(verified && row.stages !== undefined ? { stages: row.stages.map((s) => (s.state === "done" ? s : { name: s.name, state: "done" as const, ...(s.startedAt === undefined ? {} : { startedAt: s.startedAt }), endedAt: Date.now() })) } : {}),
     });
     if (verified && row.taskId !== undefined) {
       const taskId = ctx.db.normalizeId("commitments", row.taskId);
@@ -430,7 +454,7 @@ export const reportDone = mutation({
     const ownerId = await requireOwnerId(ctx);
     const task = await requireOwnedCommitment(ctx, ownerId, taskId);
     if (task.state === "verified-done") return "verified-done";
-    await ctx.db.patch(task._id, { state: "user-reported-done" });
+    await ctx.db.patch(task._id, { state: "user-reported-done", doneAt: Date.now() });
     return "user-reported-done";
   },
 });

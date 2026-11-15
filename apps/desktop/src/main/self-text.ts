@@ -1,5 +1,6 @@
 // Nudges texted to the user's own phone through Messages on this Mac. The only recipient is the one
 // handle the user saved here; nothing reads messages or lists chats. index.ts injects execFile and prefs.
+import { recapText, type ClosingRecap } from "@companion/domain/recap";
 import { z } from "zod";
 
 const PHONE = /^\+[1-9]\d{6,14}$/; // E.164: international form, digits only
@@ -44,6 +45,7 @@ function resultOf(error: unknown): SelfTextResult {
 
 export function createSelfText(deps: SelfTextDeps) {
   let lastNudge: SelfTextResult | undefined; // this run only: a failed text is shown, never retried
+  let lastRecap: SelfTextResult | undefined; // this run only: the stopped view shows it and offers "Send again"
 
   async function send(text: string): Promise<SelfTextResult> {
     const setting = deps.load();
@@ -57,7 +59,7 @@ export function createSelfText(deps: SelfTextDeps) {
   }
 
   return {
-    get: () => ({ ...(deps.load() ?? { enabled: false, handle: "" }), ...(lastNudge ? { lastNudge } : {}) }),
+    get: () => ({ ...(deps.load() ?? { enabled: false, handle: "" }), ...(lastNudge ? { lastNudge } : {}), ...(lastRecap ? { lastRecap } : {}) }),
     set(setting: SelfTextSetting): SelfTextSetting {
       const parsed = SelfTextSettingSchema.parse(setting);
       deps.save(parsed);
@@ -69,6 +71,11 @@ export function createSelfText(deps: SelfTextDeps) {
     async sendNudge(body: string): Promise<SelfTextResult | "off"> {
       if (!deps.load()?.enabled) return "off";
       return (lastNudge = await send(`${body} Open TARS to finish it together.`));
+    },
+    /** The user's "Stop for now" (or "Send again"): the closing recap as one message, item titles only. */
+    async sendRecap(recap: ClosingRecap): Promise<SelfTextResult | "off"> {
+      if (!deps.load()?.enabled) return "off";
+      return (lastRecap = await send(recapText(recap)));
     },
   };
 }

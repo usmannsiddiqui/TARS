@@ -7,6 +7,7 @@ import { ConvexError, v } from "convex/values";
 import { z } from "zod";
 import { contentHash, mailSubject, outcomeForFailure, sameContent, type EffectOutcome } from "../../packages/domain/src/actions";
 import { isWriteTool, parseRepositories } from "../../packages/domain/src/composio";
+import { mailFields } from "../../packages/domain/src/delivery";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -408,6 +409,7 @@ function gmailItem(grant: SourceGrant, message: z.infer<typeof GmailEvent>, fall
     version: message_id, // Gmail message content is immutable: one version per message
     text: `From: ${sender ?? ""}\nSubject: ${subject ?? ""}\n\n${(message_text ?? "").trim()}`.slice(0, MAX_TEXT),
     occurredAt: isoTime(message_timestamp, fallbackTime),
+    ...mailFields(sender, subject),
   };
 }
 
@@ -544,7 +546,7 @@ const SlackPosted = z.object({ ok: z.literal(true), channel: z.string().min(1), 
 const SlackHistory = z.object({ messages: z.array(z.object({ ts: z.string(), text: z.string().optional() })) });
 
 /** The effect for one reserved action. A tool that ran but reported an error may have delivered: unknown. */
-export async function perform(ctx: RunCtx, row: Doc<"actions">): Promise<EffectOutcome> {
+export async function perform(ctx: RunCtx, row: Doc<"actions">, onSent?: () => Promise<void>): Promise<EffectOutcome> {
   const { connection } = await ctx.runQuery(internal.connections.context, { sourceId: row.sourceId });
   if (connection?.broker !== "composio") return { state: "failed", reason: "not_connected" }; // nothing was sent
   if (row.provider !== "composio-gmail" && row.provider !== "composio-slack") return { state: "failed", reason: "unsupported" };
@@ -553,7 +555,7 @@ export async function perform(ctx: RunCtx, row: Doc<"actions">): Promise<EffectO
   let result: z.infer<typeof ToolResult>;
   try {
     result = gmail
-      ? await runTool("GMAIL_SEND_EMAIL", account, { recipient_email: row.destination, subject: mailSubject(row.body), body: row.body })
+      ? await runTool("GMAIL_SEND_EMAIL", account, { recipient_email: row.destination, subject: row.subject ?? mailSubject(row.body), body: row.body })
       : // shortcut: `text` is Slack's deprecated plain field; it keeps the stored text equal to what was approved.
         await runTool("SLACK_CHAT_POST_MESSAGE", account, { channel: row.destination, text: row.body });
   } catch (error) {
@@ -561,6 +563,7 @@ export async function perform(ctx: RunCtx, row: Doc<"actions">): Promise<EffectO
     throw error;
   }
   if (!result.successful) return { state: "unknown", reason: "tool_error" };
+  await onSent?.();
   if (gmail) {
     const sent = GmailSent.safeParse(result.data);
     return sent.success ? readBack(account, row, sent.data.id) : { state: "unknown", reason: "no_message_id" };

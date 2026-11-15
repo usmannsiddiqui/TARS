@@ -5,6 +5,7 @@ import type { ActionIntent, Artifact } from "./types";
 
 // One plain address: no whitespace (so no CR/LF header injection), no lists, no display names.
 const MAIL_ADDRESS = /^[^\s@<>,;"()[\]\\]+@[^\s@<>,;"()[\]\\]+\.[^\s@<>,;"()[\]\\]+$/;
+export const isMailAddress = (address: string) => MAIL_ADDRESS.test(address);
 const MAX_SUBJECT = 120;
 // One Slack conversation id (public/private channel or DM), never a name or a list.
 const SLACK_CHANNEL = /^[CGD][A-Z0-9]{8,}$/;
@@ -62,6 +63,8 @@ export function outcomeLogEntry(outcome: {
   const what =
     outcome.kind === "send-mail"
       ? `Sent mail to ${outcome.destination}`
+      : outcome.kind === "send-document"
+        ? `Sent the Word document to ${outcome.destination}`
       : outcome.kind === "post-message"
         ? `Posted to Slack channel ${outcome.destination}`
         : `Updated note ${outcome.destination}`;

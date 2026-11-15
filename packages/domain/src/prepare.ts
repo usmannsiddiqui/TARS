@@ -100,6 +100,10 @@ export function assemblePreparation(
   }
 
   const gaps = output.gaps.map((gap) => gap.trim()).filter((gap) => gap !== "");
+  // A deliverable marks what the evidence does not cover in place; each such line is a gap too.
+  for (const [, need] of body.matchAll(/\[Needs from you:\s*([^\]\n]+?)\s*\]/g)) {
+    if (!gaps.some((gap) => squash(gap) === squash(need!))) gaps.push(need!);
+  }
   if (omitted > 0) gaps.push(omitted === 1 ? "1 older source was not read." : `${omitted} older sources were not read.`);
   if (evidenceIds.some((id) => byId.get(id)?.freshness !== "current")) gaps.push("Some cited sources may be out of date.");
   if (tainted.size > 0) gaps.push("A source contained instructions addressed to the assistant; they were ignored.");

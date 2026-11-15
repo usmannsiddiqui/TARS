@@ -1573,6 +1573,7 @@ li[data-done] {
   display: grid;
   place-items: center;
   height: 100%;
+  overflow-y: auto; /* the recap can outgrow a short window */
   padding: 32px;
 }
 

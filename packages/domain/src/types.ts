@@ -1,6 +1,7 @@
 // Shared data contracts (build contract, "Shared data types"). Pure: no I/O.
 // Types that cross a boundary in T1/T2 have Zod schemas; the rest are plain TS.
 import { z } from "zod";
+import { isMailAddress } from "./actions";
 
 // ---- Branded IDs: opaque strings that cannot be mixed up at compile time.
 const id = <B extends string>(brand: B) => z.string().min(1).brand(brand);
@@ -82,6 +83,11 @@ export const EvidenceSchema = z.strictObject({
   grantVersion: z.number().int().nonnegative(),
   freshness: z.enum(["current", "stale", "unknown"]),
   origin: z.enum(["live", "imported", "illustrative"]),
+  // Mail only, from the provider's own header fields at intake (never parsed out of the text).
+  from: z
+    .strictObject({ name: z.string().max(200).exactOptional(), address: z.string().refine(isMailAddress) })
+    .exactOptional(),
+  subject: z.string().max(1000).exactOptional(),
 });
 export type Evidence = z.infer<typeof EvidenceSchema>;
 
@@ -191,7 +197,7 @@ export type ActionIntent = {
   ownerId: OwnerId;
   projectId: ProjectId;
   taskId?: TaskId;
-  kind: "update-note" | "send-mail" | "post-message";
+  kind: "update-note" | "send-mail" | "post-message" | "send-document";
   destination: string;
   artifactId: ArtifactId;
   revision: RevisionId;

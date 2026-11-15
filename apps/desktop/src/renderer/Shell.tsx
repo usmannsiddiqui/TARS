@@ -3,6 +3,8 @@
 // The rail follows a desktop sidebar: icon rows for each place, a "Projects" disclosure with the focus
 // project's own items under a guide line, and the account as one compact row at the foot.
 import { useState, type ReactNode } from "react";
+import { RECAP_EMPTY, type ClosingRecap, type RecapList } from "@companion/domain/recap";
+import type { SelfTextResult } from "../main/self-text";
 import type { ProjectSummary, SessionEvent, SessionState } from "./model";
 import { Desk } from "./Desk";
 
@@ -172,8 +174,52 @@ export function Shell({ route, projects, focusProjectId, account, pet, session, 
   );
 }
 
-/** The screen after "Stop for now": nothing new starts, the place is kept. */
-export function Stopped({ projectName, note, onResume }: { projectName?: string; note?: string; onResume(): void }) {
+/** What happened to the recap text, in plain words. "off": Texts to me is off, so nothing is said. */
+export type RecapTextState = SelfTextResult | "off" | "sending";
+const TEXT_RESULT: Record<Exclude<RecapTextState, "off">, string> = {
+  sending: "Sending this to your phone…",
+  sent: "Sent to your phone.",
+  "not-permitted": "macOS did not allow TARS to use Messages.",
+  "no-messages-account": "There is no Messages account on this Mac.",
+  failed: "The text to your phone did not send.",
+};
+
+function RecapSection({ heading, list, empty }: { heading: string; list: RecapList; empty: string }) {
+  const id = `recap-${heading.toLowerCase()}`;
+  return (
+    <section aria-labelledby={id}>
+      <h2 id={id} className="block-title">
+        {heading}
+      </h2>
+      {list.items.length === 0 ? (
+        <p className="small">{empty}</p>
+      ) : (
+        <ul className="plain recap">
+          {list.items.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+          {list.more > 0 && <li>and {list.more} more</li>}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** The screen after "Stop for now": nothing new starts, the place is kept, and today's recap is shown. */
+export function Stopped({
+  projectName,
+  note,
+  recap,
+  text,
+  onResume,
+}: {
+  projectName?: string;
+  note?: string;
+  /** undefined while it loads; absent lists are never invented. */
+  recap?: ClosingRecap;
+  text?: { state: RecapTextState; onSendAgain(): void };
+  onResume(): void;
+}) {
   return (
     <main className="stopped">
       <section className="stopped-slab" aria-labelledby="stopped-h">
@@ -181,6 +227,23 @@ export function Stopped({ projectName, note, onResume }: { projectName?: string;
           <h1 id="stopped-h">Stopped for now.</h1>
           <p>{projectName ? `${projectName} is where you left it.` : "Your place is kept."} Nothing new will start until you come back.</p>
           {note && <p role="alert">{note}</p>}
+          {recap && (
+            <>
+              <RecapSection heading="Done" list={recap.done} empty={RECAP_EMPTY.done} />
+              <RecapSection heading="Parked" list={recap.parked} empty={RECAP_EMPTY.parked} />
+              <RecapSection heading="Left" list={recap.left} empty={RECAP_EMPTY.left} />
+            </>
+          )}
+          {text && text.state !== "off" && (
+            <p className="small" role="status">
+              {TEXT_RESULT[text.state]}{" "}
+              {text.state !== "sending" && (
+                <button type="button" className="text-button" onClick={text.onSendAgain}>
+                  Send again
+                </button>
+              )}
+            </p>
+          )}
           <button type="button" className="secondary" onClick={onResume} autoFocus>
             Come back
           </button>

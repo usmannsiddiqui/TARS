@@ -31,6 +31,9 @@ export const evidenceFields = {
   grantVersion: v.number(),
   freshness: v.string(),
   origin: v.string(),
+  // Mail only: the sender and subject from the provider's header fields, set at intake.
+  from: v.optional(v.object({ name: v.optional(v.string()), address: v.string() })),
+  subject: v.optional(v.string()),
 };
 
 /** Shown to the user as Connected / Stale / Missing access / Needs retry; never "empty". */
@@ -82,6 +85,14 @@ export const artifactFields = {
 /** Block specs as stored; their props are checked by the domain catalog's Zod schemas before writing. */
 export const threadBlocks = v.array(v.object({ id: v.string(), type: v.string(), props: v.any() }));
 
+export const actionStage = v.object({
+  name: v.union(v.literal("document"), v.literal("link"), v.literal("send"), v.literal("verify")),
+  state: v.union(v.literal("pending"), v.literal("running"), v.literal("done"), v.literal("failed"), v.literal("unknown")),
+  startedAt: v.optional(v.number()),
+  endedAt: v.optional(v.number()),
+  detail: v.optional(v.string()), // the honest wording for failed/unknown, never provider content
+});
+
 /** FocusState (domain type). */
 export const focusFields = {
   projectId: v.optional(v.string()),
@@ -104,7 +115,8 @@ export default defineSchema({
   // isCurrent marks the revision with the latest occurredAt for its (sourceId, externalId).
   evidence: defineTable({ ...evidenceFields, isCurrent: v.boolean() })
     .index("by_item", ["ownerId", "sourceId", "externalId"])
-    .index("by_owner_current", ["ownerId", "isCurrent"]),
+    .index("by_owner_current", ["ownerId", "isCurrent"])
+    .index("by_owner_id", ["ownerId", "id"]),
 
   // One provider connection per grant (sourceId). Secrets are sealed with encryptSecret and
   // read only by internal functions; no query returns them.
@@ -171,7 +183,8 @@ export default defineSchema({
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // Commitment; the row _id is the TaskId.
-  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields }).index(
+  // doneAt: when the user marked it done ("I did it"), for the closing recap.
+  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields, doneAt: v.optional(v.number()) }).index(
     "by_owner_project",
     ["ownerId", "projectId"],
   ),
@@ -210,6 +223,7 @@ export default defineSchema({
     dueJob: v.optional(v.id("_scheduled_functions")),
     lastNudgedAt: v.optional(v.number()),
     offer: v.optional(v.object({ key: v.string(), startedForYou: v.boolean() })),
+    parkedAt: v.optional(v.number()), // when the user last answered "Not now", for the closing recap
   })
     .index("by_owner_key", ["ownerId", "key"]),
 
@@ -279,6 +293,23 @@ export default defineSchema({
   })
     .index("by_token_hash", ["tokenHash"])
     .index("by_artifact", ["artifactId"]),
+
+  // One Word document per artifact revision, made only by delivery.approveAndSend (the user's call).
+  // The link token is made in that action; only its hash is stored, plus a sealed copy for the owner.
+  // storageId is absent until the file is stored; deleting the row (and file) kills the link for good.
+  artifactDocuments: defineTable({
+    ownerId: v.string(),
+    artifactId: v.id("artifacts"),
+    revision: v.string(),
+    contentHash: v.string(), // SHA-256 hex of the revision's text the document was made from
+    filename: v.string(),
+    storageId: v.optional(v.id("_storage")),
+    tokenHash: v.string(),
+    sealedToken: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_artifact_revision", ["artifactId", "revision"])
+    .index("by_token_hash", ["tokenHash"]),
 
   // The chosen FocusState, one row per owner. Written only by user-initiated functions in projects.ts.
   focus: defineTable({ ownerId: v.string(), ...focusFields }).index("by_owner", ["ownerId"]),
@@ -388,9 +419,14 @@ export default defineSchema({
     ownerId: v.string(),
     projectId: v.string(),
     taskId: v.optional(v.string()),
-    kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message")),
+    kind: v.union(v.literal("update-note"), v.literal("send-mail"), v.literal("post-message"), v.literal("send-document")),
     destination: v.string(),
     artifactId: v.string(),
+    // send-document: the bound subject and the Word document whose link the body carries.
+    subject: v.optional(v.string()),
+    documentId: v.optional(v.id("artifactDocuments")),
+    // send-document: the real stages as they happen, for the chat to show.
+    stages: v.optional(v.array(actionStage)),
     revision: v.string(),
     contentHash: v.string(),
     instructionId: v.string(),

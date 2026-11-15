@@ -9,6 +9,7 @@ import {
   sameContent,
   type EffectOutcome,
 } from "../../packages/domain/src/actions";
+import { mailFields } from "../../packages/domain/src/delivery";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -108,6 +109,7 @@ async function fetchMessage(grant: SourceGrant, token: string, id: string): Prom
     version: message.internalDate!,
     text,
     occurredAt: new Date(Number(message.internalDate)).toISOString(),
+    ...mailFields(header("From"), header("Subject")),
   };
 }
 
