@@ -13,8 +13,6 @@ import type { HelperActions } from "./Helpers";
 import { briefSchedule, cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
-import { contentHash } from "../../../../packages/domain/src/actions";
-import type { ActingActions } from "./Act";
 import { ProjectView, type EditorActions, type RevisionOutcome, type Sharing } from "./ProjectView";
 import { Schedule } from "./Schedule";
 import { TarsCalendar } from "./TarsCalendar";
@@ -376,11 +374,6 @@ export function CalendarLive({ projects }: { projects: ProjectSummary[] | null }
 
 // ---- Project.
 
-const MAILBOXES = ["gmail", "outlook-mail"];
-// Through Composio, Gmail sends and Slack posts; the other Composio toolkits only read.
-const COMPOSIO_SENDERS = ["gmail", "slack"];
-const canSend = (c: { provider: string; broker?: string }) => (c.broker === "composio" ? COMPOSIO_SENDERS : MAILBOXES).includes(c.provider);
-
 const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; undoRevision?: string; artifact: { revision: string } }): RevisionOutcome => ({
   status: r.status,
   changeSummary: r.changeSummary,
@@ -388,16 +381,22 @@ const outcome = (r: { status: "applied" | "conflict"; changeSummary: string; und
   ...(r.undoRevision ? { undoRevision: r.undoRevision } : {}),
 });
 
+/** One send's live status: a Convex subscription, never a timer. */
+const useDeliveryStatus = (actionId: string) => useQuery(api.delivery.status, { actionId });
+
 export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
-  const evidence = useQuery(api.evidence.listCurrentEvidence, { projectId });
   const artifact = useQuery(api.artifacts.getArtifact, { projectId });
+  const thread = useQuery(api.thread.listThread, { projectId });
+  const sendMessage = useAction(api.thread.sendMessage);
+  const retryReply = useAction(api.thread.retry);
+  const send = useAction(api.thread.send);
+  const reconcile = useAction(api.actions.reconcileAction);
   const prepare = useAction(api.prepare.prepareProject);
   const create = useMutation(api.artifacts.createFromPrepared);
   const saveEdit = useMutation(api.artifacts.saveEdit);
-  const revise = useAction(api.artifacts.reviseArtifact);
   const undo = useMutation(api.artifacts.undoRevision);
   const apply = useMutation(api.artifacts.applySuggestion);
   const dismiss = useMutation(api.artifacts.dismissSuggestion);
@@ -405,74 +404,11 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const shareArtifact = useAction(api.shares.share);
   const updateShare = useMutation(api.shares.updateShare);
   const stopSharing = useMutation(api.shares.stopSharing);
-  const receipts = useQuery(api.actions.listReceipts, { projectId });
-  const executeIntent = useAction(api.actions.executeIntent);
-  const reconcile = useAction(api.actions.reconcileAction);
-  const appendLog = useAction(api.actions.appendOutcomeLog);
-  const setLog = useMutation(api.actions.setLogDestination);
-  const logDestination = useQuery(api.actions.getLogDestination, { projectId });
   const reportDone = useMutation(api.actions.reportDone);
-  const connections = useQuery(api.connections.listConnections, {});
-  const gmailSendConsent = useMutation(api.connectors.gmail.startSendConsent);
-  const outlookSendConsent = useMutation(api.connectors.outlook.startSendConsent);
-  const composioAllowSend = useAction(api.connectors.composio.allowSend);
-  const mailboxes = (connections ?? []).filter(canSend);
-  // Notes folders on this Mac, read once: a log note is picked inside one of them.
-  const [notes, setNotes] = useState<{ id: string; name: string; cloudProcessing: boolean }[]>([]);
-  useEffect(() => {
-    window.companion.listSources().then(
-      (rows) => setNotes(rows.filter((r) => r.kind === "obsidian" && r.state === "active").map((r) => ({ id: r.id, name: r.name, cloudProcessing: r.cloudProcessing }))),
-      () => setNotes([]),
-    );
-  }, []);
-
-  const acting: ActingActions = {
-    execute: async (intent, saved) => {
-      try {
-        const result = await executeIntent({
-          projectId,
-          ...intent,
-          artifactId: saved.artifactId,
-          revision: saved.revision,
-          contentHash: await contentHash(saved.text),
-        });
-        return "status" in result ? result : { status: "receipt", receipt: result };
-      } catch (err) {
-        // The backend refuses a send without the mailbox's separate send consent; that is a step, not a failure.
-        if (reason(err) === "missing-send-permission") return { status: "missing-send-permission" };
-        throw err;
-      }
-    },
-    reconcile: async (actionId) => void (await reconcile({ actionId })),
-    retryLog: async (actionId) => void (await appendLog({ actionId })),
-    setLogDestination: async (kind, target) => void (await setLog({ projectId, kind, target })),
-    notes: {
-      sources: notes,
-      designate: async (sourceId) => {
-        const picked = await window.companion.designateLogNote(sourceId);
-        return picked && { target: picked.target, name: picked.name };
-      },
-    },
-    // Send consent is its own step for exactly the account that will send: a provider page in the browser,
-    // or, when Composio holds the sign-in, TARS's own permission recorded on the click.
-    sendConsent:
-      mailboxes.length === 0
-        ? { blocked: "Connect Gmail, Outlook mail or Slack in Connections first. Nothing was sent." }
-        : {
-            mailboxes: mailboxes.map((c) => ({
-              name: SOURCE_NAME[c.provider] ?? c.provider,
-              start: async () =>
-                c.broker === "composio"
-                  ? void (await composioAllowSend({ sourceId: c.sourceId }))
-                  : window.companion.openExternalAuth(await (c.provider === "gmail" ? gmailSendConsent : outlookSendConsent)({ sourceId: c.sourceId })),
-            })),
-          },
-  };
 
   const editor: EditorActions = {
     create: async () => void (await create({ projectId })),
     save: async (text, baseRevision) => outcome(await saveEdit({ artifactId: artifact!.id, baseRevision, text })),
-    revise: async (instruction, baseRevision) => outcome(await revise({ artifactId: artifact!.id, baseRevision, instruction })),
     undo: async (expectedCurrent, undoRevision) => outcome(await undo({ artifactId: artifact!.id, expectedCurrent, undoRevision })),
     applySuggestion: async (suggestionId, baseRevision) => outcome(await apply({ suggestionId, baseRevision })),
     dismissSuggestion: async (suggestionId) => void (await dismiss({ suggestionId })),
@@ -488,18 +424,24 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   const loadedPrepared = toPrepared(prepared);
   return (
     <ProjectView
+      projectId={projectId}
       name={props.name}
       isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}
       {...(prepared === undefined ? { preparedState: { kind: "loading" } as Honest } : {})}
-      evidence={toEvidence(evidence)}
+      thread={thread?.map(({ _id, role, text, blocks, createdAt }) => ({ id: _id, role, ...(text === undefined ? {} : { text }), blocks, createdAt }))}
+      chat={{
+        send: async (text) => void (await sendMessage({ projectId, text })),
+        // The one way to send: a missing permission or a needed clarification comes back as a thread message.
+        approve: async (args) => void (await send(args)),
+        retry: async (messageId) => void (await retryReply({ messageId: messageId as Id<"threadMessages"> })),
+        useDeliveryStatus,
+        checkAgain: async (actionId) => void (await reconcile({ actionId })),
+      }}
       commitments={commitments ?? null}
       artifact={artifact === undefined ? undefined : artifact && { id: artifact.id, revision: artifact.revision, text: artifact.text, userEdited: artifact.userEdited, suggestions: artifact.suggestions }}
       editor={editor}
-      receipt={receipts === undefined ? undefined : (receipts.at(-1) ?? null)}
-      acting={acting}
-      logDestination={logDestination}
       sharing={sharing}
       onReportDone={async (taskId) => void (await reportDone({ taskId }))}
       onMakeFocus={props.onMakeFocus}

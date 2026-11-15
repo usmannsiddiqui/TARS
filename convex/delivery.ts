@@ -44,7 +44,7 @@ async function findCommitment(ctx: Pick<QueryCtx, "db">, ownerId: string, projec
 }
 
 /** The sender of the mail this commitment cites, from the stored header fields only. */
-async function requesterFor(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, key: string) {
+export async function requesterFor(ctx: Pick<QueryCtx, "db">, ownerId: string, projectId: string, key: string) {
   const commitment = await findCommitment(ctx, ownerId, projectId, key);
   if (commitment === null) return null;
   const cited: Doc<"evidence">[] = [];

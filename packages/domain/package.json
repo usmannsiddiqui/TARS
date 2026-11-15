@@ -7,7 +7,8 @@
     ".": "./src/types.ts",
     "./artifacts": "./src/artifacts.ts",
     "./attention": "./src/attention.ts",
-    "./recap": "./src/recap.ts"
+    "./recap": "./src/recap.ts",
+    "./thread": "./src/thread.ts"
   },
   "dependencies": {
     "zod": "^4.6.7"

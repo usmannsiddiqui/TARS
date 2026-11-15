@@ -473,10 +473,11 @@ async function start(): Promise<void> {
   const selfText = createSelfText({ run: promisify(execFile), load: () => prefs.get().selfText, save: (selfText) => prefs.set({ selfText }) });
   const shown = new Set<Notification>(); // held until closed, so the click handler survives GC
   startAttentionDelivery({
-    showNotification({ title, body }) {
+    showNotification({ title, body, opens }) {
       const note = new Notification({ title, body });
       shown.add(note);
-      note.on("click", () => void windows.openPanel()); // the user's click opens the panel
+      // The user's click: a nudge opens the app on that project's chat, anything else the panel.
+      note.on("click", () => (opens === "panel" ? void windows.openPanel() : windows.openApp(opens.projectId)));
       note.on("close", () => shown.delete(note));
       note.show();
     },

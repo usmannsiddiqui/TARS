@@ -57,7 +57,7 @@ describe("attention delivery", () => {
     // The subscription fires again before the receipt has round-tripped: still one notification.
     expect(await delivery.handle(morning)).toBe("skipped");
     expect(deps.showNotification).toHaveBeenCalledTimes(1);
-    expect(deps.showNotification).toHaveBeenCalledWith({ title: "Today", body: "Tighten the pitch opening." });
+    expect(deps.showNotification).toHaveBeenCalledWith({ title: "Today", body: "Tighten the pitch opening.", opens: "panel" });
     expect(deps.markDelivered).toHaveBeenCalledTimes(1);
     expect(deps.markDelivered).toHaveBeenCalledWith({ key: "morning:2026-11-14", channel: "notification" });
   });
@@ -104,6 +104,15 @@ describe("attention delivery", () => {
     expect(await delivery.handle(nudge)).toBe("skipped");
     expect(deps.showNotification).toHaveBeenCalledTimes(1);
     expect(texts).toEqual([["+15551234567", "Send the deck to Bob. Your draft is here whenever you want it. Open TARS to finish it together."]]);
+  });
+
+  test("clicking_a_nudge_opens_that_projects_chat_and_everything_else_opens_the_panel", async () => {
+    const { deps, delivery } = fakes();
+    expect(await delivery.handle({ ...nudge!, projectId: "project-budget" })).toBe("notified");
+    expect(deps.showNotification).toHaveBeenLastCalledWith({ title: nudge!.title, body: nudge!.body, opens: { projectId: "project-budget" } });
+    // Only a nudge that names its project opens a chat.
+    expect(await delivery.handle({ ...nudge!, key: "nudge:n2@1", projectId: undefined })).toBe("notified");
+    expect(deps.showNotification).toHaveBeenLastCalledWith({ title: nudge!.title, body: nudge!.body, opens: "panel" });
   });
 
   test("no_text_when_off_or_for_non_nudge_keys", async () => {

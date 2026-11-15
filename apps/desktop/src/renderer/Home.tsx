@@ -133,6 +133,7 @@ export function Home(props: HomeProps) {
         desk={desk}
         after={othersRegion}
         nameOf={nameOf}
+        onOpen={props.onOpenProject}
         start={recommended && { name: recommended.name, onStart: (mode) => props.onStart(recommended.id, mode) }}
       />
     ) : (
@@ -382,6 +383,7 @@ function MorningBrief({
   desk,
   after,
   nameOf,
+  onOpen,
   start,
 }: {
   brief: Brief | null | undefined;
@@ -391,6 +393,8 @@ function MorningBrief({
   desk: Parameters<typeof Desk>[0];
   after: ReactNode;
   nameOf(id: string): string | undefined;
+  /** Opens that project's chat. */
+  onOpen(projectId: string): void;
   start: { name: string; onStart(mode: "help" | "improve"): void } | undefined;
 }) {
   const [state, label]: [Honest, string] = error
@@ -458,7 +462,17 @@ function MorningBrief({
                   <li key={`${item.projectId}:${item.text}`} data-recommended={item.recommended || undefined}>
                     {item.recommended && <span className="brief-start-tag">Recommended start</span>}
                     {item.recommended ? <Typed className="brief-step" text={item.text} /> : <p className="brief-text">{item.text}</p>}
-                    <p className="brief-tail">{tail(item)}</p>
+                    <p className="brief-tail">
+                      {tail(item)}
+                      {!item.recommended && nameOf(item.projectId) && (
+                        <>
+                          {" · "}
+                          <button type="button" className="text-button inline" aria-label={`Open the ${nameOf(item.projectId)} chat`} onClick={() => onOpen(item.projectId)}>
+                            Open chat
+                          </button>
+                        </>
+                      )}
+                    </p>
                     {item.recommended && brief.reason && (
                       <p className="brief-reason">
                         <span className="why">Why this one:</span> {brief.reason}

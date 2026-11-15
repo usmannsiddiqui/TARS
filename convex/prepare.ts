@@ -158,8 +158,9 @@ export const claimRun = internalMutation({
     if (run?.state === "running") return false;
     // A pending automatic run is taken over: this run reads the evidence it was scheduled for,
     // and its scheduled job finds no pending row and stops.
-    if (run === null) await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "running", followUp: false, stage: "reading" });
-    else await ctx.db.patch(run._id, { state: "running", followUp: false, stage: "reading", sources: undefined });
+    const stageTimes = [{ stage: "reading" as const, at: Date.now() }];
+    if (run === null) await ctx.db.insert("preparationRuns", { ownerId, projectId, state: "running", followUp: false, stage: "reading", stageTimes });
+    else await ctx.db.patch(run._id, { state: "running", followUp: false, stage: "reading", sources: undefined, stageTimes });
     return true;
   },
 });
@@ -171,7 +172,7 @@ export const startAutomatic = internalMutation({
   handler: async (ctx, { ownerId, projectId }) => {
     const run = await runRow(ctx, ownerId, projectId);
     if (run?.state !== "pending") return null;
-    await ctx.db.patch(run._id, { state: "running", stage: "reading", sources: undefined });
+    await ctx.db.patch(run._id, { state: "running", stage: "reading", sources: undefined, stageTimes: [{ stage: "reading", at: Date.now() }] });
     const profile = await ctx.db
       .query("ownerProfiles")
       .withIndex("by_owner", (q) => q.eq("ownerId", ownerId))
@@ -186,7 +187,7 @@ export const recordStage = internalMutation({
   returns: v.null(),
   handler: async (ctx, { ownerId, projectId, stage, sources }) => {
     const run = await runRow(ctx, ownerId, projectId);
-    if (run?.state === "running") await ctx.db.patch(run._id, { stage, sources });
+    if (run?.state === "running") await ctx.db.patch(run._id, { stage, sources, stageTimes: [...(run.stageTimes ?? []), { stage, at: Date.now() }] });
     return null;
   },
 });
@@ -202,10 +203,10 @@ export const finishRun = internalMutation({
     const run = await runRow(ctx, ownerId, projectId);
     if (run === null) return null;
     if (run.followUp) {
-      await ctx.db.patch(run._id, { state: "pending", followUp: false, stage: undefined, sources: undefined });
+      await ctx.db.patch(run._id, { state: "pending", followUp: false, stage: undefined, sources: undefined, stageTimes: undefined });
       await ctx.scheduler.runAfter(0, internal.prepare.runAutomatic, { ownerId, projectId });
     } else if (failed) {
-      await ctx.db.patch(run._id, { state: "failed", stage: undefined, sources: undefined });
+      await ctx.db.patch(run._id, { state: "failed", stage: undefined, sources: undefined, stageTimes: undefined });
     } else {
       await ctx.db.delete(run._id);
     }

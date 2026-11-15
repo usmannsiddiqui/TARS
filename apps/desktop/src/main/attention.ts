@@ -6,11 +6,14 @@ import type { AttentionInput } from "@companion/domain";
 import { decideAttention } from "@companion/domain/attention";
 import type { SelfTextResult } from "./self-text";
 
-/** The shape briefs.getAttentionState returns. */
-export type AttentionState = { input: AttentionInput; key: string; title: string; body: string } | null;
+/** The shape briefs.getAttentionState returns; nudges carry their project. */
+export type AttentionState = { input: AttentionInput; key: string; title: string; body: string; projectId?: string | undefined } | null;
+
+/** What the user's click on the notification opens: a nudge opens its project's chat, the rest the panel. */
+export type NotificationTarget = "panel" | { projectId: string };
 
 export type AttentionDeps = {
-  showNotification: (notification: { title: string; body: string }) => void | Promise<void>;
+  showNotification: (notification: { title: string; body: string; opens: NotificationTarget }) => void | Promise<void>;
   isPanelOpen: () => boolean;
   subscribe: (onState: (state: AttentionState) => void) => () => void;
   markDelivered: (receipt: { key: string; channel: "notification" }) => Promise<void>;
@@ -27,7 +30,8 @@ export function startAttentionDelivery(deps: AttentionDeps) {
     if (decideAttention({ ...state.input, panelOpen: deps.isPanelOpen() }) !== "notify") return "skipped";
     notified.add(state.key);
     try {
-      await deps.showNotification({ title: state.title, body: state.body });
+      const opens: NotificationTarget = state.key.startsWith("nudge:") && state.projectId ? { projectId: state.projectId } : "panel";
+      await deps.showNotification({ title: state.title, body: state.body, opens });
     } catch (error) {
       notified.delete(state.key); // not shown: no receipt, so it stays deliverable
       throw error;

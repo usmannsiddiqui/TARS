@@ -43,6 +43,7 @@ import { createDraftFromPrepared } from "./artifacts";
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
+import { writeOpening } from "./thread";
 import schema, { commitmentFields } from "./schema";
 
 type Ctx = Pick<QueryCtx, "db">;
@@ -191,7 +192,7 @@ async function hasReceipt(ctx: Ctx, ownerId: string, key: string) {
   return row !== null;
 }
 
-type AttentionItem = { input: AttentionInput; key: string; title: string; body: string };
+type AttentionItem = { input: AttentionInput; key: string; title: string; body: string; projectId?: string };
 
 /** The one thing that may reach the user next: morning brief, then task-return invitation, then evening recap. */
 async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"attentionSettings">, nowMs: number): Promise<AttentionItem | null> {
@@ -222,11 +223,12 @@ async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"atten
     }
   }
 
-  for (const { offer, text } of await liveOffers(ctx, ownerId, nowMs)) {
+  for (const { nudge, offer, text } of await liveOffers(ctx, ownerId, nowMs)) {
     if (await hasReceipt(ctx, ownerId, offer.key)) continue;
     return {
       input: { ...base, kind: "task-return", alreadyDelivered: false, hasPreparedWork: true },
       key: offer.key,
+      projectId: nudge.projectId, // the notification click opens this project's chat
       ...nudgeCopy({ text, startedForYou: offer.startedForYou }),
     };
   }
@@ -346,7 +348,9 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
     const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
     if (!automatic) continue;
     // A newly seen due commitment is offered at once; "started for you" only when TARS made the draft now.
-    const started = (await createDraftFromPrepared(ctx, ownerId, projectId)).created;
+    const draft = await createDraftFromPrepared(ctx, ownerId, projectId);
+    const started = draft.created;
+    await writeOpening(ctx, { ownerId, projectId, key, commitment, artifactId: draft.id }); // TARS speaks first in the project chat
     if ((await liveOffers(ctx, ownerId, now)).length > 0) continue; // one at a time; return/due-soon pick it up
     const settings = await loadSettings(ctx, ownerId);
     const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
@@ -665,7 +669,7 @@ export const listNudgeOffers = query({
 /** What may contact the user next, as the AttentionInput the desktop decides on (with live panel state). */
 export const getAttentionState = query({
   args: {},
-  returns: v.union(v.null(), v.object({ input: attentionInputValidator, key: v.string(), title: v.string(), body: v.string() })),
+  returns: v.union(v.null(), v.object({ input: attentionInputValidator, key: v.string(), title: v.string(), body: v.string(), projectId: v.optional(v.string()) })),
   handler: async (ctx) => {
     const ownerId = await requireOwnerId(ctx);
     const settings = await loadSettings(ctx, ownerId);

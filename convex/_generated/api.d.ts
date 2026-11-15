@@ -33,6 +33,7 @@ import type * as prepare from "../prepare.js";
 import type * as projects from "../projects.js";
 import type * as recap from "../recap.js";
 import type * as shares from "../shares.js";
+import type * as thread from "../thread.js";
 import type * as transcription from "../transcription.js";
 
 import type {
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   projects: typeof projects;
   recap: typeof recap;
   shares: typeof shares;
+  thread: typeof thread;
   transcription: typeof transcription;
 }>;
 

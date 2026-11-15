@@ -79,8 +79,15 @@ function setup() {
     );
     return record;
   };
-  return { t, alice, bob, asAlice, asBob, project, artifactFor, get, versionCount, evidence };
+  /** The user asks for a change in the project chat (the one way a revision is requested in words). */
+  const chat = (projectId: ProjectId, text: string) => asAlice.action(api.thread.sendMessage, { projectId, text });
+  const lastReply = async (projectId: ProjectId) => (await asAlice.query(api.thread.listThread, { projectId })).at(-1)!;
+  return { t, alice, bob, asAlice, asBob, project, artifactFor, get, versionCount, evidence, chat, lastReply };
 }
+
+/** The chat model choosing "revise" with this text. */
+const revises = (text: string, changeSummary: string) =>
+  completed({ outcome: "revise", reply: changeSummary, revisedText: text, changeSummary, evidenceIds: [] });
 
 describe("chosen focus and restoration", () => {
   test("switch_restores_each_projects_draft_and_next_step", async () => {
@@ -162,29 +169,25 @@ describe("chosen focus and restoration", () => {
 
 describe("protected edits and revisions", () => {
   test("requested_revision_applies_with_undo", async () => {
-    const { asAlice, project, artifactFor, get, versionCount } = setup();
+    const { asAlice, project, artifactFor, get, versionCount, chat, lastReply } = setup();
     const guides = await project("AI Guides");
     const original = await artifactFor(guides, "Long prepared run-through.");
-    stubModel(completed({ text: "Short run-through.", changeSummary: "Shortened to the key points." }));
+    stubModel(revises("Short run-through.", "Shortened to the key points."));
 
-    const result = await asAlice.action(api.artifacts.reviseArtifact, {
-      artifactId: original.id,
-      baseRevision: original.revision,
-      instruction: "Make it shorter.",
-    });
-    expect(result.status).toBe("applied");
-    expect(result.artifact.text).toBe("Short run-through.");
-    expect(result.changeSummary).toBe("Shortened to the key points.");
-    expect(result.undoRevision).toBe(original.revision);
-    // The model saw the current text and the instruction.
+    await chat(guides, "Make it shorter.");
+    const revised = await get(guides);
+    expect(revised.text).toBe("Short run-through.");
+    const doc = (await lastReply(guides)).blocks.find((b) => b.type === "document")!.props as { revision: string; undoRevision: string; changeSummary: string };
+    expect(doc).toMatchObject({ revision: revised.revision, undoRevision: original.revision, changeSummary: "Shortened to the key points." });
+    // The model saw his words and the current text.
     const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input);
-    expect(sent).toEqual({ instruction: "Make it shorter.", text: "Long prepared run-through." });
+    expect(sent).toMatchObject({ message: "Make it shorter.", draft: "Long prepared run-through." });
     expect(await versionCount()).toBe(1);
 
     const undone = await asAlice.mutation(api.artifacts.undoRevision, {
       artifactId: original.id,
-      expectedCurrent: result.artifact.revision,
-      undoRevision: result.undoRevision!,
+      expectedCurrent: doc.revision,
+      undoRevision: doc.undoRevision,
     });
     expect(undone.status).toBe("applied");
     expect(undone.artifact.text).toBe("Long prepared run-through.");
@@ -194,46 +197,32 @@ describe("protected edits and revisions", () => {
   });
 
   test("late_revision_cannot_overwrite_user_edit", async () => {
-    const { asAlice, project, artifactFor, get } = setup();
+    const { asAlice, project, artifactFor, get, chat, lastReply } = setup();
     const guides = await project("AI Guides");
     const original = await artifactFor(guides, "Prepared run-through.");
     const userEditedText = "My own wording, typed while the model was working.";
-    const request = { artifactId: original.id, baseRevision: original.revision, instruction: "Make it formal." };
 
-    // The user's edit lands while the model call is in flight: the artifact is now newer than request.baseRevision.
-    stubModel(completed({ text: "Formal run-through.", changeSummary: "Made formal." }), () =>
+    // The user's edit lands while the model call is in flight: the draft is now newer than the one the model saw.
+    stubModel(revises("Formal run-through.", "Made formal."), () =>
       asAlice.mutation(api.artifacts.saveEdit, { artifactId: original.id, baseRevision: original.revision, text: userEditedText }),
     );
-    const result = await asAlice.action(api.artifacts.reviseArtifact, request);
-    expect(result.status).toBe("conflict");
-    expect(result.artifact.text).toBe(userEditedText);
-    expect(result.artifact.userEdited).toBe(true);
-
+    await chat(guides, "Make it formal.");
     const current = await get(guides);
     expect(current.text).toBe(userEditedText);
-    // The proposed text is kept separately for the user to apply later.
-    expect(current.suggestions.map((s) => [s.kind, s.text, s.baseRevision])).toEqual([
-      ["revision", "Formal run-through.", original.revision],
-    ]);
-
-    // A request already stale when sent is a conflict too, and the user's text stays.
-    stubModel(completed({ text: "Formal again.", changeSummary: "Made formal." }));
-    const stale = await asAlice.action(api.artifacts.reviseArtifact, request);
-    expect(stale.status).toBe("conflict");
-    expect(stale.artifact.text).toBe(userEditedText);
-    expect((await get(guides)).text).toBe(userEditedText);
+    expect(current.userEdited).toBe(true);
+    // The proposed text is kept separately for the user to apply later, and the chat says so.
+    expect(current.suggestions.map((s) => [s.kind, s.text, s.baseRevision])).toEqual([["revision", "Formal run-through.", original.revision]]);
+    const work = (await lastReply(guides)).blocks.find((b) => b.type === "work")!.props as { steps: { id: string; status: string }[] };
+    expect(work.steps.map((s) => [s.id, s.status])).toEqual([["read", "done"], ["revise", "failed"]]);
   });
 
   test("undo_cannot_erase_intervening_edit", async () => {
-    const { asAlice, project, artifactFor, get } = setup();
+    const { asAlice, project, artifactFor, get, chat } = setup();
     const guides = await project("AI Guides");
     const original = await artifactFor(guides, "Prepared run-through.");
-    stubModel(completed({ text: "Revised run-through.", changeSummary: "Revised." }));
-    const revised = await asAlice.action(api.artifacts.reviseArtifact, {
-      artifactId: original.id,
-      baseRevision: original.revision,
-      instruction: "Revise.",
-    });
+    stubModel(revises("Revised run-through.", "Revised."));
+    await chat(guides, "Revise.");
+    const revised = { artifact: await get(guides), undoRevision: original.revision };
     const edited = await asAlice.mutation(api.artifacts.saveEdit, {
       artifactId: original.id,
       baseRevision: revised.artifact.revision,
@@ -244,7 +233,7 @@ describe("protected edits and revisions", () => {
     const undo = await asAlice.mutation(api.artifacts.undoRevision, {
       artifactId: original.id,
       expectedCurrent: revised.artifact.revision,
-      undoRevision: revised.undoRevision!,
+      undoRevision: revised.undoRevision,
     });
     expect(undo.status).toBe("conflict");
     expect(undo.artifact.text).toBe("Revised run-through plus my note.");
@@ -315,12 +304,15 @@ describe("protected edits and revisions", () => {
   });
 
   test("model_failure_leaves_artifact_untouched", async () => {
-    const { asAlice, project, artifactFor, get, versionCount, evidence } = setup();
+    const { asAlice, project, artifactFor, get, versionCount, evidence, chat, lastReply } = setup();
     const guides = await project("AI Guides");
     const original = await artifactFor(guides, "Prepared run-through.");
     await evidence(guides, "Illustrative source update.");
-    const revise = () =>
-      asAlice.action(api.artifacts.reviseArtifact, { artifactId: original.id, baseRevision: original.revision, instruction: "Shorter." });
+    /** A chat revision whose model call fails: an honest failed step, never an error thrown at him. */
+    const revise = async () => {
+      await chat(guides, "Shorter.");
+      expect((await lastReply(guides)).blocks[0]!.props).toMatchObject({ retry: true, steps: [{ status: "failed" }] });
+    };
     const unchanged = async () => {
       const current = await get(guides);
       expect(current.text).toBe("Prepared run-through.");
@@ -336,14 +328,15 @@ describe("protected edits and revisions", () => {
     ];
     for (const reply of failures) {
       stubModel(reply);
-      await expect(revise()).rejects.toMatchObject({ data: { code: "model_failed" } });
+      await revise();
       await expect(asAlice.action(api.artifacts.suggestSourceAdjustment, { artifactId: original.id })).rejects.toMatchObject({
         data: { code: "model_failed" },
       });
       await unchanged();
     }
     vi.stubEnv("OPENAI_API_KEY", "");
-    await expect(revise()).rejects.toMatchObject({ data: { code: "model_failed", reason: "missing_OPENAI_API_KEY" } });
+    await revise();
+    expect(((await lastReply(guides)).blocks[0]!.props as { steps: { error: string }[] }).steps[0]!.error).toMatch(/missing_OPENAI_API_KEY/);
     await unchanged();
   });
 
@@ -362,9 +355,7 @@ describe("protected edits and revisions", () => {
     await expect(asBob.mutation(api.artifacts.saveEdit, { artifactId: art.id, baseRevision: base, text: "Bob" })).rejects.toThrow(
       "not found",
     );
-    await expect(
-      asBob.action(api.artifacts.reviseArtifact, { artifactId: art.id, baseRevision: base, instruction: "x" }),
-    ).rejects.toThrow("not found");
+    await expect(asBob.action(api.thread.sendMessage, { projectId: guides, text: "make it shorter" })).rejects.toThrow("not found");
     await expect(
       asBob.mutation(api.artifacts.undoRevision, { artifactId: art.id, expectedCurrent: base, undoRevision: base }),
     ).rejects.toThrow("not found");
