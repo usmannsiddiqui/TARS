@@ -301,10 +301,15 @@ function CardHead({ row, add, by }: { row: SourceRow; add?: { label: string; dis
             {stateWord(row)}
           </span>
         </p>
-        <p className="quiet connector-desc">{row.coverage}</p>
-        <p className="quiet small">
-          {by ?? `${row.provider ? BY[row.provider] : "on this Mac"} · ${(row.provider && CAN[row.provider]) ?? "read only"}`}
-        </p>
+        {/* A source that is off is only its name: what it reads and who runs it show once it is on or being connected. */}
+        {(row.state !== "off" || add === undefined) && (
+          <>
+            <p className="quiet connector-desc">{row.coverage}</p>
+            <p className="quiet small">
+              {by ?? `${row.provider ? BY[row.provider] : "on this Mac"} · ${(row.provider && CAN[row.provider]) ?? "read only"}`}
+            </p>
+          </>
+        )}
       </div>
       {add ? (
         <button type="button" className="secondary connector-square" disabled={add.disabled} onClick={add.onClick} aria-label={add.label}>
@@ -537,7 +542,7 @@ function CloudItem({ row, provider, projects, cloud }: { row: SourceRow; provide
   return (
     <li className="source" data-state={row.state}>
       <CardHead row={row} add={row.state === "off" && step === "idle" ? { label: `Connect ${row.name}`, disabled: blocked !== undefined, onClick: () => setStep("connect") } : undefined} />
-      {row.status ? <StateNote state={row.status} /> : row.state === "off" && <p className="quiet small">Availability: not connected. Last checked: never.</p>}
+      {row.status && <StateNote state={row.status} />}
       {row.selection && (
         <p className="small source-selection">
           <span className="why">Reads:</span> {row.selection.selectors.join(", ") || "your whole calendar feed"} <span className="quiet">· for {row.selection.projects.join(", ")}</span>

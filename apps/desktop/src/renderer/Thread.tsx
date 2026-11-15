@@ -263,7 +263,7 @@ function StartBlock({ props, actions, primary }: { props: Partial<BlockProps<"st
   const start = projectId && actions.onStart ? (mode: "help" | "improve") => actions.onStart!(projectId, mode) : undefined;
   useCommandEnter(primary && start !== undefined, () => start?.("help"));
   const tail = (item: BlockProps<"start">["items"][number]) =>
-    [item.kind === "suggested" ? "suggested" : `${item.kind === "meeting" ? "meeting" : "due"} ${formatWhen(item.dueAt ?? "")}`, item.projectName ?? "a project"].join(" · ");
+    [...(item.kind === "suggested" ? [] : [`${item.kind === "meeting" ? "meeting" : "due"} ${formatWhen(item.dueAt ?? "")}`]), item.projectName ?? "a project"].join(" · ");
   return (
     <ol className="brief-list" aria-label="Today's brief">
       {(props.items ?? []).map((item) => (
