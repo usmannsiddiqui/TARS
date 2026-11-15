@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { CaptureInput } from "@companion/domain";
 import type { DictationResult, Transcript } from "../preload/index";
+import { SortedDump, type BrainDumpProps } from "./BrainDump";
 import { reason, StateNote } from "./ui";
 import { DICTATION_FAILURE, startVoice, type VoiceSession } from "./voice";
 
@@ -20,8 +21,21 @@ const clock = (ms: number) => `${String(Math.floor(ms / 60_000)).padStart(2, "0"
 /**
  * `onSaved`: the capture is durably on this Mac (for lists that show captures). `transcript`: a hold-to-talk
  * transcript to start from, editable and unsaved. `autoFocus`: focus the box with the caret at the end.
+ * `brainDump`: once saved, the capture is sorted into the user's projects and shown here, by project.
  */
-export function Composer({ projectId, onSaved, transcript, autoFocus }: { projectId?: string; onSaved?(): void; transcript?: Transcript; autoFocus?: boolean }) {
+export function Composer({
+  projectId,
+  onSaved,
+  transcript,
+  autoFocus,
+  brainDump,
+}: {
+  projectId?: string;
+  onSaved?(): void;
+  transcript?: Transcript;
+  autoFocus?: boolean;
+  brainDump?: BrainDumpProps;
+}) {
   const id = useId();
   const box = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState(transcript?.text ?? "");
@@ -151,8 +165,9 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
       const acknowledged = pending;
       setText("");
       setPending([]);
-      setStatus(`Saved on this Mac: ${receipt.summary}`);
+      setStatus(brainDump ? "" : `Saved on this Mac: ${receipt.summary}`); // the sorted view says it instead
       onSaved?.();
+      brainDump?.onSaved(receipt.id, input.text);
       await Promise.all(acknowledged.map((recoveryId) => window.companion.dictation.acknowledge(recoveryId)));
     } catch (err) {
       setStatus(`Not saved: ${reason(err)}. Your text and any recording are kept.`);
@@ -177,7 +192,15 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
         }}
+        {...(brainDump ? { "aria-describedby": `${id}-cloud` } : {})}
       />
+      {brainDump && (
+        <p className="hint" id={`${id}-cloud`}>
+          {brainDump.cloud
+            ? "Save keeps it on this Mac, then sends the text to our cloud and to OpenAI to sort it into your projects. The sorted lines are kept in our cloud."
+            : "Saved on this Mac only while you are signed out or offline; it is sorted when you press Sort again."}
+        </p>
+      )}
       <div className="tape-deck" data-state={voice.kind}>
         <p className="tape-window">
           {/* The running counter is CSS (screens.css .tape-run), so no timer ticks in JS. */}
@@ -229,6 +252,7 @@ export function Composer({ projectId, onSaved, transcript, autoFocus }: { projec
       <p role="status" aria-live="polite" className="capture-status">
         {saving ? "Saving…" : status}
       </p>
+      {brainDump?.view && <SortedDump {...brainDump} view={brainDump.view} />}
     </form>
   );
 }

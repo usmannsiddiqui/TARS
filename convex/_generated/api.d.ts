@@ -11,6 +11,7 @@
 import type * as actions from "../actions.js";
 import type * as artifacts from "../artifacts.js";
 import type * as briefs from "../briefs.js";
+import type * as captures from "../captures.js";
 import type * as connections from "../connections.js";
 import type * as connectors_canvas from "../connectors/canvas.js";
 import type * as connectors_composio from "../connectors/composio.js";
@@ -44,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   actions: typeof actions;
   artifacts: typeof artifacts;
   briefs: typeof briefs;
+  captures: typeof captures;
   connections: typeof connections;
   "connectors/canvas": typeof connectors_canvas;
   "connectors/composio": typeof connectors_composio;

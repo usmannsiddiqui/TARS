@@ -12,6 +12,7 @@ import { MemoryView } from "../../../apps/desktop/src/renderer/MemoryView";
 import type { Brief, Commitment, Evidence, Fact, HelperRun, PetState, ProjectSummary, Receipt, Reentry, SessionState, SourceRow } from "../../../apps/desktop/src/renderer/model";
 import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
+import type { BrainDumpProps, DumpLine, DumpView } from "../../../apps/desktop/src/renderer/BrainDump";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
 import { railProject, Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
 import { ProjectsIndex } from "../../../apps/desktop/src/renderer/ProjectsIndex";
@@ -290,6 +291,69 @@ function usePlayed(on: boolean) {
   return runs;
 }
 
+// ---- Brain dump: an illustrative sorted capture across three projects, all four kinds, no project, one long line.
+const dumpLines: DumpLine[] = [
+  { id: "d1", text: "Finish the thermo lab report", projectId: "course", kind: "todo", dueAt: new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + 5, 23, 59).toISOString() },
+  { id: "d2", text: "Sam still owes me the wiring diagram", projectId: "avt", kind: "waiting" },
+  {
+    id: "d3",
+    text: "Order the second battery pack, the 48-volt one from the supplier Priya mentioned, but only after the budget meeting confirms we can spend it before the end of the semester",
+    projectId: "avt",
+    kind: "todo",
+  },
+  { id: "d4", text: "Sponsor deck can wait until December", projectId: "avt", kind: "parked" },
+  { id: "d5", text: "A short video on choosing a tool", projectId: "guides", kind: "idea" },
+  { id: "d6", text: "Email everyone the deck", projectId: "guides", kind: "todo" },
+  { id: "d7", text: "Look into a standing desk for the lab", projectId: null, kind: "idea" },
+];
+const dumpViews: Record<string, DumpView> = {
+  sorting: { kind: "sorting", projects: projects.length },
+  sorted: { kind: "sorted", lines: dumpLines },
+  sortfailed: { kind: "failed", detail: "the sorting model did not answer (timeout)." },
+};
+/** As the live hook would: Save starts a sort, and a few seconds later the lines arrive; Fix changes them in place. */
+function useHarnessDump(variant: string): BrainDumpProps | undefined {
+  const [view, setView] = useState<DumpView | undefined>(dumpViews[variant]);
+  if (!(variant in dumpViews) && variant !== "dump") return undefined;
+  const lines = view?.kind === "sorted" ? view.lines : [];
+  const change = (id: string, patch: Partial<DumpLine> | null) =>
+    setView({ kind: "sorted", lines: patch === null ? lines.filter((l) => l.id !== id) : lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) });
+  return {
+    cloud: true,
+    projects: projects.map(({ id, name }) => ({ id, name })),
+    ...(view ? { view } : {}),
+    onSaved: (id) => {
+      record("sortCapture", id);
+      setView({ kind: "sorting", projects: projects.length });
+      setTimeout(() => setView({ kind: "sorted", lines: dumpLines }), 2400);
+    },
+    onRetry: () => (record("sortCapture", "retry"), setView({ kind: "sorting", projects: projects.length })),
+    onMove: async (id, projectId) => (record("moveItem", id, projectId), change(id, { projectId })),
+    onSetKind: async (id, kind) => (record("setItemKind", id, kind), change(id, { kind })),
+    onRemove: async (id) => (record("removeItem", id), change(id, null)),
+  };
+}
+
+/** The panel opened for capture, with the brain dump in its capture box. */
+function PanelDump({ variant }: { variant: string }) {
+  const brainDump = useHarnessDump(variant);
+  return (
+    <Panel
+      petState="idle"
+      helpers={[]}
+      helperActions={helperActions}
+      now={NOW.getTime()}
+      leftOff={{ project: "AI Guides", artifact: projects[0]!.prepared!.work!.title }}
+      capture
+      {...(brainDump ? { brainDump } : {})}
+      onRecapShown={(key) => record("markDelivered", key, "panel")}
+      onOpenApp={() => record("openApp", "guides")}
+      onStop={() => record("closePanel")}
+      onClose={() => record("closePanel")}
+    />
+  );
+}
+
 function HelperGrid({ only }: { only?: string | undefined }) {
   const names = only ? [only] : Object.keys(helperStates);
   return (
@@ -309,6 +373,7 @@ function HelperGrid({ only }: { only?: string | undefined }) {
 
 function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const played = usePlayed(variant === "play");
+  const brainDump = useHarnessDump(variant);
   const [route, setRoute] = useState<Route>(initial);
   const [session, setSession] = useState<SessionState>("idle");
   // As the subscription would: a brief reported as shown comes back delivered.
@@ -356,6 +421,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           onBriefShown={(key) => (record("markDelivered", key, "panel"), setDelivered((d) => [...d, key]))}
           onResolveTradeoff={async (id, choice) => record("resolveTradeoff", id, choice)}
           ideas={ideas}
+          {...(brainDump ? { brainDump } : {})}
           sessionWorking={session === "working"}
           onCaptured={() => undefined}
           onStart={(id, mode) => (pick(id), session === "idle" && (record("session", "start"), setSession("working")), setRoute({ view: "project", projectId: id, mode }))}
@@ -499,6 +565,8 @@ const element = scene.startsWith("pet-") ? (
     onStop={() => record("closePanel")}
     onClose={() => record("closePanel")}
   />
+) : ["panel-sorting", "panel-sorted", "panel-sortfailed", "panel-dump"].includes(scene) ? (
+  <PanelDump variant={scene.slice("panel-".length)} />
 ) : scene === "panel-transcript" ? (
   <Panel
     petState="idle"
