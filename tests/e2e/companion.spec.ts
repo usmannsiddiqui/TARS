@@ -59,9 +59,21 @@ test("one_companion_across_projects", async () => {
   await expect(rail).toBeHidden();
   await page.getByRole("button", { name: "Projects", expanded: false }).click();
   await expect(rail).toBeVisible();
-  // Exactly one recommended start, with its reason, and exactly one amber action on the screen.
-  const start = page.getByRole("region", { name: "Recommended start" });
-  await expect(start).toContainText("AI Guides");
+  // The morning brief: what it read (one row per kind, real counts), then the brief as a numbered list whose first
+  // item is the one recommended start, with its reason and exactly one navy action on the screen; TARS stays at the desk.
+  const start = page.getByRole("region", { name: "Morning brief" });
+  await expect(start).toContainText("Prepared");
+  await expect(start.getByRole("list", { name: "What TARS read for this brief" }).getByRole("listitem")).toHaveText([
+    "Read today's meeting",
+    "Read 4 new emails",
+    "Checked 1 Canvas deadline",
+    "Went through 6 open commitments",
+  ]);
+  const items = start.getByRole("list", { name: "Morning brief" }).getByRole("listitem");
+  await expect(items).toHaveCount(5);
+  await expect(items.first()).toContainText("Recommended start");
+  await expect(items.first()).toContainText("AI Guides");
+  await expect(start.locator(".desk")).toBeInViewport();
   await expect(start).toContainText("Why this one: You chose this last time; nothing due sooner is backed by your sources.");
   await expect(page.locator(".primary")).toHaveCount(1);
   await expect(start.getByRole("button", { name: "Help me start" })).toBeVisible();

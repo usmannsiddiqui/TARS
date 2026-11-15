@@ -3,11 +3,11 @@
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
 // stay one click away; adding a project lives on the project index. Presentational: data and actions arrive as props.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { preparedNote, type Brief, type HelperRun, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
+import { briefList, preparedNote, readRows, type Brief, type HelperRun, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type NudgeChoice, type NudgeOffer, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
 import { HelperCards, type HelperActions } from "./Helpers";
-import { SourceChip } from "./logos";
+import { SourceChip, SourceLogo } from "./logos";
 import { formatWhen, NewProject, NudgeCard, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
@@ -21,6 +21,8 @@ export type HomeProps = {
   focusProjectId?: string;
   /** The brief to show: undefined while loading, null when none is prepared yet. */
   brief: Brief | null | undefined;
+  /** The morning brief's routine and next run in words (briefSchedule); absent until the timezone is set. */
+  schedule?: { routine: string; at: string; next: string };
   /** Only after days away: what changed and one way back in. */
   reentry?: Reentry;
   /** One open tradeoff for a new commitment; the user's choice ends it. */
@@ -119,12 +121,21 @@ export function Home(props: HomeProps) {
         )}
         <p className="small">Prepared {formatWhen(new Date(brief.preparedAt).toISOString())}. Nothing else is needed tonight.</p>
       </Hero>
+    ) : !reentry ? (
+      <MorningBrief
+        brief={brief}
+        error={props.briefError}
+        schedule={props.schedule}
+        dateLabel={props.dateLabel}
+        desk={desk}
+        after={othersRegion}
+        nameOf={nameOf}
+        start={recommended && { name: recommended.name, onStart: (mode) => props.onStart(recommended.id, mode) }}
+      />
     ) : (
-      <Hero title={reentry ? "One way back in" : "Recommended start"} {...heroFrame} project={recommended?.name}>
+      <Hero title="One way back in" {...heroFrame} project={recommended?.name}>
         {props.briefError && <StateNote state={{ kind: "needs-retry", detail: props.briefError }} />}
-        {brief === undefined && !reentry ? (
-          <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
-        ) : action ? (
+        {action ? (
           <>
             <Typed key={action} className="start-step" text={action} />
             {why && (
@@ -144,12 +155,7 @@ export function Home(props: HomeProps) {
             )}
           </>
         ) : (
-          <StateNote
-            state={{
-              kind: "empty",
-              detail: brief === null && !reentry ? "Your first brief is prepared at 9:00. Pick any project below, or capture what is on your mind." : "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind.",
-            }}
-          />
+          <StateNote state={{ kind: "empty", detail: "Nothing is prepared or due yet. Pick any project below, or capture what is on your mind." }} />
         )}
       </Hero>
     );
@@ -347,6 +353,131 @@ function Hero({
           {project && <p className="start-project">{project}</p>}
         </div>
         {children}
+        {after}
+      </div>
+      <div className="start-figure">
+        <Desk {...desk} />
+      </div>
+    </section>
+  );
+}
+
+const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" });
+const greeting = (hour: number) => (hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+
+/**
+ * The morning brief, after the user's reference: a greeting with the day; the routine card (name, schedule, state,
+ * prepared time); one row per kind of input it really read; the brief as a short numbered list with the recommended
+ * start first; when it runs next. TARS stays at the front desk on the right. Nothing here sends or changes anything.
+ */
+function MorningBrief({
+  brief,
+  error,
+  schedule,
+  dateLabel,
+  desk,
+  after,
+  nameOf,
+  start,
+}: {
+  brief: Brief | null | undefined;
+  error: string | undefined;
+  schedule: HomeProps["schedule"];
+  dateLabel: string;
+  desk: Parameters<typeof Desk>[0];
+  after: ReactNode;
+  nameOf(id: string): string | undefined;
+  start: { name: string; onStart(mode: "help" | "improve"): void } | undefined;
+}) {
+  const [state, label]: [Honest, string] = error
+    ? [{ kind: "needs-retry" }, "Needs retry"]
+    : brief === undefined
+      ? [{ kind: "loading" }, "Reading"]
+      : brief === null
+        ? [{ kind: "scheduled" }, schedule ? `Waiting until ${schedule.at}` : "Waiting for its first run"]
+        : [{ kind: "done" }, "Prepared"];
+  const rows = readRows(brief?.read);
+  const items = brief ? briefList(brief) : [];
+  const tail = (item: (typeof items)[number]) =>
+    [item.kind === "suggested" ? "suggested" : `${item.kind === "meeting" ? "meeting" : "due"} ${formatWhen(item.dueAt ?? "")}`, nameOf(item.projectId) ?? "a project"].join(" · ");
+  return (
+    <section className="start brief" aria-labelledby="start-h">
+      <div className="start-body">
+        <p className="brief-greet">
+          {greeting(new Date().getHours())} <span>{dateLabel}</span>
+        </p>
+        <div className="brief-card block">
+          <span className="brief-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 14 14">
+              <circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M7 3.8V7l2.2 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+          </span>
+          <div className="brief-name">
+            <h2 id="start-h">Morning brief</h2>
+            <p>{schedule?.routine ?? "Every day"}</p>
+          </div>
+          <p className="brief-state">
+            <StateTag state={state} label={label} />
+            {brief && <time dateTime={new Date(brief.preparedAt).toISOString()}>{clock.format(brief.preparedAt)}</time>}
+          </p>
+        </div>
+        {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
+        {rows.length > 0 && (
+          <ul className="brief-reads" aria-label="What TARS read for this brief">
+            {rows.map((row) => (
+              <li key={row.kind}>
+                <span className="brief-read-logo">
+                  <SourceLogo kind={row.kind} />
+                </span>
+                <span className="brief-read-text">{row.text}</span>
+                <svg className="brief-read-check" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path d="M2.5 7.5 5.6 10.4 11.5 3.6" fill="none" stroke="currentColor" strokeWidth="2" />
+                </svg>
+              </li>
+            ))}
+          </ul>
+        )}
+        {brief === undefined && !error ? (
+          <StateNote state={{ kind: "loading", detail: "Reading today's brief…" }} />
+        ) : brief === null ? (
+          <StateNote state={{ kind: "empty", detail: "No brief prepared yet. Pick any project below, or capture what is on your mind." }} />
+        ) : brief && items.length === 0 ? (
+          <StateNote state={{ kind: "empty", detail: "Nothing is due and nothing is suggested yet. Pick any project below, or capture what is on your mind." }} />
+        ) : (
+          brief && (
+            <div className="brief-body">
+              <h3 id="brief-list-h">Morning brief</h3>
+              <p className="brief-when">{weekday.format(brief.preparedAt)} · {clock.format(brief.preparedAt)}</p>
+              <ol className="brief-list" aria-labelledby="brief-list-h">
+                {items.map((item) => (
+                  <li key={`${item.projectId}:${item.text}`} data-recommended={item.recommended || undefined}>
+                    {item.recommended && <span className="brief-start-tag">Recommended start</span>}
+                    {item.recommended ? <Typed className="brief-step" text={item.text} /> : <p className="brief-text">{item.text}</p>}
+                    <p className="brief-tail">{tail(item)}</p>
+                    {item.recommended && brief.reason && (
+                      <p className="brief-reason">
+                        <span className="why">Why this one:</span> {brief.reason}
+                      </p>
+                    )}
+                    {item.recommended && start && (
+                      <div className="actions">
+                        <button type="button" className="primary" onClick={() => start.onStart("help")}>
+                          Help me start
+                        </button>
+                        <button type="button" className="secondary" onClick={() => start.onStart("improve")}>
+                          Improve content first
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )
+        )}
+        {schedule && <p className="brief-next">Next brief: {schedule.next}</p>}
         {after}
       </div>
       <div className="start-figure">

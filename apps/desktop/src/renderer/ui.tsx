@@ -152,12 +152,12 @@ export function StateNote({ state, children }: { state: Honest; children?: React
   );
 }
 
-/** A state as its glyph and one word, for a compact place such as a pill; the detail lives elsewhere. */
-export function StateTag({ state, id }: { state: Honest; id?: string }) {
+/** A state as its glyph and one word (or the caller's few words), for a compact place such as a pill; the detail lives elsewhere. */
+export function StateTag({ state, id, label }: { state: Honest; id?: string; label?: string }) {
   return (
     <span className="state-tag" data-kind={state.kind} id={id}>
       <Glyph kind={state.kind} />
-      {HONEST_LABEL[state.kind]}
+      {label ?? HONEST_LABEL[state.kind]}
     </span>
   );
 }

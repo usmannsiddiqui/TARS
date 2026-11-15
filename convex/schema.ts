@@ -326,6 +326,8 @@ export default defineSchema({
         }),
       ),
     }),
+    // Morning only: what the brief read, per kind ("commitments" or a source kind). Absent on older rows.
+    read: v.optional(v.array(v.object({ kind: v.string(), count: v.number() }))),
   }).index("by_owner_kind", ["ownerId", "kind"]),
 
   // One receipt per delivered brief/invitation key; a receipt means "never deliver this again".
