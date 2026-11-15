@@ -11,6 +11,12 @@
 
 <p align="center">Built at HackUMass XIV · hacking period 13–15 November 2026</p>
 
+<p align="center">
+  <a href="docs/media/tars-product-video.mp4"><img src="docs/media/tars-product-video-poster.jpg" alt="A frame from the product video: the TARS app with a report it started on its own, captioned 'About 35 seconds later, TARS has started it on its own.'" width="720"></a><br>
+  <b><a href="docs/media/tars-product-video.mp4">Watch the product video (1 min 16 s)</a></b><br>
+  The app footage is one take from the packaged app on a real Gmail account, recorded 15 November 2026.
+</p>
+
 ---
 
 ## The problem
