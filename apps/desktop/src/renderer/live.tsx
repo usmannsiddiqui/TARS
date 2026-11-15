@@ -1,7 +1,7 @@
 // Thin containers: Convex subscriptions (pushed, never polled) and preload calls mapped onto the
 // presentational screens. Owner identity is never sent from here; Convex reads it from the token.
 import { useAction, useConvex, useConvexConnectionState, useMutation, useQueries, useQuery } from "convex/react";
-import { Component, createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
@@ -16,7 +16,7 @@ import { Pet } from "./Pet";
 import { ProjectView, type EditorActions, type RevisionOutcome, type Sharing } from "./ProjectView";
 import { Schedule } from "./Schedule";
 import { TarsCalendar } from "./TarsCalendar";
-import { reason, SOURCE_NAME, StateNote } from "./ui";
+import { reason, SOURCE_NAME } from "./ui";
 
 // ---- Cloud session: one per window.
 
@@ -74,26 +74,6 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 
   const ready = signedIn === true && auth === "accepted";
   return <CloudContext.Provider value={{ signedIn, ready, honest, signIn, signingIn }}>{children}</CloudContext.Provider>;
-}
-
-/** A failed subscription shows as Needs retry inside its block; Try again is the user's choice. */
-export class Boundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  override state = { error: null as string | null };
-  static getDerivedStateFromError(err: unknown) {
-    return { error: reason(err) };
-  }
-  override render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div className="screen">
-        <StateNote state={{ kind: "needs-retry", detail: this.state.error }}>
-          <button type="button" className="text-button" onClick={() => this.setState({ error: null })}>
-            Try again
-          </button>
-        </StateNote>
-      </div>
-    );
-  }
 }
 
 // ---- Shared mappers.

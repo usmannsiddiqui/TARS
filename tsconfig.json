@@ -1,5 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["tests/**/*.ts", "packages/domain/src/**/*.ts", "vitest.config.ts"]
+  "include": ["tests/**/*.ts", "packages/domain/src/**/*.ts", "vitest.config.ts"],
+  // Renderer tests pull in React's DOM types, which change Playwright's element types for the e2e files: checked with the desktop app.
+  "exclude": ["tests/unit/boundary.test.ts"]
 }

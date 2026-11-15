@@ -358,6 +358,11 @@ function HelperGrid({ only }: { only?: string | undefined }) {
   );
 }
 
+/** "today-broken": Today's data source throws, as a failed subscription does (an illustrative Convex error). */
+function BrokenToday(): never {
+  throw new Error("[CONVEX Q(briefs:getReentry)] Server Error: illustrative return-validator mismatch");
+}
+
 function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   const played = usePlayed(variant === "play");
   const brainDump = useHarnessDump(variant);
@@ -424,7 +429,8 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
       onNavigate={setRoute}
       onStop={stop}
     >
-      {route.view === "today" && (
+      {route.view === "today" && variant === "broken" && <BrokenToday />}
+      {route.view === "today" && variant !== "broken" && (
         <Home
           now={NOW.getTime()}
           projects={variant === "noprojects" ? [] : projects}

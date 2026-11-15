@@ -2,7 +2,9 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { Boundary } from "./boundary";
 import { CloudProvider, PanelLive, PetLive } from "./live";
+import { RetryNote } from "./ui";
 import "./styles.css";
 import "./screens.css";
 
@@ -19,7 +21,15 @@ if (!root) throw new Error("Missing #root element");
 createRoot(root).render(
   <StrictMode>
     <ConvexProvider client={convex}>
-      <CloudProvider>{view === "pet" ? <PetLive /> : view === "panel" ? <PanelLive /> : <App />}</CloudProvider>
+      <CloudProvider>
+        {view === "app" ? (
+          <App />
+        ) : (
+          <Boundary name={view === "pet" ? "the pet" : "the panel"} fallback={(retry) => <RetryNote what={view === "pet" ? "TARS" : "The panel"} onRetry={retry} />}>
+            {view === "pet" ? <PetLive /> : <PanelLive />}
+          </Boundary>
+        )}
+      </CloudProvider>
     </ConvexProvider>
   </StrictMode>,
 );

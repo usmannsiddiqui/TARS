@@ -7,9 +7,10 @@ import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
 import { DeskPane } from "./Desk";
 import { Home } from "./Home";
-import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
+import { Boundary } from "./boundary";
+import { CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useBrainDump, useCloud, useHelpers, useProjectSummaries, useSession, useToday } from "./live";
 import { rowPreview, todayPreview, type PetState } from "./model";
-import { scrollWithin } from "./ui";
+import { RetryNote, scrollWithin } from "./ui";
 import { Shell, Stopped, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
@@ -21,7 +22,32 @@ function StoppedLive({ ready, ...props }: { ready: boolean; projectName?: string
   return <Stopped {...props} {...(recap ? { recap } : {})} />;
 }
 
+/** Today's subscriptions in their own component, so one that throws is caught by its boundary, not the window. */
+type TodayLive = { today: ReturnType<typeof useToday>; helpers: ReturnType<typeof useHelpers>; brainDump: ReturnType<typeof useBrainDump> };
+function TodayData({ children }: { children(live: TodayLive): ReactNode }) {
+  const today = useToday({ recordReturn: true });
+  const helpers = useHelpers();
+  const brainDump = useBrainDump();
+  return children({ today, helpers, brainDump });
+}
+
+/** The window's own subscriptions (projects, focus) failing still leaves an honest screen with Try again. */
 export function App() {
+  return (
+    <Boundary
+      name="your projects"
+      fallback={(retry) => (
+        <main className="stopped">
+          <RetryNote what="Your projects" onRetry={retry} />
+        </main>
+      )}
+    >
+      <AppWindow />
+    </Boundary>
+  );
+}
+
+function AppWindow() {
   const cloud = useCloud();
   const [route, setRoute] = useState<Route>({ view: "today" });
   const [stopped, setStopped] = useState(false);
@@ -37,9 +63,6 @@ export function App() {
   const summaries = useProjectSummaries(projects);
   const switchProject = useMutation(api.projects.switchProject);
   const createProject = useMutation(api.projects.createProject);
-  const today = useToday({ recordReturn: true });
-  const helpers = useHelpers();
-  const brainDump = useBrainDump();
   const session = useSession();
   const stop = () => {
     session.onEvent("stop");
@@ -86,10 +109,20 @@ export function App() {
 
   if (stopped) return <StoppedLive ready={cloud.ready} {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} {...(session.error ? { note: session.error } : {})} onResume={() => setStopped(false)} />;
 
+  return (
+    <Boundary name="Today" fallback={(retry) => frame(null, retry)}>
+      <TodayData>{(live) => frame(live)}</TodayData>
+    </Boundary>
+  );
+
+  /** The window, with Today's data, or without it (null) while Today could not load: the rest keeps working. */
+  function frame(live: TodayLive | null, retryToday?: () => void) {
+  const today = live?.today;
+  const helpers = live?.helpers.helpers ?? [];
   // The desk draws only what this window knows: ideas in, prepared work out, the session's light.
   const working = session.state === "working";
   const desk = {
-    state: (today.brief?.kind === "evening" ? "done" : working ? "working" : "idle") as PetState,
+    state: (today?.brief?.kind === "evening" ? "done" : working ? "working" : "idle") as PetState,
     inTray: ideas.length,
     outTray: summaries?.filter((p) => p.prepared?.status === "ready" && p.prepared.work).length,
     signal: working,
@@ -124,6 +157,14 @@ export function App() {
   } else if (route.view === "calendar") {
     [title, sub, pane] = ["TARS's calendar", undefined, null];
     screen = <CalendarLive projects={summaries} />;
+  } else if (!live || !today) {
+    screen = (
+      <div className="screen chat-screen">
+        <div className="chat-scroll">
+          <RetryNote what="Today" onRetry={retryToday ?? (() => undefined)} />
+        </div>
+      </div>
+    );
   } else {
     const brief = today.brief;
     pane = (
@@ -137,7 +178,7 @@ export function App() {
     screen = (
       <Home
         now={Date.now()}
-        {...helpers}
+        {...live.helpers}
         projects={summaries}
         {...(cloud.honest ? { cloud: cloud.honest } : {})}
         {...(focusId ? { focusProjectId: focusId } : {})}
@@ -155,7 +196,7 @@ export function App() {
           if (choice === "finish") open(projectId); // the user's click opens the project's draft
         }}
         ideas={ideas}
-        brainDump={brainDump}
+        brainDump={live.brainDump}
         onCaptured={() => void loadIdeas()}
         onStart={(projectId, mode) => {
           pick(projectId); // accepting the recommended start is the user's pick
@@ -170,8 +211,8 @@ export function App() {
   return (
     <Shell
       route={route}
-      today={todayPreview(today.brief, today.schedule, summaries ?? [])}
-      projects={summaries && summaries.map((p) => ({ id: p.id, name: p.name, focus: p.id === focusId, preview: rowPreview(p, { helpers: helpers.helpers, ...(today.nudge ? { nudgeProjectId: today.nudge.projectId } : {}) }) }))}
+      today={today ? todayPreview(today.brief, today.schedule, summaries ?? []) : { text: "Could not load. Nothing was lost", warn: true }}
+      projects={summaries && summaries.map((p) => ({ id: p.id, name: p.name, focus: p.id === focusId, preview: rowPreview(p, { helpers, ...(today?.nudge ? { nudgeProjectId: today.nudge.projectId } : {}) }) }))}
       title={title}
       sub={sub}
       pane={pane}
@@ -188,7 +229,8 @@ export function App() {
       onNavigate={setRoute}
       onStop={stop}
     >
-      <Boundary key={JSON.stringify(route)}>{screen}</Boundary>
+      {screen}
     </Shell>
   );
+  }
 }
