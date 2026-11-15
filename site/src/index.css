@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+/* Pencil on paper: one sheet, graphite lines, black Helvetica Neue Bold, one navy accent.
+   Helvetica Neue is used by name (a macOS system font); no font file is shipped. */
+:root {
+  --paper: #f2f0eb;
+  --ink: #111111;
+  --navy: #1f3460;
+  --font-heading: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-weight: 700;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 3px;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.cursor {
+  animation: blink 1s step-end infinite;
+}
+
+/* The pills rise from behind a mask: nothing on this sheet just fades in. */
+.rise {
+  overflow: hidden;
+}
+
+.rise > * {
+  transform: translateY(110%);
+  transition: transform 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.rise[data-shown] > * {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+  .rise > * {
+    transform: none;
+    transition: none;
+  }
+}
