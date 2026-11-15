@@ -430,7 +430,7 @@ export const reportDone = mutation({
     const ownerId = await requireOwnerId(ctx);
     const task = await requireOwnedCommitment(ctx, ownerId, taskId);
     if (task.state === "verified-done") return "verified-done";
-    await ctx.db.patch(task._id, { state: "user-reported-done" });
+    await ctx.db.patch(task._id, { state: "user-reported-done", doneAt: Date.now() });
     return "user-reported-done";
   },
 });

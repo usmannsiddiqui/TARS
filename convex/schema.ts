@@ -168,7 +168,8 @@ export default defineSchema({
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // Commitment; the row _id is the TaskId.
-  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields }).index(
+  // doneAt: when the user marked it done ("I did it"), for the closing recap.
+  commitments: defineTable({ ownerId: v.string(), projectId: v.string(), ...commitmentFields, doneAt: v.optional(v.number()) }).index(
     "by_owner_project",
     ["ownerId", "projectId"],
   ),
@@ -205,6 +206,7 @@ export default defineSchema({
     dueJob: v.optional(v.id("_scheduled_functions")),
     lastNudgedAt: v.optional(v.number()),
     offer: v.optional(v.object({ key: v.string(), startedForYou: v.boolean() })),
+    parkedAt: v.optional(v.number()), // when the user last answered "Not now", for the closing recap
   })
     .index("by_owner_key", ["ownerId", "key"]),
 

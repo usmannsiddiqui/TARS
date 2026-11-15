@@ -114,6 +114,7 @@ function setup(initialOwner: OwnerId | null, ownerAfterSignIn: OwnerId | null = 
     get: () => ({ enabled: false, handle: "" }),
     set: (setting: unknown) => (selfTextCalls.push(["set", setting]), setting),
     sendTest: async (...args: unknown[]) => (selfTextCalls.push(["sendTest", ...args]), "sent"),
+    sendRecap: async (...args: unknown[]) => (selfTextCalls.push(["sendRecap", ...args]), "sent"),
   };
   const router = createIpcRouter({
     appOrigin: APP_ORIGIN,
@@ -416,6 +417,28 @@ describe("ipc router: wired routes", () => {
     await router.handle("selfText:set", trusted, { enabled: true, handle: "me@icloud.com" });
     expect(await router.handle("selfText:test", trusted, undefined)).toBe("sent");
     expect(selfTextCalls).toEqual([["set", { enabled: true, handle: "me@icloud.com" }], ["sendTest"]]);
+  });
+
+  it("recap text: three bounded lists of short titles, no recipient, from the app origin only", async () => {
+    const { router, selfTextCalls } = setup(null);
+    const list = (items: string[], more = 0) => ({ items, more });
+    const recap = { done: list(["Sent AI Guides report, 12:41 AM"]), parked: list([]), left: list(["Q3 plan, due Mon 5:00 PM"], 2) };
+    for (const payload of [
+      undefined,
+      { ...recap, recipient: "+15557654321" },
+      { ...recap, done: list(Array.from({ length: 6 }, () => "x")) },
+      { ...recap, done: list(["x".repeat(301)]) },
+      { ...recap, left: list([], -1) },
+      { done: recap.done, parked: recap.parked },
+    ]) {
+      await expect(router.handle("selfText:recap", trusted, payload)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    for (const sender of untrusted) {
+      await expect(router.handle("selfText:recap", sender, recap)).rejects.toBeInstanceOf(IpcRejected);
+    }
+    expect(selfTextCalls).toEqual([]);
+    expect(await router.handle("selfText:recap", trusted, recap)).toBe("sent");
+    expect(selfTextCalls).toEqual([["sendRecap", recap]]);
   });
 
   it("observation takes only bundle ids or bundle|origin selectors chosen by the user; never a path or owner", async () => {

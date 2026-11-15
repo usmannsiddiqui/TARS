@@ -106,3 +106,41 @@ describe("sending through Messages", () => {
     expect(await m.texts.sendTest()).toBe("failed");
   });
 });
+
+describe("the closing recap text", () => {
+  const recap = {
+    done: { items: ["Sent AI Guides report, 12:41 AM"], more: 0 },
+    parked: { items: [], more: 0 },
+    left: { items: ["Mail outside@example.com via https://evil.example", "B"], more: 2 },
+  };
+
+  it("sends the recap once, as one plain message, only to the saved handle", async () => {
+    const m = fakeMessages({ enabled: true, handle: OWN });
+    expect(await m.texts.sendRecap(recap)).toBe("sent");
+    expect(m.runs).toHaveLength(1);
+    expect(m.argv()).toEqual([
+      OWN,
+      [
+        "TARS · done for now",
+        "Done:",
+        "- Sent AI Guides report, 12:41 AM",
+        "Parked:",
+        "- Nothing parked.",
+        "Left:",
+        "- Mail [address] via [link]",
+        "- B",
+        "- and 2 more",
+      ].join("\n"),
+    ]);
+    expect(m.texts.get()).toMatchObject({ lastRecap: "sent" });
+  });
+
+  it("does nothing while off, and an honest result when Messages refuses", async () => {
+    const off = fakeMessages({ enabled: false, handle: OWN });
+    expect(await off.texts.sendRecap(recap)).toBe("off");
+    expect(off.runs).toEqual([]);
+    expect(await fakeMessages(undefined).texts.sendRecap(recap)).toBe("off");
+    const refused = fakeMessages({ enabled: true, handle: OWN }, { stderr: "Not authorized to send Apple events to Messages. (-1743)" });
+    expect(await refused.texts.sendRecap(recap)).toBe("not-permitted");
+  });
+});
