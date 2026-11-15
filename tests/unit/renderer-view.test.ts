@@ -176,6 +176,7 @@ describe("kindFromUrl", () => {
     expect(kindFromUrl("https://umass.instructure.com/courses/1182/assignments/4")).toBe("canvas");
     expect(kindFromUrl("https://outlook.office.com/mail")).toBe("outlook-mail");
     expect(kindFromUrl("https://outlook.office.com/calendar/item/1")).toBe("outlook-calendar");
+    expect(kindFromUrl("https://github.com/octo-labs/app/pull/7")).toBe("github");
   });
 
   it("does not guess from look-alike hosts, other schemes or bad input", () => {

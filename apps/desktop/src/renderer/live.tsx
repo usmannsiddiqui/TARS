@@ -482,16 +482,17 @@ const LOCAL: { kind: LocalKind; name: string; coverage: string }[] = [
 ];
 const CLOUD: { provider: CloudProvider; name: string; coverage: string }[] = [
   { provider: "slack", name: "Slack", coverage: "Selected channels and threads: commitments and who is waiting on whom." },
-  { provider: "gmail", name: "Gmail", coverage: "Selected project labels and threads." },
+  { provider: "gmail", name: "Gmail", coverage: "Your inbox, or only the labels you choose." },
   { provider: "notion", name: "Notion", coverage: "Pages you share with the app, and the outcome log you choose." },
   { provider: "canvas", name: "Canvas", coverage: "Selected courses and their real due dates. Checked when you connect and when you press Refresh." },
   { provider: "outlook-mail", name: "Outlook mail", coverage: "The threads or folders you select." },
   { provider: "outlook-calendar", name: "Outlook calendar", coverage: "Selected calendars, so preparation never lands in a meeting." },
   { provider: "teams", name: "Microsoft Teams", coverage: "Connects now; new Teams messages cannot arrive yet, because Composio has no Teams message trigger." },
+  { provider: "github", name: "GitHub", coverage: "New issues and pull-request activity in the repositories you select. Reading only." },
 ];
 /** These cards connect through Composio's hosted sign-in; the others connect directly. */
-const VIA_COMPOSIO: CloudProvider[] = ["slack", "gmail", "outlook-mail", "teams"];
-const viaComposio = (p: CloudProvider): p is "slack" | "gmail" | "outlook-mail" | "teams" => VIA_COMPOSIO.includes(p);
+const VIA_COMPOSIO: CloudProvider[] = ["slack", "gmail", "outlook-mail", "teams", "github"];
+const viaComposio = (p: CloudProvider): p is "slack" | "gmail" | "outlook-mail" | "teams" | "github" => VIA_COMPOSIO.includes(p);
 // The Convex HTTP actions (provider webhooks) are served from the deployment's .site origin.
 const SITE_URL = import.meta.env.CONVEX_URL.replace(/\.convex\.cloud$/, ".convex.site");
 
