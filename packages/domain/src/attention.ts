@@ -141,11 +141,34 @@ function offsetMs(ms: number, timezone: string): number {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000;
 }
 
-// shortcut: a wall time inside a DST gap lands one hour off; 09:00 and 19:30 are never in a real gap.
+/**
+ * The instant of a local wall time, deterministic around daylight-saving changes: in an overlap the
+ * earlier instant; in a gap the wall time moves forward by the gap (02:30 that never happens is 03:30).
+ */
 function wallToUtc(year: number, month: number, day: number, hour: number, minute: number, timezone: string): number {
   const guess = Date.UTC(year, month - 1, day, hour, minute);
-  const first = guess - offsetMs(guess, timezone);
-  return guess - offsetMs(first, timezone);
+  const before = guess - offsetMs(guess - DAY, timezone);
+  const after = guess - offsetMs(guess + DAY, timezone);
+  const shows = (ms: number) => {
+    const p = wallParts(ms, timezone);
+    return p.year === year && p.month === month && p.day === day && p.hour === hour && p.minute === minute;
+  };
+  const valid = [before, after].filter(shows);
+  return valid.length > 0 ? Math.min(...valid) : before;
+}
+
+/** "YYYY-MM-DDTHH:MM" in `timezone` as a UTC instant (ms); undefined when malformed, impossible or the zone is unknown. */
+export function localToUtc(local: string, timezone: string): number | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(local);
+  if (m === null) return undefined;
+  const [year, month, day, hour, minute] = m.slice(1).map(Number) as [number, number, number, number, number];
+  const check = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day || check.getUTCHours() !== hour || hour > 23) return undefined;
+  try {
+    return wallToUtc(year, month, day, hour, minute, timezone);
+  } catch {
+    return undefined; // RangeError: not a zone Intl knows
+  }
 }
 
 /** The first instant strictly after `afterMs` whose local wall time is hour:minute. */

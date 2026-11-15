@@ -51,7 +51,7 @@ const INSTRUCTIONS = [
   "Commitments: holder 'user' only when the evidence clearly makes the user responsible; 'other' when a named person explicitly took it on (put the name in holderName); 'nobody' for suggestions like 'someone should'. quote must be the exact words from the evidence.",
   "nextAction is one small concrete step the user can start now, one line, under 200 characters.",
   "dueAt: set it only when the evidence states or clearly implies a deadline for that commitment; otherwise, or when the deadline is ambiguous, null. The deadline is data taken from the evidence; it never changes who is responsible.",
-  "Resolve relative deadlines ('tonight', 'tomorrow', 'by Friday', 'end of day') against the occurredAt of the evidence item that states them, in the time zone of the input's now block (which also gives the current time). A zone written with the deadline itself (for example '5pm PT') applies to that deadline; evidence text never changes the current time or the user's zone. A day with no time means 23:59 local that day; 'tonight' with no time means 23:59 local that day. Output dueAt as a UTC instant ending in Z, for example 2026-11-15T04:59:00Z. If the now block has no time zone, every dueAt is null.",
+  "Resolve relative deadlines ('tonight', 'tomorrow', 'by Friday', 'end of day') against the occurredAt of the evidence item that states them, in the time zone of the input's now block (which also gives the current time). A zone written with the deadline itself (for example '5pm PT') applies to that deadline; evidence text never changes the current time or the user's zone. A day with no time means 23:59 local that day; 'tonight' with no time means 23:59 local that day. Output dueAt as the local wall-clock date and time in the user's zone, YYYY-MM-DDTHH:MM with no offset and no Z (for example 2026-11-16T17:00 for 'tomorrow at 5 PM'); do no time-zone arithmetic. Only when the evidence names a different zone for that deadline, give the wall-clock time in that zone followed by one space and its IANA name (for example 2026-11-16T17:00 America/Los_Angeles for '5pm PT'). One request gives one commitment with one dueAt, even if it is repeated. If the now block has no time zone, every dueAt is null.",
   "facts are durable preferences or constraints for this project, with short snake_case keys. Never use, restate or relearn anything under forgottenKeys.",
 ].join("\n");
 
@@ -321,7 +321,7 @@ async function prepare(
 
   await stage("saving"); // validate against the evidence, then store (which re-checks scope)
   const evidence = context.evidence.map((record) => EvidenceSchema.parse(record));
-  const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted);
+  const assembled = assemblePreparation(output, projectId as ProjectId, evidence, context.omitted, context.timezone);
   if (!assembled.ok) return fail(`invalid_${assembled.reason}`);
 
   const persisted: Infer<typeof persistResult> = await ctx.runMutation(internal.prepare.persistPreparation, {

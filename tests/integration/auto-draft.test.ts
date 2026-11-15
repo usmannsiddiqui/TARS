@@ -13,7 +13,7 @@ const modules = import.meta.glob("../../convex/**/*.*s");
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 const HOUR = 3_600_000;
 const NOW = "2026-11-14T15:00:00.000Z"; // Saturday 10:00 in New York
-const DUE = "2026-11-14T22:00:00.000Z";
+const DUE = "2026-11-14T22:00:00.000Z"; // legacy form: a UTC instant from the model is taken as given (it is now asked for local wall time)
 
 const completed = (output: unknown) => ({
   status: "completed",
@@ -304,6 +304,31 @@ describe("stable commitment identity across re-preparation", () => {
     await asAlice.mutation(api.briefs.handleReturn, { panelOpen: false });
     const [second] = await offers();
     expect(second!.body).toMatch(/^Book the room/);
+  });
+
+  test("one_mail_asking_one_thing_twice_in_one_run_is_one_commitment_due_at_the_earlier_local_time", async () => {
+    const { asAlice, project, evidence, settle, all } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const budget = await project("Budget");
+    let mail = "";
+    const quote = "send the report by tomorrow at 5 PM";
+    stubModel(() =>
+      prepared({
+        evidenceIds: [mail],
+        commitments: [
+          // Local wall time in the user's zone: code does the offset, not the model.
+          { ...dueCommitment(mail, quote), text: "Email Dana the report", dueAt: "2026-11-15T18:00" },
+          { ...dueCommitment(mail, `Alice, please ${quote}`), text: "Send the report", dueAt: "2026-11-15T17:00" },
+        ],
+      }),
+    );
+    mail = (await evidence(budget, `Alice, please ${quote}.`)).id;
+    await settle();
+
+    const mine = (await asAlice.query(api.prepare.listCommitments, { projectId: budget })).filter((c) => c.ownership === "user");
+    expect(mine.map((c) => [c.text, c.dueAt])).toEqual([["Email Dana the report", "2026-11-15T22:00:00.000Z"]]); // 17:00 EST
+    expect(await all("nudges")).toHaveLength(1);
+    expect(await all("threadMessages")).toHaveLength(1);
   });
 
   test("cleanup_merges_duplicate_nudges_for_that_owner_only", async () => {
