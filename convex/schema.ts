@@ -61,6 +61,8 @@ export const commitmentFields = {
   state: v.union(v.literal("open"), v.literal("waiting"), v.literal("user-reported-done"), v.literal("verified-done")),
   dueAt: v.optional(v.string()),
   evidenceIds: v.array(v.string()),
+  // Stable identity (commitmentKey), set when first stored and kept when a re-preparation rewords it.
+  key: v.optional(v.string()),
 };
 
 /** SortKind (packages/domain/src/sort.ts). */
@@ -194,8 +196,6 @@ export default defineSchema({
     ...commitmentFields,
     doneAt: v.optional(v.number()),
     origin: v.optional(v.literal("capture")),
-    // Stable identity (commitmentKey), set when first stored and kept when a re-preparation rewords it.
-    key: v.optional(v.string()),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // One line of a sorted brain dump. captureId: the capture's id on the Mac (the full text stays there).
