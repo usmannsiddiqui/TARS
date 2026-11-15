@@ -82,7 +82,7 @@ const checkText = (text: string) => {
 };
 
 /** Model output is untrusted: reject empty or oversized text as an invalid result. */
-const validOutput = (output: { text: string; changeSummary: string }) =>
+export const validOutput = (output: { text: string; changeSummary: string }) =>
   output.text.trim().length > 0 && output.text.length <= MAX_ARTIFACT_TEXT && output.changeSummary.length <= MAX_SUMMARY;
 
 const modelFailed = (reason: string) => new ConvexError({ code: "model_failed", reason });

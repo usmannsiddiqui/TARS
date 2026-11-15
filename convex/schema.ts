@@ -79,6 +79,9 @@ export const artifactFields = {
   evidenceIds: v.array(v.string()),
 };
 
+/** Block specs as stored; their props are checked by the domain catalog's Zod schemas before writing. */
+export const threadBlocks = v.array(v.object({ id: v.string(), type: v.string(), props: v.any() }));
+
 /** FocusState (domain type). */
 export const focusFields = {
   projectId: v.optional(v.string()),
@@ -193,6 +196,8 @@ export default defineSchema({
     // (and item counts) of the evidence it sent to the model.
     stage: v.optional(runStage),
     sources: v.optional(v.array(v.object({ kind: v.string(), count: v.number() }))),
+    // When each stage really started (ms): the project chat's first message shows these timings.
+    stageTimes: v.optional(v.array(v.object({ stage: runStage, at: v.number() }))),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // Gentle nudges for one of the user's commitments with a due time (key = commitmentKey, stable
@@ -230,6 +235,23 @@ export default defineSchema({
     "artifactId",
     "revision",
   ]),
+
+  // The project chat. TARS's messages are generative-UI block specs (packages/domain/src/thread.ts,
+  // validated there before every write) updated in place as work happens; the user's are plain text.
+  // commitmentKey: the due commitment TARS's first message was written for (exactly once per key).
+  // replyTo: the user message a TARS reply answers, so Try again can answer it again.
+  threadMessages: defineTable({
+    ownerId: v.string(),
+    projectId: v.string(),
+    role: v.union(v.literal("tars"), v.literal("user")),
+    text: v.optional(v.string()),
+    blocks: threadBlocks,
+    commitmentKey: v.optional(v.string()),
+    replyTo: v.optional(v.id("threadMessages")),
+    createdAt: v.number(),
+  })
+    .index("by_owner_project", ["ownerId", "projectId"])
+    .index("by_owner_commitment", ["ownerId", "commitmentKey"]),
 
   // Proposed text kept apart from the artifact: a late/conflicting revision or a source update.
   artifactSuggestions: defineTable({

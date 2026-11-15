@@ -30,6 +30,7 @@ import type * as memory from "../memory.js";
 import type * as prepare from "../prepare.js";
 import type * as projects from "../projects.js";
 import type * as shares from "../shares.js";
+import type * as thread from "../thread.js";
 import type * as transcription from "../transcription.js";
 
 import type {
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   prepare: typeof prepare;
   projects: typeof projects;
   shares: typeof shares;
+  thread: typeof thread;
   transcription: typeof transcription;
 }>;
 

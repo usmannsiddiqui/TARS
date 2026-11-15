@@ -88,7 +88,7 @@ export function viewBlock(raw: unknown, index: number): BlockView {
     const value = given[key];
     if (inner instanceof z.ZodArray && Array.isArray(value)) {
       kept[key] = value.flatMap((item) => {
-        const one = inner.element.safeParse(item);
+        const one = z.safeParse(inner.element, item);
         return one.success ? [one.data] : [];
       });
     } else if (value !== undefined) {
