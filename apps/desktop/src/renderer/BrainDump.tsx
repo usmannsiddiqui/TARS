@@ -3,16 +3,20 @@
 // correct, never an approval gate: nothing here waits on a confirm, sends, drafts or changes focus.
 // Presentational: the view arrives by subscription, actions as props.
 import { useState } from "react";
+import type { BlockProps } from "@companion/domain/thread";
 import { groupSorted, type SortKind } from "../../../../packages/domain/src/sort";
 import { reason, StateNote } from "./ui";
 
-export type DumpLine = { id: string; text: string; projectId: string | null; kind: SortKind; dueAt?: string };
-export type DumpView = { kind: "sorting"; projects: number } | { kind: "sorted"; lines: DumpLine[] } | { kind: "failed"; detail: string };
+// One shape for the sort's view: the thread's `sorted` block (packages/domain/src/thread.ts).
+export type DumpView = BlockProps<"sorted">["view"];
+export type DumpLine = Extract<DumpView, { kind: "sorted" }>["lines"][number];
 export type BrainDumpProps = {
   /** Signed in with the cloud reachable: Save also sends the text to be sorted. */
   cloud: boolean;
   projects: { id: string; name: string }[];
   view?: DumpView;
+  /** The words of the capture being sorted and when he saved them (Today shows them as his message). */
+  said?: { text: string; at: number };
   /** The capture is durably on this Mac: sort it (once). */
   onSaved(captureId: string, text: string): void;
   onRetry(): void;

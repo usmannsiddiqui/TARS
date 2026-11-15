@@ -382,10 +382,12 @@ describe("offer on a new due commitment", () => {
 
     const shown = await offers();
     expect(shown).toHaveLength(1);
-    expect(shown[0]).toMatchObject({ projectId: budget, startedForYou: false, delivered: false });
-    expect(shown[0]!.body).toMatch(/Your draft is here whenever you want it\./);
+    // The earlier draft was never edited by the user, so the new request is started as its next revision.
+    expect(shown[0]).toMatchObject({ projectId: budget, startedForYou: true, delivered: false });
+    expect(shown[0]!.body).toMatch(/I started this for you/);
     expect((await asAlice.query(api.briefs.getAttentionState, {}))?.key).toBe(shown[0]!.key);
-    expect(await all("artifacts")).toHaveLength(1); // the user's draft, untouched
+    expect((await all("artifacts")).map((a) => a.revision)).toEqual(["2"]);
+    expect((await all("artifactVersions")).map((a) => a.revision)).toEqual(["1"]);
 
     // A second automatic run sees the same commitment: nothing new.
     ids.push((await evidence(budget, "Illustrative follow-up: thanks!")).id);

@@ -152,6 +152,35 @@ export async function createDraftFromPrepared(ctx: MutationCtx, ownerId: string,
   return { id, created: true };
 }
 
+/**
+ * A newly seen request in this project: its prepared deliverable becomes the draft. No draft yet: the
+ * first revision. A current revision TARS wrote and the user never edited, or one already sent and
+ * verified: the next revision, so Undo and anything bound to the earlier one stay. A user-edited,
+ * unsent revision is never overwritten: the new start is kept as a suggestion. Sends nothing.
+ */
+export async function startDraftForRequest(ctx: MutationCtx, ownerId: string, projectId: string, request: string) {
+  const created = await createDraftFromPrepared(ctx, ownerId, projectId);
+  if (created.created) return { id: created.id, outcome: "created" as const };
+  const row = (await ctx.db.get(created.id))!;
+  const work = (await ctx.db
+    .query("preparedWork")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .unique())!.work!; // createDraftFromPrepared already required it
+  const changeSummary = `Started for: ${request}`.slice(0, MAX_SUMMARY);
+  const actions = await ctx.db
+    .query("actions")
+    .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
+    .collect();
+  const sent = actions.some((a) => a.artifactId === row._id && a.revision === row.revision && a.state === "succeeded");
+  if (!row.userEdited || sent) {
+    const transition = applyChange(toArtifact(row, row._id), row.revision as RevisionId, { text: work.body, userEdited: false, evidenceIds: work.evidenceIds as EvidenceId[], changeSummary });
+    await commit(ctx, row._id, transition);
+    return { id: row._id, outcome: "revised" as const };
+  }
+  await ctx.db.insert("artifactSuggestions", { ownerId, artifactId: row._id, kind: "source", text: work.body, changeSummary, baseRevision: row.revision, evidenceIds: work.evidenceIds });
+  return { id: row._id, outcome: "suggested" as const };
+}
+
 /** The user's direct edit. Applies only on the current revision; otherwise conflict with current text. */
 export const saveEdit = mutation({
   args: { artifactId: v.string(), baseRevision: v.string(), text: v.string() },
