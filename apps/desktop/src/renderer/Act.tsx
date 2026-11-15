@@ -42,12 +42,14 @@ export type ActProps = {
 export type LogDestinationView = { kind: "notion" | "obsidian"; label?: string };
 
 /** Every kind's words in one place: what it is, the destination field, and how its outcome reads. */
-const TEXT: Record<ActKind, { word: string; option: string; field: string; verb: string; doing: string; chip: string; proof: string; to: boolean }> = {
+const TEXT: Record<Receipt["kind"], { word: string; option: string; field: string; verb: string; doing: string; chip: string; proof: string; to: boolean }> = {
   "send-mail": { word: "Email", option: "Send as an email", field: "Recipient email address", verb: "sent", doing: "Sending", chip: "mail", proof: "found in your sent mail with the same recipient and text", to: true },
   "post-message": { word: "Slack post", option: "Post to a Slack channel", field: "Slack channel ID", verb: "posted", doing: "Posting", chip: "slack", proof: "read back from the channel with the same text", to: true },
   "update-note": { word: "Notion page update", option: "Update a Notion page", field: "Notion page ID", verb: "updated", doing: "Updating", chip: "notion", proof: "read back from the page", to: false },
+  // Started from the chat (delivery.approveAndSend), never from this picker; only its receipt shows here.
+  "send-document": { word: "Word document by email", option: "Send the Word document", field: "Recipient email address", verb: "sent", doing: "Sending", chip: "mail", proof: "found in your sent mail with the same recipient and text", to: true },
 };
-const verb = (kind: ActKind) => TEXT[kind].verb;
+const verb = (kind: Receipt["kind"]) => TEXT[kind].verb;
 const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
 export function Act({ saved, dirty, tasks, receipt, onActed, actions, logDestination }: ActProps) {

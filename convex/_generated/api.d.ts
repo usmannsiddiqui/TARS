@@ -18,6 +18,7 @@ import type * as connectors_gmail from "../connectors/gmail.js";
 import type * as connectors_notion from "../connectors/notion.js";
 import type * as connectors_outlook from "../connectors/outlook.js";
 import type * as connectors_slack from "../connectors/slack.js";
+import type * as delivery from "../delivery.js";
 import type * as evidence from "../evidence.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -50,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   "connectors/notion": typeof connectors_notion;
   "connectors/outlook": typeof connectors_outlook;
   "connectors/slack": typeof connectors_slack;
+  delivery: typeof delivery;
   evidence: typeof evidence;
   http: typeof http;
   "lib/auth": typeof lib_auth;

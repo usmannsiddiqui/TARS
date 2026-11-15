@@ -5,6 +5,7 @@
 // scheduled job and it reads no content.
 import { ConvexError, v } from "convex/values";
 import { mailSubject, outcomeForFailure, sameContent, type EffectOutcome } from "../../packages/domain/src/actions";
+import { mailFields } from "../../packages/domain/src/delivery";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -132,6 +133,7 @@ export function mailItem(message: GraphMessage): ProviderItem | null {
     text: text.slice(0, MAX_TEXT),
     occurredAt: new Date(message.receivedDateTime).toISOString(),
     ...httpsUrl(message.webLink),
+    ...mailFields(from?.address === undefined ? undefined : { ...from, address: from.address }, message.subject),
   };
 }
 
