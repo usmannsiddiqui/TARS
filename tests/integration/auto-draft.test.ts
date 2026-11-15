@@ -112,7 +112,14 @@ const dueCommitment = (id: string, quote: string) => ({
 
 describe("automatic preparation on new evidence", () => {
   test("new_mail_with_my_due_task_gets_a_draft_and_one_started_offer", async () => {
+    // The due-1h reminder, beside the two daily brief deadlines the zone setting schedules.
+    const JOBS = [
+      ["briefs:nudgeDueSoon", "2026-11-14T21:00:00.000Z"],
+      ["briefs:prepareEvening", "2026-11-15T00:30:00.000Z"],
+      ["briefs:prepareMorning", "2026-11-15T14:00:00.000Z"],
+    ];
     const { asAlice, project, evidence, settle, all, pendingJobs, offers } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
     const budget = await project("Budget");
     const other = await project("Other");
     await asAlice.mutation(api.projects.switchProject, { targetProjectId: other, userInitiated: true });
@@ -136,9 +143,9 @@ describe("automatic preparation on new evidence", () => {
     expect(shown[0]).toMatchObject({ projectId: budget, startedForYou: true, delivered: false });
     expect(shown[0]!.body).toMatch(/I started this for you, want to finish it together\?/);
     // The attention state offers it (once, by key) like any other item.
-    expect((await asAlice.query(api.briefs.getAttentionState, {}))).toBeNull(); // no timezone set yet
+    expect(await asAlice.query(api.briefs.getAttentionState, {})).toMatchObject({ key: shown[0]!.key, title: "Started for you" });
     // Exactly one reminder an hour before it is due, and nothing that checks for data.
-    expect(await pendingJobs()).toEqual([["briefs:nudgeDueSoon", "2026-11-14T21:00:00.000Z"]]);
+    expect(await pendingJobs()).toEqual(JOBS);
     // The chosen focus is untouched.
     expect((await asAlice.query(api.projects.getFocus, {})).projectId).toBe(other);
     expect(await all("preparationRuns")).toEqual([]);
@@ -150,7 +157,7 @@ describe("automatic preparation on new evidence", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(await all("artifacts")).toHaveLength(1);
     expect(await offers()).toHaveLength(1);
-    expect(await pendingJobs()).toEqual([["briefs:nudgeDueSoon", "2026-11-14T21:00:00.000Z"]]);
+    expect(await pendingJobs()).toEqual(JOBS);
   });
 
   test("a_burst_of_evidence_coalesces_into_one_run_and_at_most_one_follow_up", async () => {
@@ -311,5 +318,84 @@ describe("gentle nudges", () => {
     await vi.advanceTimersByTimeAsync(Date.parse(DUE) - HOUR - Date.now());
     await t.finishInProgressScheduledFunctions();
     expect(await offers()).toMatchObject([{ nudgeId: offer.nudgeId, startedForYou: false }]);
+  });
+});
+
+describe("due times from relative dates", () => {
+  const TONIGHT = "2026-11-15T04:59:00.000Z"; // Saturday 23:59 in New York
+  const AT_NOW = expect.stringMatching(/^2026-11-14T15:00:00\.\d{3}Z$/); // settle() moves the clock a few ms
+  const REPORT = "Alice, the AI Guides report is due tonight at 11:59 PM. Can you send it over?";
+  const report = (id: string, dueAt: string | null) => ({
+    text: "Send the AI Guides report",
+    holder: "user" as const,
+    holderName: null,
+    explicit: true,
+    quote: "the AI Guides report is due tonight at 11:59 PM",
+    dueAt,
+    evidenceIds: [id],
+  });
+  /** One automatic run on the report mail, the stubbed model answering `dueAt`; the zone set first when given. */
+  async function run(dueAt: string | null, timezone: string | null) {
+    const s = setup();
+    if (timezone !== null) await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone });
+    const guides = await s.project("AI Guides");
+    let mailId = "";
+    stubModel(() => prepared({ evidenceIds: [mailId], commitments: [report(mailId, dueAt)] }));
+    mailId = (await s.evidence(guides, REPORT)).id;
+    await s.settle();
+    const sent = JSON.parse(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).input);
+    const mine = (await s.asAlice.query(api.prepare.listCommitments, { projectId: guides })).filter((c) => c.ownership === "user");
+    const dueJobs = (await s.pendingJobs()).filter(([name]) => name === "briefs:nudgeDueSoon");
+    return { ...s, guides, sent, mine, dueJobs };
+  }
+
+  test("due_tonight_resolves_in_the_users_zone_and_gets_a_draft_one_offer_and_one_due_soon_job", async () => {
+    const { sent, mine, dueJobs, all, offers } = await run(TONIGHT, "America/New_York");
+
+    // The trusted clock sits beside the evidence, never inside an evidence text.
+    expect(sent.now).toEqual({
+      utc: AT_NOW,
+      timezone: "America/New_York",
+      localDate: "2026-11-14",
+      localWeekday: "Saturday",
+      localTime: "10:00",
+    });
+    expect(sent.evidence).toEqual([expect.objectContaining({ occurredAt: NOW, text: REPORT })]);
+    for (const item of sent.evidence) expect(item.text).not.toMatch(/America\/New_York|2026-11-14T15/);
+
+    expect(mine.map((c) => [c.text, c.state, c.dueAt])).toEqual([["Send the AI Guides report", "open", TONIGHT]]);
+    expect(await all("nudges")).toHaveLength(1);
+    expect(dueJobs).toEqual([["briefs:nudgeDueSoon", "2026-11-15T03:59:00.000Z"]]);
+    expect(await all("artifacts")).toHaveLength(1);
+    expect(await offers()).toMatchObject([{ startedForYou: true }]);
+  });
+
+  test("due_in_under_an_hour_opens_the_started_offer_now_and_schedules_no_past_reminder", async () => {
+    const soon = new Date(Date.parse(NOW) + 30 * 60_000).toISOString();
+    const { mine, dueJobs, all, offers } = await run(soon, "America/New_York");
+    expect(mine.map((c) => c.dueAt)).toEqual([soon]);
+    const nudges = await all("nudges");
+    expect(nudges).toMatchObject([{ dueAt: soon }]);
+    expect(nudges[0]!.dueJob).toBeUndefined();
+    expect(dueJobs).toEqual([]);
+    expect(await offers()).toMatchObject([{ startedForYou: true }]);
+  });
+
+  test("already_past_due_stores_the_time_but_nudges_and_drafts_nothing", async () => {
+    const past = new Date(Date.parse(NOW) - 30 * 60_000).toISOString();
+    const { mine, dueJobs, all, offers } = await run(past, "America/New_York");
+    expect(mine.map((c) => c.dueAt)).toEqual([past]);
+    expect(await all("nudges")).toEqual([]);
+    expect(dueJobs).toEqual([]);
+    expect(await all("artifacts")).toEqual([]);
+    expect(await offers()).toEqual([]);
+  });
+
+  test("no_stored_zone_means_no_guessed_due_time", async () => {
+    const { sent, mine, dueJobs, all } = await run(TONIGHT, null);
+    expect(sent.now).toEqual({ utc: AT_NOW, timezone: null, note: "The user's time zone is not known: set every dueAt to null." });
+    expect(mine.map((c) => [c.text, c.dueAt])).toEqual([["Send the AI Guides report", undefined]]);
+    expect(await all("nudges")).toEqual([]);
+    expect(dueJobs).toEqual([]);
   });
 });
