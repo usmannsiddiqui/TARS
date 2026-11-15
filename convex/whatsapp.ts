@@ -190,9 +190,10 @@ export const deliver = internalAction({
     } catch {
       return record("failed", { code: "network" });
     }
-    const reply = (await response.json().catch(() => ({}))) as { sid?: unknown; code?: unknown; error_code?: unknown; status?: unknown };
+    const reply = (await response.json().catch(() => ({}))) as { sid?: unknown; code?: unknown; error_code?: unknown; status?: unknown; message?: unknown };
     const code = String(reply.code ?? reply.error_code ?? "");
-    if (!response.ok) return record(WINDOW_CODES.has(code) ? "refused" : "failed", { code: code || `http_${response.status}` });
+    // The HTTP status and Twilio's own words tell a wrong login (401) from a refused request (403): it gives both the same code.
+    if (!response.ok) return record(WINDOW_CODES.has(code) ? "refused" : "failed", { code: WINDOW_CODES.has(code) ? code : `${code || "none"}/http_${response.status}${typeof reply.message === "string" ? `: ${reply.message.slice(0, 120)}` : ""}` });
     return record("sent", typeof reply.sid === "string" ? { twilioSid: reply.sid } : {});
   },
 });
