@@ -6,6 +6,7 @@ import {
   dueLabel,
   formatDuration,
   isMailAddress,
+  phoneHtml,
   primaryBlockId,
   sayParts,
   stripEvidenceIds,
@@ -224,5 +225,19 @@ describe("sayParts (TARS's words, formatted for reading)", () => {
 
   it("leaves a lone asterisk pair or a heading mark as plain words", () => {
     expect(sayParts("## Budget\n2 ** 3 is 8")).toEqual([{ kind: "p", lines: [[{ text: "Budget 2 ** 3 is 8" }]] }]);
+  });
+});
+
+describe("phoneHtml (TARS's words as a Telegram message)", () => {
+  it("keeps paragraphs, turns **bold** and list lines into Telegram's own marks, and escapes everything else", () => {
+    expect(phoneHtml("Good morning.\n\n**This week**\n- **Mon 1:30 PM:** class <Zoom> & lab\n- Thu: homework", [])).toBe(
+      "Good morning.\n\n<b>This week</b>\n• <b>Mon 1:30 PM:</b> class &lt;Zoom&gt; &amp; lab\n• Thu: homework",
+    );
+  });
+
+  it("adds each source as a link from its stored address, never from the words", () => {
+    expect(phoneHtml("See [this](https://evil.example).", [{ label: 'Homework "5" <due>', url: "https://canvas.example.com/a?x=1&y=2" }])).toBe(
+      'See [this](https://evil.example).\n\n• <a href="https://canvas.example.com/a?x=1&amp;y=2">Homework &quot;5&quot; &lt;due&gt;</a>',
+    );
   });
 });

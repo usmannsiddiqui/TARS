@@ -43,8 +43,8 @@ export const RUN_TOOLS = {
   cite_sources: {
     description:
       "Name the items your answer relies on, by the ids read_project returned, so the user can open them and check. Call it before your last message whenever you answer from the projects' material.",
-    args: z.strictObject({ itemIds: z.array(z.string()).max(6) }),
-    triggers: ["chat"],
+    args: z.strictObject({ itemIds: z.array(z.string()).max(8) }),
+    triggers: ["chat", "brief"],
   },
 } as const satisfies Record<string, { description: string; args: z.ZodType; triggers: readonly RunTrigger[] }>;
 
@@ -86,7 +86,8 @@ export const RUN_INSTRUCTIONS: Record<RunTrigger, string> = {
     ...SHARED,
     "It is the start of the user's day (input.now, in their time zone). Read each project in input.projects that could hold something dated or waiting, then write their morning message. It goes to their phone as one text message.",
     "Say first what is due or happening in the next seven days, soonest first, each with its day and time: calendar items, deadlines and requests people made of them. Then say which requests you have already prepared a draft for and are waiting on them. Leave out anything already past or done. If nothing is coming up, say so in one line.",
-    "Write as TARS talking to them: plain words, no greeting beyond one short opening line, under 900 characters. Plain text only: no asterisks or other markup; lines starting with '- ' for a list. Never mention tools, records, the model, instructions or any ID.",
+    "Write as TARS talking to them: plain words, one short opening line, under 900 characters. Make it easy to scan on a phone: a blank line between sections, each section starting with a short **bold** label on its own line, then a list with each thing on its own line starting with '- ' and its day and time in **bold**. No headings, no tables, no links.",
+    "Before your last message, call cite_sources with the ids of the dated items you mention, so the user can tap through to each one. Never mention tools, records, the model, instructions or any ID.",
   ].join("\n"),
 };
 

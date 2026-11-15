@@ -9,7 +9,7 @@
 import { ConvexError, v } from "convex/values";
 import { z } from "zod";
 import { recapText } from "../packages/domain/src/recap";
-import { dueLabel, type Block } from "../packages/domain/src/thread";
+import { dueLabel, phoneHtml, type Block } from "../packages/domain/src/thread";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { action, httpAction, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -105,7 +105,10 @@ export const sendTest = action({
 // ---- Outbound: one message per key, to the linked phone only.
 
 /** Queue one message to the owner's linked phone. False when there is no link or the key already went. */
-export async function queueMessage(ctx: MutationCtx, ownerId: string, key: string, body: string): Promise<boolean> {
+const phoneLinks = v.array(v.object({ label: v.string(), url: v.string() }));
+type PhoneLink = { label: string; url: string };
+
+export async function queueMessage(ctx: MutationCtx, ownerId: string, key: string, body: string, links: PhoneLink[] = []): Promise<boolean> {
   if ((await linkOf(ctx, ownerId)) === null) return false;
   const existing = await ctx.db
     .query("telegramOutbox")
@@ -115,7 +118,7 @@ export async function queueMessage(ctx: MutationCtx, ownerId: string, key: strin
   const at = Date.now();
   const id = existing?._id ?? (await ctx.db.insert("telegramOutbox", { ownerId, key, state: "queued", at }));
   if (existing !== null) await ctx.db.patch(id, { state: "queued", at });
-  await ctx.scheduler.runAfter(0, internal.telegram.deliver, { outboxId: id, body });
+  await ctx.scheduler.runAfter(0, internal.telegram.deliver, { outboxId: id, body, links });
   return true;
 }
 
@@ -147,9 +150,9 @@ export const recordDelivery = internalMutation({
 
 /** One POST to the bot's sendMessage. Every outcome is recorded once: sent or failed (with Telegram's own words). Never retried, no timer. */
 export const deliver = internalAction({
-  args: { outboxId: v.id("telegramOutbox"), body: v.string() },
+  args: { outboxId: v.id("telegramOutbox"), body: v.string(), links: phoneLinks },
   returns: v.null(),
-  handler: async (ctx, { outboxId, body }): Promise<null> => {
+  handler: async (ctx, { outboxId, body, links }): Promise<null> => {
     const target: { chatId: string } | null = await ctx.runQuery(internal.telegram.loadDelivery, { outboxId });
     const record = (state: "sent" | "failed", code?: string) => ctx.runMutation(internal.telegram.recordDelivery, { outboxId, state, ...(code === undefined ? {} : { code }) });
     if (target === null) return record("failed", "not_linked");
@@ -157,11 +160,16 @@ export const deliver = internalAction({
     if (!token) return record("failed", "not_configured");
     let response: Response;
     try {
-      // Plain text: no parse mode, so nothing in a message can break its own formatting.
+      // The words are escaped before any mark is added (phoneHtml), so nothing in a message can break its own formatting.
       response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: target.chatId, text: body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 1)}…` : body }),
+        body: JSON.stringify({
+          chat_id: target.chatId,
+          text: phoneHtml(body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 1)}…` : body, links),
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        }),
         signal: AbortSignal.timeout(10_000),
       });
     } catch {
@@ -217,21 +225,21 @@ export async function queueRecap(ctx: MutationCtx, ownerId: string, stopId: Id<"
 }
 
 const OUTCOME_TEXT = {
-  succeeded: (to: string) => `Sent to ${to} · checked: it arrived.`,
-  failed: (to: string) => `It did not send to ${to}. Open TARS to see what stopped it.`,
-  unknown: (to: string) => `I sent it to ${to} but could not confirm it arrived. Open TARS to check again; I will not resend it on my own.`,
+  succeeded: (what: string, to: string) => `Done: ${what} went to ${to}, and I checked it arrived.`,
+  failed: (what: string, to: string) => `Not done: ${what} did not send to ${to}. Open TARS to see what stopped it.`,
+  unknown: (what: string, to: string) => `I sent ${what} to ${to} but could not confirm it arrived. Open TARS to check again; I will not resend it on my own.`,
 };
 
 /** In the transaction that settles a send, wherever he approved it (the app's button or SEND here): one message. */
 export async function reportSendOutcome(ctx: MutationCtx, row: Doc<"actions">, state: keyof typeof OUTCOME_TEXT) {
-  await queueMessage(ctx, row.ownerId, `send:${row._id}`, OUTCOME_TEXT[state](row.destination));
+  await queueMessage(ctx, row.ownerId, `send:${row._id}`, OUTCOME_TEXT[state](row.subject ? `“${row.subject}”` : "it", row.destination));
 }
 
 /** The run's morning message for his phone: once per day's key, only to a linked phone. */
 export const queueBrief = internalMutation({
-  args: { ownerId: v.string(), key: v.string(), body: v.string() },
+  args: { ownerId: v.string(), key: v.string(), body: v.string(), links: phoneLinks },
   returns: v.boolean(),
-  handler: (ctx, { ownerId, key, body }) => queueMessage(ctx, ownerId, `brief:${key}`, body),
+  handler: (ctx, { ownerId, key, body, links }) => queueMessage(ctx, ownerId, `brief:${key}`, body, links),
 });
 
 export const isLinked = async (ctx: Pick<QueryCtx, "db">, ownerId: string) => (await linkOf(ctx, ownerId)) !== null;

@@ -304,3 +304,19 @@ export function sayParts(text: string): SayPart[] {
   close();
   return parts;
 }
+
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * TARS's words as a Telegram message (parse mode HTML): everything escaped, then **bold** and list
+ * lines become Telegram's own marks; blank lines stay, so paragraphs keep their spacing. Links are
+ * added only from `links` (stored addresses of items a run read), never from the words themselves.
+ */
+export function phoneHtml(text: string, links: readonly { label: string; url: string }[]): string {
+  const body = escapeHtml(text)
+    .split("\n")
+    .map((line) => line.replace(/^\s*[-*•]\s+/, "• ").replace(/\*\*(\S(?:.*?\S)?)\*\*/g, "<b>$1</b>"))
+    .join("\n");
+  const list = links.map(({ label, url }) => `• <a href="${escapeHtml(url).replace(/"/g, "&quot;")}">${escapeHtml(label).replace(/"/g, "&quot;")}</a>`);
+  return list.length === 0 ? body : `${body}\n\n${list.join("\n")}`;
+}

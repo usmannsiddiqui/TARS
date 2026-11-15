@@ -112,8 +112,8 @@ async function setup() {
   const texts = () =>
     calls
       .filter((c) => c.url === TELEGRAM)
-      .map((c) => JSON.parse(c.body) as { chat_id: string; text: string })
-      .map((m) => ({ To: m.chat_id, Body: m.text }));
+      .map((c) => JSON.parse(c.body) as { chat_id: string; text: string; parse_mode: string })
+      .map((m) => ({ To: m.chat_id, Body: m.text, mode: m.parse_mode }));
   const routeCalls = () => calls.filter((c) => c.url === MODEL && c.body.includes("telegram_route")).length;
   const settle = () => t.finishAllScheduledFunctions(() => {});
 
@@ -313,7 +313,7 @@ describe("messages from his phone", () => {
     s.calls.length = 0;
     await s.inbound(PHONE, "SEND");
     expect(s.gmailSends()).toEqual([{ recipient_email: DANA, subject: "Re: Budget", body: DRAFT }]);
-    expect(s.texts().map((m) => m.Body)).toEqual([`Sent to ${DANA} · checked: it arrived.`]);
+    expect(s.texts().map((m) => m.Body)).toEqual([`Done: “Re: Budget” went to ${DANA}, and I checked it arrived.`]);
   });
 
   test("SEND sends once through the chat's send, then one verified message; a second SEND sends nothing", async () => {
@@ -324,7 +324,7 @@ describe("messages from his phone", () => {
     s.calls.length = 0;
     await s.inbound(PHONE, " send ");
     expect(s.gmailSends().map((m) => m.recipient_email)).toEqual([DANA]);
-    expect(s.texts().map((m) => m.Body)).toEqual([`Sent to ${DANA} · checked: it arrived.`]);
+    expect(s.texts().map((m) => m.Body)).toEqual([`Done: “Re: Budget” went to ${DANA}, and I checked it arrived.`]);
     const approval = (await s.thread()).flatMap((m) => m.blocks).find((b) => b.type === "approval")!;
     expect((approval.props as { state: string }).state).toBe("approved");
     expect((await s.thread()).some((m) => m.blocks.some((b) => b.type === "delivery"))).toBe(true);
@@ -345,21 +345,29 @@ describe("messages from his phone", () => {
     await s.asAlice.action(api.thread.send, { projectId: s.projectId, artifactId: approval.artifactId, revision: approval.revision, commitmentKey: approval.commitmentKey, recipient: approval.recipient });
     await s.settle();
     expect(s.gmailSends().map((m) => m.recipient_email)).toEqual([DANA]);
-    expect(s.texts().map((m) => m.Body)).toEqual([`Sent to ${DANA} · checked: it arrived.`]);
+    expect(s.texts().map((m) => m.Body)).toEqual([`Done: “Re: Budget” went to ${DANA}, and I checked it arrived.`]);
   });
 
-  test("the morning brief goes to the linked phone in the run's own words, after it read his projects", async () => {
+  test("the morning brief goes to the linked phone in the run's own words, formatted, with links to the items it used", async () => {
     const s = await setup();
     await s.link();
     await s.asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
     const { morningAt } = (await s.t.run((ctx) => ctx.db.query("attentionSettings").first()))!;
+    const [mail] = await s.all("evidence");
+    await s.t.run((ctx) => ctx.db.patch(mail!._id, { sourceUrl: "https://mail.example.com/m/18d1?a=1&b=2" }));
     s.calls.length = 0;
-    s.run([[call("read_project", { projectId: s.projectId })], [says("*This week*\n- *Fri:* budget summary for Dana")]]);
+    s.run([
+      [call("read_project", { projectId: s.projectId })],
+      [call("cite_sources", { itemIds: [mail!.id] })],
+      [says("**This week**\n\n- **Fri:** budget summary for Dana & co")],
+    ]);
     await s.t.mutation(internal.briefs.prepareMorning, { ownerId: s.alice.ownerId, scheduledFor: morningAt });
     await s.settle();
-    expect(s.texts().map((m) => m.Body)).toEqual(["*This week*\n- *Fri:* budget summary for Dana"]);
+    expect(s.texts()).toEqual([
+      { To: PHONE, mode: "HTML", Body: '<b>This week</b>\n\n• <b>Fri:</b> budget summary for Dana &amp; co\n\n• <a href="https://mail.example.com/m/18d1?a=1&amp;b=2">Budget</a>' },
+    ]);
     const first = JSON.parse(s.calls.find((c) => c.url === MODEL)!.body) as { tools: { name: string }[]; input: { content: string }[] };
-    expect(first.tools.map((tool) => tool.name)).toEqual(["read_project"]); // it can only read
+    expect(first.tools.map((tool) => tool.name)).toEqual(["read_project", "cite_sources"]); // it can only read and name what it read
     expect((JSON.parse(first.input[0]!.content) as { projects: { name: string }[] }).projects.map((p) => p.name)).toEqual(["Budget for Dana"]);
   });
 
