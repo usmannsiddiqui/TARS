@@ -28,6 +28,7 @@ import type * as lib_model from "../lib/model.js";
 import type * as lib_providerAuth from "../lib/providerAuth.js";
 import type * as lib_sharePage from "../lib/sharePage.js";
 import type * as localEvidence from "../localEvidence.js";
+import type * as maintenance from "../maintenance.js";
 import type * as memory from "../memory.js";
 import type * as prepare from "../prepare.js";
 import type * as projects from "../projects.js";
@@ -64,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   "lib/providerAuth": typeof lib_providerAuth;
   "lib/sharePage": typeof lib_sharePage;
   localEvidence: typeof localEvidence;
+  maintenance: typeof maintenance;
   memory: typeof memory;
   prepare: typeof prepare;
   projects: typeof projects;
