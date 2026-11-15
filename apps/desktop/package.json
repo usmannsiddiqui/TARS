@@ -1,0 +1,55 @@
+{
+  "name": "@companion/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "package:mac": "swift build -c release --package-path ../../native/observer && electron-vite build && electron-builder --mac dir --arm64",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@companion/domain": "workspace:*",
+    "better-sqlite3": "13.2.0",
+    "react": "~19.3.0",
+    "react-dom": "~19.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "vite": "^8"
+  },
+  "build": {
+    "appId": "dev.companion.desktop",
+    "productName": "TARS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "identity": null,
+      "target": [
+        "dir"
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "TARS uses the microphone only while you are recording a dictation you started with Record. The audio is transcribed into text you can edit before saving."
+      }
+    },
+    "extraResources": [
+      {
+        "from": "../../native/observer/.build/release/observer",
+        "to": "observer"
+      }
+    ]
+  }
+}

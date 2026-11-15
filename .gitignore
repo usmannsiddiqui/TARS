@@ -1,0 +1,19 @@
+node_modules/
+dist/
+out/
+release/
+.env*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+test-results/
+playwright-report/
+
+# Private planning material: never publish
+research-assets/
+HACKATHON_PRODUCT_HANDOFF.md
+
+# Swift build output
+native/observer/.build/
