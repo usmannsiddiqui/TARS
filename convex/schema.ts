@@ -194,6 +194,8 @@ export default defineSchema({
     ...commitmentFields,
     doneAt: v.optional(v.number()),
     origin: v.optional(v.literal("capture")),
+    // Stable identity (commitmentKey), set when first stored and kept when a re-preparation rewords it.
+    key: v.optional(v.string()),
   }).index("by_owner_project", ["ownerId", "projectId"]),
 
   // One line of a sorted brain dump. captureId: the capture's id on the Mac (the full text stays there).

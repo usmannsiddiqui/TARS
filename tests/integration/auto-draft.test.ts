@@ -232,6 +232,111 @@ describe("automatic preparation on new evidence", () => {
   });
 });
 
+describe("stable commitment identity across re-preparation", () => {
+  const ASK = "Alice, please send the budget to Dana by 5pm";
+  const DUE2 = "2026-11-14T23:00:00.000Z";
+
+  test("reworded_commitment_from_the_same_mail_stays_one_commitment_one_nudge_one_offer_one_message", async () => {
+    const { asAlice, project, evidence, settle, all, offers } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" }); // a due time needs the user's zone
+    const budget = await project("Budget");
+    let mail = "";
+    const wording = ["Send the budget to Dana", "Email Dana the budget summary", "Get Dana the budget"];
+    stubModel((n) => prepared({ evidenceIds: [mail], commitments: [{ ...dueCommitment(mail, ASK), text: wording[n % 3]! }] }));
+    mail = (await evidence(budget, `${ASK} today.`)).id;
+    await settle();
+    for (const text of ["Illustrative follow-up: thanks!", "Illustrative follow-up: one more thing."]) {
+      await evidence(budget, text);
+      await settle();
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    const mine = (await asAlice.query(api.prepare.listCommitments, { projectId: budget })).filter((c) => c.ownership === "user");
+    expect(mine.map((c) => c.text)).toEqual(["Get Dana the budget"]); // updated in place
+    expect(await all("nudges")).toHaveLength(1);
+    expect(await offers()).toHaveLength(1);
+    expect((await all("nudges")).filter((n) => n.offer !== undefined)).toHaveLength(1);
+    expect(await all("threadMessages")).toHaveLength(1);
+  });
+
+  test("a_due_time_changed_by_a_later_run_updates_the_row_and_its_due_soon_job", async () => {
+    const { asAlice, project, evidence, settle, all, pendingJobs } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const budget = await project("Budget");
+    let mail = "";
+    stubModel((n) =>
+      prepared({ evidenceIds: [mail], commitments: [{ ...dueCommitment(mail, ASK), text: n === 0 ? "Send the budget to Dana" : "Email Dana the budget", dueAt: n === 0 ? DUE : DUE2 }] }),
+    );
+    mail = (await evidence(budget, `${ASK} today.`)).id;
+    await settle();
+    await evidence(budget, "Illustrative follow-up: make it 6pm instead.");
+    await settle();
+
+    expect((await all("nudges")).map((n) => n.dueAt)).toEqual([DUE2]);
+    expect((await pendingJobs()).filter(([name]) => name === "briefs:nudgeDueSoon")).toEqual([["briefs:nudgeDueSoon", "2026-11-14T22:00:00.000Z"]]);
+    expect(await all("threadMessages")).toHaveLength(1);
+  });
+
+  test("two_new_due_commitments_in_one_run_open_one_offer_and_the_second_comes_on_a_later_return", async () => {
+    const { asAlice, project, evidence, settle, all, offers } = setup();
+    await asAlice.mutation(api.briefs.setAttentionSettings, { timezone: "America/New_York" });
+    const budget = await project("Budget");
+    let mail = "";
+    const text = "Alice, please send the budget to Dana by 5pm and book the room by 6pm today.";
+    stubModel(() =>
+      prepared({
+        evidenceIds: [mail],
+        commitments: [
+          { ...dueCommitment(mail, "book the room by 6pm"), text: "Book the room", dueAt: DUE2 },
+          { ...dueCommitment(mail, ASK), text: "Send the budget to Dana", dueAt: DUE },
+        ],
+      }),
+    );
+    mail = (await evidence(budget, text)).id;
+    await settle();
+
+    const [first] = await offers();
+    expect(await offers()).toHaveLength(1);
+    expect(first!.body).toMatch(/^Send the budget to Dana/); // the soonest due
+    expect(await all("threadMessages")).toHaveLength(2);
+
+    await asAlice.mutation(api.briefs.respondToNudge, { nudgeId: first!.nudgeId, choice: "finish" });
+    await asAlice.mutation(api.briefs.handleReturn, { panelOpen: false });
+    const [second] = await offers();
+    expect(second!.body).toMatch(/^Book the room/);
+  });
+
+  test("cleanup_merges_duplicate_nudges_for_that_owner_only", async () => {
+    const { t, alice, asAlice, project, all } = setup();
+    const budget = await project("Budget");
+    const bob = "owner-bob-cleanup-illustrative";
+    const commitment = await t.run((ctx) =>
+      ctx.db.insert("commitments", { ownerId: alice.ownerId, projectId: budget, text: "Get Dana the budget", ownership: "user", state: "open", dueAt: DUE, evidenceIds: ["evidence-1"] }),
+    );
+    const nudge = (ownerId: string, key: string, offer: boolean) =>
+      t.run((ctx) =>
+        ctx.db.insert("nudges", { ownerId, projectId: budget, key, dueAt: DUE, ...(offer ? { offer: { key: `nudge:${key}`, startedForYou: true } } : {}) }),
+      );
+    const keep = await nudge(alice.ownerId, `${budget}:send the budget to dana`, true);
+    await nudge(alice.ownerId, `${budget}:email dana the budget`, true);
+    await nudge(alice.ownerId, `${budget}:get dana the budget`, false);
+    await nudge(bob, `${budget}:a`, true);
+    await nudge(bob, `${budget}:b`, true);
+    await t.run((ctx) => ctx.db.insert("threadMessages", { ownerId: alice.ownerId, projectId: budget, role: "tars", blocks: [], commitmentKey: "x", createdAt: 1 }));
+
+    expect(await t.mutation(internal.briefs.mergeDuplicateNudges, { ownerId: alice.ownerId })).toEqual({ removed: 2, closedOffers: 1 });
+
+    const rows = await all("nudges");
+    const alices = rows.filter((n) => n.ownerId === alice.ownerId);
+    expect(alices.map((n) => n._id)).toEqual([keep]);
+    expect(alices[0]!.key).toBe((await t.run((ctx) => ctx.db.get(commitment)))!.key);
+    expect(alices[0]!.offer).toBeDefined();
+    expect(rows.filter((n) => n.ownerId === bob)).toHaveLength(2);
+    expect(await all("threadMessages")).toHaveLength(1);
+    expect(await asAlice.query(api.briefs.listNudgeOffers, {})).toHaveLength(1);
+  });
+});
+
 describe("offer on a new due commitment", () => {
   test("new_due_commitment_opens_its_offer_at_once_even_when_the_user_already_has_a_draft", async () => {
     const { asAlice, project, evidence, settle, all, offers } = setup();

@@ -405,7 +405,12 @@ export function summarizeReentry(context: BriefContext, since: string | null): R
 
 // ---- New-commitment tradeoffs.
 
-export const commitmentKey = (c: Pick<Commitment, "projectId" | "text">) => `${c.projectId}:${c.text.toLowerCase().replace(/\s+/g, " ").trim()}`;
+/**
+ * A commitment's identity: the key it was given when first stored (kept across rewording, see
+ * matchCommitments), or, for one never given a key, project + normalized wording.
+ */
+export const commitmentKey = (c: { projectId: string; text: string; key?: string | undefined }) =>
+  c.key ?? `${c.projectId}:${c.text.toLowerCase().replace(/\s+/g, " ").trim()}`;
 
 /** A concrete clash: the new task is due within a day of existing user tasks. Null when none. */
 export function detectTradeoff(candidate: Commitment, existing: readonly Commitment[]): string | null {

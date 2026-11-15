@@ -189,6 +189,37 @@ export function preparationClock(nowMs: number, timezone: string | null): Prepar
   };
 }
 
+type Matchable = { text: string; evidenceIds: readonly string[] };
+const words = (text: string) => new Set(squash(text).split(/[^a-z0-9]+/).filter((w) => w.length > 0));
+
+/**
+ * Which stored commitment each new one continues (index into `stored`, or null when it is new).
+ * Identity is the evidence it cites, not its wording: a pair must share a cited evidence ID. When
+ * one message holds several, pairs with more words in common win, then earlier positions; each
+ * stored commitment continues at most one new one.
+ */
+export function matchCommitments(stored: readonly Matchable[], incoming: readonly Matchable[]): (number | null)[] {
+  const pairs: { i: number; j: number; score: number }[] = [];
+  incoming.forEach((next, i) => {
+    const a = words(next.text);
+    stored.forEach((old, j) => {
+      if (!next.evidenceIds.some((id) => old.evidenceIds.includes(id))) return;
+      const b = words(old.text);
+      const shared = [...a].filter((w) => b.has(w)).length;
+      pairs.push({ i, j, score: shared / (a.size + b.size - shared || 1) });
+    });
+  });
+  pairs.sort((x, y) => y.score - x.score || x.i - y.i || x.j - y.j);
+  const match: (number | null)[] = incoming.map(() => null);
+  const taken = new Set<number>();
+  for (const { i, j } of pairs) {
+    if (match[i] !== null || taken.has(j)) continue;
+    match[i] = j;
+    taken.add(j);
+  }
+  return match;
+}
+
 /** Keep only proposals naming sources that were actually supplied. Proposals change nothing. */
 export function validateSourceGroups(
   output: z.infer<typeof SourceGroupsOutputSchema>,

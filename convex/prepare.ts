@@ -7,9 +7,11 @@ import { suppressionVerdict } from "../packages/domain/src/memory";
 import {
   PreparationOutputSchema,
   assemblePreparation,
+  matchCommitments,
   preparationClock,
   selectEvidence,
 } from "../packages/domain/src/prepare";
+import { commitmentKey } from "../packages/domain/src/attention";
 import { EvidenceSchema, SourceGrantSchema, type ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type QueryCtx } from "./_generated/server";
@@ -418,20 +420,34 @@ export const persistPreparation = internalMutation({
       learnedKeys.push(fact.key);
     }
 
-    // Prepared commitments are replaced. Ones the user marked done, and ones filed from his own capture,
-    // stay and are not recreated from the same words.
+    // A prepared commitment's identity is the evidence it cites, not the model's wording: one that
+    // continues a stored one (matchCommitments) updates that row in place and keeps its key; a done one
+    // stays done. Unmatched open ones are replaced. Ones filed from his own capture stay, and neither
+    // they nor done ones are recreated from the same words.
     const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
     const existingCommitments = await ctx.db
       .query("commitments")
       .withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId))
       .collect();
-    const keptTexts = new Set<string>();
-    for (const row of existingCommitments) {
-      if (row.origin !== "capture" && (row.state === "open" || row.state === "waiting")) await ctx.db.delete(row._id);
-      else keptTexts.add(squash(row.text));
+    const isOpen = (row: { state: string }) => row.state === "open" || row.state === "waiting";
+    const preparedRows = existingCommitments.filter((row) => row.origin !== "capture");
+    const keptTexts = new Set(existingCommitments.filter((row) => row.origin === "capture" || !isOpen(row)).map((row) => squash(row.text)));
+    const match = matchCommitments(preparedRows, commitments);
+    const continued = new Set<number>();
+    for (const [i, commitment] of commitments.entries()) {
+      const j = match[i] ?? null;
+      if (j !== null) {
+        continued.add(j);
+        const row = preparedRows[j]!;
+        if (isOpen(row)) await ctx.db.replace(row._id, { ownerId, projectId, ...commitment, key: commitmentKey(row) });
+        continue;
+      }
+      if (!keptTexts.has(squash(commitment.text))) {
+        await ctx.db.insert("commitments", { ownerId, projectId, ...commitment, key: commitmentKey({ projectId, text: commitment.text }) });
+      }
     }
-    for (const commitment of commitments) {
-      if (!keptTexts.has(squash(commitment.text))) await ctx.db.insert("commitments", { ownerId, projectId, ...commitment });
+    for (const [j, row] of preparedRows.entries()) {
+      if (!continued.has(j) && isOpen(row)) await ctx.db.delete(row._id);
     }
 
     const row = await ctx.db
