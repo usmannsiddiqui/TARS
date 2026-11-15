@@ -1436,3 +1436,30 @@
   font-size: 14px;
   padding-bottom: 6px;
 }
+
+/* ---------- The right pane reads as one column: hairlines between sections, no boxes inside boxes. ---------- */
+.pane-project > .block,
+.pane-project > .card {
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.pane-project > :first-child {
+  border-top: 0;
+}
+
+.pane-head {
+  min-height: 12px;
+}
+
+/* A revision's change note is one line in the chat; the draft itself has the rest. */
+.doc-change {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
