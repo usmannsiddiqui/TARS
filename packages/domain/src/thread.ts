@@ -2,6 +2,7 @@
 // are a list of these specs, stored on the message and updated in place as real work happens.
 // The server stores only complete blocks (`block`); the renderer reads any spec (`viewBlock`).
 import { z } from "zod";
+import { SORT_KINDS } from "./sort";
 
 const SourceChip = z.object({ kind: z.string(), count: z.number().int().nonnegative() });
 const StepSchema = z.object({
@@ -66,6 +67,52 @@ export const BLOCKS = {
     description: "What was done, when, and what was checked; for a send, the document's name as a link.",
     props: z.object({ text: z.string(), at: z.number(), check: z.string().optional(), document: z.string().optional(), link: z.string().optional() }),
   },
+  // Today's blocks: built in the renderer from existing subscriptions (todayThread), never stored.
+  results: {
+    description: "Outcome lines: a bold past-tense verb, then the count and noun (“Read → 4 new emails”), with the source logo when known.",
+    props: z.object({ items: z.array(z.object({ id: z.string(), verb: z.string().optional(), text: z.string(), kind: z.string().optional() })) }),
+  },
+  start: {
+    description: "The brief as a short numbered list, the recommended start first and typed out, with why; Help me start / Improve content first.",
+    props: z.object({
+      items: z.array(
+        z.object({
+          text: z.string(),
+          projectId: z.string(),
+          projectName: z.string().optional(),
+          kind: z.enum(["meeting", "deadline", "suggested"]),
+          dueAt: z.string().optional(),
+          recommended: z.boolean(),
+        }),
+      ),
+      reason: z.string().optional(),
+      projectId: z.string().optional(),
+    }),
+  },
+  ask: {
+    description: "One question with its choices (a nudge, a tradeoff); the user's choice is the only thing that ends it. It emits onChoose and never acts.",
+    props: z.object({
+      id: z.string(),
+      title: z.string(),
+      text: z.string(),
+      choices: z.array(z.object({ id: z.string(), label: z.string() })),
+      primaryId: z.string().optional(),
+      note: z.string().optional(),
+    }),
+  },
+  sorted: {
+    description: "A brain dump sorted into projects, with Fix on each line.",
+    props: z.object({
+      view: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("sorting"), projects: z.number().int().nonnegative() }),
+        z.object({
+          kind: z.literal("sorted"),
+          lines: z.array(z.object({ id: z.string(), text: z.string(), projectId: z.string().nullable(), kind: z.enum(SORT_KINDS), dueAt: z.string().optional() })),
+        }),
+        z.object({ kind: z.literal("failed"), detail: z.string() }),
+      ]),
+    }),
+  },
 } as const;
 
 export type BlockType = keyof typeof BLOCKS;
@@ -108,6 +155,21 @@ export function viewBlock(raw: unknown, index: number): BlockView {
     }
   }
   return { id, type, props: kept, complete: false } as BlockView;
+}
+
+const ACTIONABLE = new Set(["start", "ask", "approval"]);
+
+/**
+ * The one navy action on screen: the newest open start, ask or approval ("messageId/blockId"), or null.
+ * Decided here once for the whole thread; blocks never decide it themselves.
+ */
+export function primaryBlockId(messages: readonly { id: string; views: readonly BlockView[] }[]): string | null {
+  for (const m of [...messages].reverse()) {
+    // An approval only while open; an ask only when it names a primary choice (a tradeoff's three are equal).
+    const open = m.views.findLast((b) => ACTIONABLE.has(b.type) && !(b.type === "approval" && b.props.state !== "open") && !(b.type === "ask" && !b.props.primaryId));
+    if (open) return `${m.id}/${open.id}`;
+  }
+  return null;
 }
 
 /** "38s", "1m", "2m 5s": whole seconds, at least one. */
@@ -236,15 +298,22 @@ export function openingText(input: {
   due?: string;
   sources: readonly { kind: string; count: number }[];
   requestOnly: boolean;
+  /** What happened to the draft: made now, a fresh one over an earlier one (Undo), or a suggestion beside his edited one. */
+  outcome?: "created" | "revised" | "suggested";
 }): string {
   const who = input.asker?.name || input.asker?.address || "Someone";
-  const from = sourceList(input.sources);
-  const did = input.requestOnly
-    ? "I only have the request to go on, so the draft marks what I need from you."
-    : from
-      ? `I drafted it from ${from} while you were busy.`
-      : "I drafted it while you were busy.";
-  return [`${who} ${askedFor(input.commitment)}.`, ...(input.due ? [`It's due ${input.due}.`] : []), did, "Tell me what to change, or send it."].join(" ");
+  const list = sourceList(input.sources);
+  const from = list && !input.requestOnly ? ` from ${list}` : "";
+  const onlyRequest = "I only have the request to go on, so";
+  const did = {
+    created: input.requestOnly ? `${onlyRequest} the draft marks what I need from you.` : `I drafted it${from} while you were busy.`,
+    revised: input.requestOnly
+      ? `${onlyRequest} the fresh draft marks what I need from you; Undo brings back the earlier one.`
+      : `I wrote a fresh draft${from} while you were busy; Undo brings back the earlier one.`,
+    suggested: `I left your edited draft as it is and put a fresh one${from} next to it as a suggestion${input.requestOnly ? `; ${onlyRequest} it marks what I need from you` : ""}.`,
+  }[input.outcome ?? "created"];
+  const ask = input.outcome === "suggested" ? "Apply it, or tell me what to change." : "Tell me what to change, or send it.";
+  return [`${who} ${askedFor(input.commitment)}.`, ...(input.due ? [`It's due ${input.due}.`] : []), did, ask].join(" ");
 }
 
 /** Bracketed evidence ids a preparation left in text ("[gmail-15ac84d1:18d1]"): never shown on screen. */

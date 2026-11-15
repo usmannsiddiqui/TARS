@@ -81,8 +81,8 @@ body {
 
 /* ---------- Glass ---------- */
 
-/* One material in two weights. Glass needs something behind it: the studio backdrop on .shell. */
-.rail,
+/* One material in two weights. Glass needs something behind it: the studio backdrop on .app3. */
+.list,
 .block,
 .capture,
 .completion,
@@ -93,7 +93,7 @@ body {
   backdrop-filter: var(--glass-blur);
 }
 
-.rail {
+.list {
   background: var(--glass-clear);
 }
 
@@ -116,7 +116,7 @@ body {
 }
 
 @supports not (backdrop-filter: blur(1px)) {
-  .rail,
+  .list,
   .block,
   .capture,
   .completion,
@@ -127,7 +127,7 @@ body {
 
 /* The studio behind the glass: the wall, and three very large, soft, still tonal shapes in the backdrop
    tint. Fixed behind everything; never animated. */
-.shell::before,
+.app3::before,
 html[data-view="panel"] body::before {
   content: "";
   position: fixed;
@@ -272,8 +272,7 @@ button:disabled {
     opacity: 0.6;
   }
   .rail-item:hover:not([aria-current]),
-  .rail-disclosure:hover,
-  .rail-all:hover {
+  .rail-disclosure:hover {
     background: rgb(0 0 0 / 0.05);
   }
 }
@@ -480,35 +479,6 @@ textarea {
   font-weight: 700;
 }
 
-/* ---------- Shell: a glass rail floating over the canvas ---------- */
-
-.shell {
-  position: relative;
-  height: 100%;
-}
-
-.rail {
-  position: absolute;
-  z-index: 2;
-  top: var(--rail-inset);
-  bottom: var(--rail-inset);
-  left: var(--rail-inset);
-  display: flex;
-  flex-direction: column;
-  width: var(--rail-w);
-  overflow-y: auto;
-  padding: 0 8px;
-  border-radius: 18px;
-}
-
-/* The brand: TARS at its front desk, small, beside the name in the lettering on its own body. */
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 10px 12px;
-}
-
 .desk.desk-mini {
   flex: none;
   width: 40px;
@@ -606,10 +576,6 @@ textarea {
   transform: none;
 }
 
-.rail-section {
-  margin-top: 14px;
-}
-
 .rail-heading {
   font: inherit;
 }
@@ -630,40 +596,6 @@ textarea {
 
 .rail-disclosure[aria-expanded="false"] .icon {
   transform: rotate(-90deg);
-}
-
-/* The focus project's own items, indented under a thin guide line. */
-.rail-children {
-  list-style: none;
-  margin: 2px 0 6px 19px;
-  padding: 0 0 0 12px;
-  border-left: 1px solid rgb(0 0 0 / 0.16);
-}
-
-.rail-child {
-  display: block;
-  width: 100%;
-  padding: 5px 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-  line-height: 1.35;
-  color: var(--ink);
-}
-
-.rail-all {
-  background: none;
-  border: 0;
-  border-radius: 8px;
-  text-align: left;
-  color: var(--ink-2);
-}
-
-.rail-empty {
-  font-size: 13px;
-  color: var(--ink-2);
-  padding: 4px 10px;
 }
 
 /* The account, as one compact row at the foot. */
@@ -689,15 +621,6 @@ textarea {
   font-size: 14px;
 }
 
-/* The canvas spans the whole window, under the glass, so the room the desk stands in runs beneath it. */
-.canvas {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  overflow: hidden auto;
-  padding: 0 var(--gutter) 72px calc(var(--rail-w) + 2 * var(--rail-inset) + var(--gutter));
-}
-
 .screen {
   animation: arrive 220ms var(--ease-out);
 }
@@ -707,25 +630,6 @@ textarea {
     opacity: 0;
     transform: translateY(6px);
   }
-}
-
-/* Work session: always the top-right corner of the canvas, beside the title. */
-.canvas-stop {
-  float: right;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px 10px;
-  margin: 24px 0 12px 24px;
-}
-
-.canvas-stop .secondary:last-child::before {
-  content: "" / "";
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: currentColor;
 }
 
 /* Status tags: a soft filled pill, a shape before the word, never colour alone. */
@@ -752,72 +656,6 @@ textarea {
   transform: rotate(45deg);
 }
 
-/* ---------- Screen head ---------- */
-
-.screen-head {
-  padding-top: 30px;
-}
-
-.screen-head h1 {
-  font-size: 56px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  overflow-wrap: anywhere;
-}
-
-.screen-sub {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  margin-top: 12px;
-  font-size: 15px;
-  color: var(--ink-2);
-}
-
-.sub-sep {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--ink-3);
-}
-
-.sub-focus {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.sub-focus::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  background: currentColor;
-  transform: rotate(45deg);
-}
-
-/* The readout: one honest line of what TARS holds right now. */
-.readout {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 22px;
-  margin-top: 14px;
-  padding: 0;
-  list-style: none;
-  font-size: 13px;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-}
-
-.readout-key {
-  font-weight: 400;
-  margin-right: 4px;
-}
-
 /* ---------- Surfaces ---------- */
 
 .block,
@@ -829,317 +667,6 @@ textarea {
 .block > * + *,
 .capture > * + * {
   margin-top: 12px;
-}
-
-/* ---------- Today ---------- */
-
-.reentry-lead {
-  margin-top: 24px;
-  font-size: 17px;
-  max-width: 64ch;
-}
-
-/* The hero, after the reference: the words on the left in a 36rem column, TARS at the front desk on the
-   right, standing on a floor that runs the full width of the window (under the glass too). */
-.start {
-  --scene-w: 440px;
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 36rem) var(--scene-w);
-  justify-content: space-between;
-  align-items: end;
-  gap: 24px;
-  margin-top: 20px;
-}
-
-/* The floor: from the wall line behind the counter (250 of the scene's 330 units, 460 wide) to the hero's foot. */
-.start::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: -100vw;
-  right: calc(-1 * var(--gutter));
-  bottom: 0;
-  height: calc(var(--scene-w) * 80 / 460);
-  background: var(--floor);
-  /* The floor is a translucent darkening, so the backdrop's tonal shapes carry on under it. */
-}
-
-.start-body {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 14px;
-  min-width: 0;
-  padding-bottom: 28px;
-}
-
-/* (1) The intro: two lines set soft, decoration only. */
-.start-intro {
-  display: flex;
-  flex-direction: column;
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-  color: var(--ink-2);
-  filter: blur(4px);
-  user-select: none;
-}
-
-.start-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-  margin-top: 6px;
-}
-
-/* TARS is speaking: the black label. */
-.start-meta .block-title {
-  padding: 3px 10px;
-  border-radius: var(--r-tag);
-  background: var(--black);
-  color: var(--on-black);
-  font-size: 13px;
-  line-height: 1.45;
-  letter-spacing: 0;
-}
-
-.start-meta .start-project {
-  font-size: 15px;
-  color: var(--ink);
-}
-
-/* (2) The step, typed. */
-.start-step {
-  font-size: 40px;
-  line-height: 1.08;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  max-width: 22ch;
-  text-wrap: balance;
-}
-
-::highlight(type-rest) {
-  color: transparent;
-}
-
-::highlight(type-cursor) {
-  color: transparent;
-  background-color: var(--accent);
-}
-
-.start-reason {
-  font-size: 17px;
-  line-height: 1.4;
-  color: var(--ink-2);
-  max-width: 46ch;
-}
-
-.start .recap li {
-  font-size: 16px;
-}
-
-/* (3) The actions rise into place 400 ms in, without waiting for the typing. */
-.start .actions,
-.start .free {
-  animation: rise 400ms var(--ease-out) 400ms both;
-}
-
-.start .actions {
-  margin-top: 8px;
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-}
-
-.free {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  list-style: none;
-  padding: 0;
-}
-
-.pills .secondary {
-  min-height: 34px;
-  padding: 5px 16px;
-  font-size: 14px;
-}
-
-.start-figure {
-  align-self: end;
-}
-
-/* The morning brief, after the user's reference: greeting, routine card, what it read, the numbered brief, next run.
-   Built from TARS's parts: the frosted card, the state tag, source logos, hairline rows. */
-/* The brief is taller than one sentence: TARS sits at the top of the column, beside the routine card, so the desk is
-   on the first screen; the floor runs under the desk (scene units 250..330 of 330) to the window's edge. */
-.brief {
-  align-items: start;
-}
-
-.brief .start-figure {
-  align-self: start;
-}
-
-.brief::after {
-  top: calc(var(--scene-w) * 250 / 460);
-  bottom: auto;
-  left: calc(100% - var(--scene-w));
-}
-
-.brief .start-body {
-  gap: 12px;
-  align-items: stretch;
-}
-
-.brief-greet {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
-}
-
-.brief-greet span {
-  margin-left: 6px;
-  font-size: 17px;
-  font-weight: 400;
-  letter-spacing: 0;
-  color: var(--ink-2);
-}
-
-.brief-card {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 12px 16px;
-  border-radius: var(--r-card);
-}
-
-.brief-icon,
-.brief-read-logo {
-  display: grid;
-  place-items: center;
-  flex: none;
-  background: var(--glass-inner);
-  box-shadow: inset 0 0 0 1px var(--hairline);
-}
-
-.brief-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-}
-
-.brief-name {
-  flex: 1 0 auto;
-}
-
-.brief-name p {
-  white-space: nowrap;
-}
-
-.brief-name h2 {
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-}
-
-.brief-name p,
-.brief-when,
-.brief-tail,
-.brief-next {
-  font-size: 14px;
-  line-height: 1.4;
-  color: var(--ink-2);
-}
-
-.brief-card > * + * {
-  margin-top: 0;
-}
-
-.brief-state {
-  margin-left: auto;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 4px 12px;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-
-.brief-state .state-tag {
-  font-size: 14px;
-  font-weight: 500;
-  opacity: 1;
-  color: var(--ink);
-}
-
-/* Needs retry on the black plate, as every problem state. */
-.brief-state .state-tag[data-kind="needs-retry"] {
-  padding: 1px 7px 1px 5px;
-  border-radius: var(--r-tag);
-  background: var(--black);
-  color: var(--on-black);
-}
-
-.brief-reads {
-  list-style: none;
-  padding: 0;
-  animation: rise 400ms var(--ease-out) 200ms both;
-}
-
-.brief-reads li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 36px;
-  padding: 4px 4px 4px 2px;
-  border-bottom: 1px solid var(--hairline);
-  font-size: 15px;
-}
-
-.brief-read-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-}
-
-.brief-read-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.brief-read-check {
-  flex: none;
-  color: var(--ink);
-}
-
-.brief-body {
-  margin-top: 6px;
-}
-
-.brief-body h3 {
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
 }
 
 .brief-list {
@@ -1192,14 +719,6 @@ textarea {
   max-width: 52ch;
 }
 
-.brief .actions {
-  margin: 10px 0 4px;
-}
-
-.brief-next {
-  margin-top: 2px;
-}
-
 .desk {
   display: block;
   width: 100%;
@@ -1231,85 +750,6 @@ textarea {
 .desk-plate {
   font-size: 11px;
   letter-spacing: 0.02em;
-}
-
-/* Below the hero, the floor carries on to the foot of the window: the working surfaces sit on it. */
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 24px;
-  align-items: start;
-  padding-top: 28px;
-  background: var(--floor);
-  box-shadow: 0 0 0 100vmax var(--floor);
-  clip-path: inset(0 -100vmax -100vmax);
-}
-
-.home-grid:has(> .home-main:empty) {
-  grid-template-columns: minmax(0, 560px);
-}
-
-.home-main:empty {
-  display: none;
-}
-
-.home-main,
-.home-side {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  min-width: 0;
-}
-
-.backlog > summary {
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.backlog > summary::-webkit-details-marker {
-  display: none;
-}
-
-.backlog > summary::after {
-  content: "+" / "";
-  margin-left: auto;
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 1;
-  color: var(--ink-2);
-}
-
-.backlog[open] > summary {
-  margin-bottom: 16px;
-}
-
-.backlog[open] > summary::after {
-  content: "\2212" / "";
-}
-
-.backlog section + section {
-  margin-top: 16px;
-}
-
-.backlog .group-title {
-  margin-bottom: 8px;
-}
-
-.ideas {
-  list-style: none;
-  padding: 0;
-}
-
-.ideas li {
-  padding: 4px 0 4px 12px;
-  border-left: 2px solid var(--ink);
-}
-
-.ideas li + li {
-  margin-top: 10px;
 }
 
 /* ---------- Capture ---------- */
@@ -1941,29 +1381,701 @@ html[data-view="pet"] body {
   transform-origin: center;
 }
 
+/* ---------- The three panes (after rakazo's format, in TARS's materials) ---------- */
+
+/* The list (264 = the glass list plus its inset) | one thread | TARS at the front desk (340). */
+.app3 {
+  position: relative;
+  display: grid;
+  grid-template-columns: 264px minmax(420px, 1fr) 340px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app3[data-pane="none"],
+.app3[data-pane="closed"],
+.app3[data-overlay] {
+  grid-template-columns: 264px minmax(0, 1fr);
+}
+
+.app3 > * {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: var(--rail-inset) 0 var(--rail-inset) var(--rail-inset);
+  padding: 0 8px;
+  overflow-y: auto;
+  border-radius: 18px;
+}
+
+.list-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 4px 10px 8px;
+}
+
+.list-top .wordmark {
+  flex: 1;
+}
+
+.list-add {
+  padding: 0 8px 10px;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  color: var(--ink);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 200ms ease;
+}
+
+.icon-button:active {
+  transform: scale(0.94);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.list-empty {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* A row: an icon, then the name and its time on one line, the latest outcome in muted type under it. */
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 9px 10px;
+  background: none;
+  border: 0;
+  border-radius: 12px;
+  text-align: left;
+  color: var(--ink);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 200ms ease;
+}
+
+.row:active {
+  transform: scale(0.98);
+}
+
+.row .icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ink-2);
+}
+
+.row[aria-current] {
+  background: rgb(255 255 255 / 0.72);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06);
+}
+
+.row[aria-current] .icon {
+  color: var(--ink);
+}
+
+.row-main {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.row-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.row-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: preview-in 150ms ease;
+}
+
+/* Needs retry reads by shape: the open retry ring, then the word. */
+.row-preview[data-warn]::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--ink);
+  border-top-color: transparent;
+  border-radius: 50%; /* a glyph, not a corner */
+}
+
+.row-preview[data-warn] {
+  color: var(--ink);
+}
+
+@keyframes preview-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.more {
+  margin-top: 14px;
+}
+
+/* The centre: a one-row header over one thread and its docked composer. */
+.center {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+}
+
+.head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 52px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.head-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.head-h {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.head-name {
+  max-width: 100%;
+  margin: -4px 0;
+  padding: 4px 8px;
+  overflow: hidden;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  text-overflow: ellipsis;
+  transition: background-color 200ms ease;
+}
+
+.head-title {
+  flex: 1;
+}
+
+.head-h {
+  flex: 0 1 auto;
+}
+
+.head-sub {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.head-session {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.head-session :is(.primary, .secondary) {
+  min-height: 32px;
+  padding: 4px 14px;
+  font-size: 14px;
+}
+
+/* "Stop for now": the stop square before the word, the same size as its neighbour. */
+.head-session .stop::before {
+  content: "" / "";
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.chat-screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 28px 24px;
+}
+
+.chat-scroll > *,
+.dock > * {
+  max-width: 44rem;
+  margin-inline: auto;
+}
+
+.chat-scroll > * + * {
+  margin-top: 18px;
+}
+
+.dock {
+  flex: none;
+  padding: 0 28px 16px;
+}
+
+/* The More screens span centre and right, scrolling under the header. Their own h1 stays for assistive tech. */
+.center > .screen:not(.chat-screen) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 32px 48px;
+}
+
+.screen-head h1 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.screen-head {
+  padding-top: 18px;
+}
+
+.screen-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 22px;
+  margin-top: 10px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The thread: TARS writes on the canvas; his own words are frosted bubbles on the right. */
+.msg-tars {
+  max-width: 39rem;
+}
+
+.msg-time {
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.bubble {
+  border: var(--glass-border);
+  border-radius: 18px;
+  box-shadow: var(--glass-edge);
+}
+
+.results {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px;
+  list-style: none;
+  border: var(--glass-border);
+  border-radius: var(--r-card);
+  background: var(--glass-frost);
+  box-shadow: var(--glass-edge);
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.result-check {
+  flex: none;
+  color: var(--ink);
+}
+
+.result-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 4px;
+  background: var(--ink-2);
+  transform: rotate(45deg);
+}
+
+.result-verb {
+  flex: none;
+  font-weight: 700;
+}
+
+.result-arrow {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.result-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-logo {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+}
+
+.brief-text {
+  font-size: 15px;
+}
+
+.brief-tail {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+[data-type="start"] .actions {
+  margin: 10px 0 4px;
+}
+
+/* The composer: one glass pill, the Record key, the box (1 to 4 lines), the round black Send key. */
+.capture.composer-pill {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "deck text send";
+  align-items: end;
+  gap: 4px 8px;
+  padding: 8px;
+  border-radius: 26px;
+}
+
+.composer-pill > * + * {
+  margin-top: 0;
+}
+
+.composer-pill > :not(textarea, .tape-deck, .capture-foot, label) {
+  grid-column: 1 / -1;
+  padding: 0 10px 4px;
+}
+
+.composer-pill > textarea {
+  grid-area: text;
+  min-height: 0;
+  max-height: calc(4 * 1.45em + 16px);
+  padding: 7px 4px;
+  overflow-y: auto;
+  resize: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: 15px;
+  field-sizing: content;
+}
+
+.composer-pill > textarea:focus-visible {
+  outline: none;
+}
+
+.composer-pill:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.composer-pill > .tape-deck {
+  grid-area: deck;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.composer-pill .tape-deck:not([data-state="recording"]) .tape-window {
+  display: none;
+}
+
+.composer-pill > .capture-foot {
+  grid-area: send;
+}
+
+.composer-pill .capture-foot .hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.send-key {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%; /* the round key */
+  background: var(--black);
+  color: var(--on-black);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 200ms ease;
+}
+
+.send-key:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.send-key:disabled {
+  background: rgb(0 0 0 / 0.18);
+  color: var(--paper);
+}
+
+/* TARS at the front desk: its own glass pane, the desk scene, the routines, then the screen's content. */
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: var(--rail-inset) var(--rail-inset) var(--rail-inset) 0;
+  padding: 0 16px 20px;
+  overflow-y: auto;
+  border: var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass-clear);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.app3[data-pane="closed"]:not([data-overlay]) .pane {
+  display: none;
+}
+
+.app3[data-overlay] .pane {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: var(--glass-inner);
+  transition:
+    transform 200ms var(--ease-out),
+    visibility 200ms;
+}
+
+.app3[data-overlay][data-pane="closed"] .pane {
+  visibility: hidden;
+  transform: translateX(calc(100% + var(--rail-inset)));
+}
+
+.pane-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  margin-bottom: -8px;
+}
+
+.pane-head h2 {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pane-desk {
+  margin: 0;
+}
+
+.pane-caption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.pane-heading {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.routines {
+  padding: 0;
+  list-style: none;
+}
+
+.routine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  text-align: left;
+  color: var(--ink);
+}
+
+.routine:disabled {
+  cursor: default;
+  color: var(--ink);
+}
+
+.routine .icon {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.routine-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.routine-when {
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-slot:empty {
+  display: none;
+}
+
+.pane-project {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* "You approved this revision" takes the actions' place: it swaps in, never pops. */
+.approval > .state-note {
+  animation: helper-swap 200ms var(--ease-out);
+}
+
+.open-items > summary {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.open-items > summary::-webkit-details-marker {
+  display: none;
+}
+
+.open-items[open] > summary {
+  margin-bottom: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .row:hover:not([aria-current]),
+  .icon-button:hover,
+  .head-name:hover,
+  .routine:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .send-key:hover:not(:disabled) {
+    background: #2b2b2b;
+  }
+}
+
 /* ---------- Narrow windows ---------- */
 
 @media (max-width: 1100px) {
-  .home-grid,
   .project-grid,
   .memory-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .start {
-    --scene-w: 340px;
-  }
-  .start-step {
-    font-size: 34px;
-  }
-  .screen-head h1 {
-    font-size: 46px;
   }
 }
 
 /* ---------- Reduced transparency and contrast: the glass turns solid ---------- */
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .rail,
+  .list,
   .block,
   .capture,
   .completion,
@@ -1975,7 +2087,7 @@ html[data-view="pet"] body {
 }
 
 @media (prefers-contrast: more) {
-  .rail,
+  .list,
   .block,
   .capture,
   .completion,

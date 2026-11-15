@@ -2,7 +2,7 @@
 // Every state the chat can show, plus "play": the real running -> done sequence with real timings.
 import { useEffect, useState } from "react";
 import type { DeliveryStatus } from "../../../packages/domain/src/thread";
-import type { ThreadMessage } from "../../../apps/desktop/src/renderer/Thread";
+import type { ThreadMessage } from "../../../apps/desktop/src/renderer/model";
 import type { ChatActions } from "../../../apps/desktop/src/renderer/ProjectView";
 
 const S = 1000;

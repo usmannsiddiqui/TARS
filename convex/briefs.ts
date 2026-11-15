@@ -39,7 +39,7 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { createDraftFromPrepared } from "./artifacts";
+import { startDraftForRequest } from "./artifacts";
 import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
@@ -349,9 +349,9 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
     const id = await ctx.db.insert("nudges", { ownerId, projectId, key, dueAt, ...(dueJob === undefined ? {} : { dueJob }) });
     if (!automatic) continue;
     // A newly seen due commitment is offered at once; "started for you" only when TARS made the draft now.
-    const draft = await createDraftFromPrepared(ctx, ownerId, projectId);
-    const started = draft.created;
-    await writeOpening(ctx, { ownerId, projectId, key, commitment, artifactId: draft.id }); // TARS speaks first in the project chat
+    const draft = await startDraftForRequest(ctx, ownerId, projectId, commitment.text);
+    const started = draft.outcome !== "suggested";
+    await writeOpening(ctx, { ownerId, projectId, key, commitment, artifactId: draft.id, outcome: draft.outcome }); // TARS speaks first in the project chat
     if ((await liveOffers(ctx, ownerId, now)).length > 0) continue; // one at a time; return/due-soon pick it up
     const settings = await loadSettings(ctx, ownerId);
     const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);

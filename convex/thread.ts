@@ -65,7 +65,14 @@ const READY_TO_SEND = "Here is exactly what will go out. Nothing leaves until yo
  */
 export async function writeOpening(
   ctx: MutationCtx,
-  { ownerId, projectId, key, commitment, artifactId }: { ownerId: string; projectId: string; key: string; commitment: Doc<"commitments">; artifactId: Id<"artifacts"> },
+  {
+    ownerId,
+    projectId,
+    key,
+    commitment,
+    artifactId,
+    outcome,
+  }: { ownerId: string; projectId: string; key: string; commitment: Doc<"commitments">; artifactId: Id<"artifacts">; outcome: "created" | "revised" | "suggested" },
 ) {
   const already = await ctx.db
     .query("threadMessages")
@@ -109,6 +116,7 @@ export async function writeOpening(
     sources,
     // The model was sent nothing beyond the request itself: say so instead of claiming sources.
     requestOnly: items > 0 && items <= commitment.evidenceIds.length,
+    outcome,
   });
   const blocks: Block[] = [
     ...(steps.length > 0 ? [block("work", "work", { steps })] : []),

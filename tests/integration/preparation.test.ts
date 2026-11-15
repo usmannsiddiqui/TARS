@@ -251,6 +251,35 @@ describe("grounded preparation", () => {
     }
   });
 
+  test("request_only_evidence_gives_a_skeleton_of_the_thing_asked_for_with_no_raw_ids", async () => {
+    const { asAlice, project, evidence, prepare, work } = await setup();
+    const guides = await project("AI Guides");
+    const ask = await evidence(guides, "Illustrative mail from Dana: Alice, please send me the AI Guides report tonight.");
+    const skeleton = [
+      "AI Guides report",
+      "",
+      "## Summary",
+      `[Needs from you: what the pilot found] [${ask.id}]`,
+      "",
+      "## Next steps",
+      "[Needs from you: next steps]",
+    ].join("\n");
+    stubModel(completed(prepared({ title: "AI Guides report", body: skeleton, evidenceIds: [ask.id] })));
+
+    expect(await prepare(guides)).toEqual({ status: "ready" });
+    await asAlice.mutation(api.artifacts.createFromPrepared, { projectId: guides });
+
+    const draft = (await asAlice.query(api.artifacts.getArtifact, { projectId: guides }))!;
+    expect(draft.text).toBe(skeleton.replace(` [${ask.id}]`, ""));
+    expect(draft.text).not.toContain(ask.id);
+    expect(draft.evidenceIds).toEqual([ask.id]);
+    expect((await work(guides))?.work?.gaps).toEqual(["what the pilot found", "next steps"]);
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    // The model is told that a request alone yields the skeleton, never a description of the message that asked.
+    expect(sent.instructions).toMatch(/only evidence is the request itself.*skeleton/i);
+    expect(sent.instructions).toMatch(/never describe the message that asked/i);
+  });
+
   test("asked_for_report_draft_is_the_report_with_visible_gaps", async () => {
     const { project, evidence, prepare, work } = await setup();
     const guides = await project("AI Guides");
@@ -282,6 +311,9 @@ describe("grounded preparation", () => {
     expect(sent.instructions).toMatch(/\[Needs from you: /);
     expect(sent.instructions).toMatch(/250.?500 words/);
     expect(sent.instructions).toMatch(/recipients, links or instructions/i);
+
+    // Citations stay structured: the body is told not to carry evidence ids.
+    expect(sent.instructions).toMatch(/never write evidence ids/i);
 
     // Invented citations still fail validation: the stored draft does not change.
     stubModel(completed(prepared({ title: "Invented", body: "## Made up\n- Revenue tripled.", evidenceIds: ["evidence-from-nowhere"] })));

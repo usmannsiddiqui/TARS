@@ -158,31 +158,33 @@ export const sendConsentText = (account: string) =>
   `Sending is a separate permission from reading. If you allow it, TARS may send only what you approve with Send it, one message at a time, from the ${account} account you connected, and nothing else. Composio holds that sign-in. You can turn it off by disconnecting ${account} in Connections. Allowing it sends nothing.`;
 
 /** The separate permission to send from one account: its honest state, and the one control when it is not allowed. */
-export function AllowSending({ account, state, onAllow, next }: { account: string; state: "allowed" | "not-allowed" | undefined; onAllow(): Promise<void>; next?: string }) {
+export function AllowSending({ account, state, onAllow, next }: { account: string; state: "allowed" | "not-allowed" | undefined; onAllow?(): Promise<void>; next?: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (state === "allowed") return <StateNote state={{ kind: "done", detail: `Sending from ${account} is allowed.${next ? ` ${next}` : ""}` }} />;
   return (
     <div className="confirm consent" role="group" aria-label={`Allow sending from ${account}`}>
       <p className="small">{sendConsentText(account)}</p>
-      <button
-        type="button"
-        className="secondary"
-        disabled={busy || state === undefined}
-        onClick={async () => {
-          setBusy(true);
-          setError(null);
-          try {
-            await onAllow();
-          } catch (err) {
-            setError(reason(err));
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        {busy ? "Allowing…" : `Allow TARS to send from ${account}`}
-      </button>
+      {onAllow && (
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || state === undefined}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              await onAllow();
+            } catch (err) {
+              setError(reason(err));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Allowing…" : `Allow TARS to send from ${account}`}
+        </button>
+      )}
       {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
     </div>
   );

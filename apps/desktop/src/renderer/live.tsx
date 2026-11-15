@@ -10,7 +10,7 @@ import type { BrainDumpProps, DumpView } from "./BrainDump";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
 import type { HelperActions } from "./Helpers";
-import { briefSchedule, cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
+import { briefSchedule, cloudRow, routineRows, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type HelperRun, type Honest, type NudgeChoice, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { ProjectView, type EditorActions, type RevisionOutcome, type Sharing } from "./ProjectView";
@@ -232,6 +232,8 @@ export function useToday({ recordReturn }: { recordReturn: boolean }) {
     brief,
     /** The morning brief's routine and next run in words, from the real schedule; undefined until the timezone is set. */
     schedule: schedule ? briefSchedule(schedule.morningAt, schedule.timezone, Date.now()) : undefined,
+    /** The morning brief and evening recap as the right pane lists them. */
+    routines: routineRows(schedule),
     reentry,
     tradeoff,
     nudge: nudges?.[0],
@@ -283,7 +285,7 @@ export function useBrainDump(): BrainDumpProps {
   const move = useMutation(api.captures.moveItem);
   const setKind = useMutation(api.captures.setItemKind);
   const remove = useMutation(api.captures.removeItem);
-  const [capture, setCapture] = useState<{ id: string; text: string } | null>(null);
+  const [capture, setCapture] = useState<{ id: string; text: string; at: number } | null>(null);
   const [run, setRun] = useState<"sorting" | "sorted" | { failed: string } | null>(null);
   const lines = useQuery(api.captures.listCaptureItems, cloud.ready && capture && run === "sorted" ? { captureId: capture.id } : "skip");
   const go = useCallback(
@@ -311,8 +313,9 @@ export function useBrainDump(): BrainDumpProps {
     cloud: cloud.ready,
     projects: projects ?? [],
     ...(view ? { view } : {}),
+    ...(capture ? { said: { text: capture.text, at: capture.at } } : {}),
     onSaved: (id, text) => {
-      setCapture({ id, text });
+      setCapture({ id, text, at: Date.now() });
       go({ id, text });
     },
     onRetry: () => capture && go(capture),
@@ -389,7 +392,7 @@ const useSendingState = (sourceId: string) => {
   return rows === undefined ? undefined : (rows.find((c) => c.sourceId === sourceId)?.sending ?? "not-allowed");
 };
 
-export function ProjectLive(props: { projectId: string; name: string; isFocus: boolean; mode?: "help" | "improve"; onMakeFocus(): void; onStop(): void }) {
+export function ProjectLive(props: { projectId: string; mode?: "help" | "improve" }) {
   const { projectId } = props;
   const prepared = useQuery(api.prepare.getPreparedWork, { projectId });
   const commitments = useQuery(api.prepare.listCommitments, { projectId });
@@ -431,8 +434,6 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
   return (
     <ProjectView
       projectId={projectId}
-      name={props.name}
-      isFocus={props.isFocus}
       {...(props.mode ? { mode: props.mode } : {})}
       {...(loadedPrepared ? { prepared: loadedPrepared } : {})}
       {...(prepared === undefined ? { preparedState: { kind: "loading" } as Honest } : {})}
@@ -452,9 +453,7 @@ export function ProjectLive(props: { projectId: string; name: string; isFocus: b
       editor={editor}
       sharing={sharing}
       onReportDone={async (taskId) => void (await reportDone({ taskId }))}
-      onMakeFocus={props.onMakeFocus}
       onPrepare={async () => void (await prepare({ projectId }))}
-      onStop={props.onStop}
     />
   );
 }

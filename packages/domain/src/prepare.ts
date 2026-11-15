@@ -74,6 +74,16 @@ export type AssembledPreparation =
   | { ok: false; reason: "no_valid_evidence" | "empty_fields" | "next_action_not_one_step" };
 
 const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A provider-style id the model may copy or invent, e.g. [gmail-15ac84d1-9f0e:3]: a word, a dash, hex.
+const ID_LIKE = /\s*\[[a-z]+(?:-[a-z]+)*-[0-9a-f]{6,}[\w:.-]*\]/gi;
+
+/** The deliverable carries no evidence ids: citations live in the structured evidenceIds fields. */
+function stripEvidenceIds(body: string, supplied: readonly Evidence[]): string {
+  let out = body.replace(ID_LIKE, "");
+  for (const { id } of supplied) out = out.replace(new RegExp(`\\s*[[(]${escape(id)}[\\])]|${escape(id)}`, "g"), "");
+  return out.replace(/[ \t]+([.,;:])/g, "$1");
+}
 
 /**
  * Turn untrusted model output into PreparedWork, commitments and facts. `supplied` is exactly
@@ -92,7 +102,7 @@ export function assemblePreparation(
   const evidenceIds = valid(output.evidenceIds);
   if (evidenceIds.length === 0) return { ok: false, reason: "no_valid_evidence" };
   const title = output.title.trim();
-  const body = output.body.trim();
+  const body = stripEvidenceIds(output.body, supplied).trim();
   const nextAction = output.nextAction.trim();
   if (title === "" || body === "") return { ok: false, reason: "empty_fields" };
   if (nextAction === "" || nextAction.length > MAX_NEXT_ACTION || nextAction.includes("\n")) {
