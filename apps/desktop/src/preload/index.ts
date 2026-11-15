@@ -1,6 +1,7 @@
 // Narrow typed bridge. The renderer gets these methods only: no fs, shell, network or raw ipcRenderer.
 import { contextBridge, ipcRenderer } from "electron";
 import type { CaptureInput, CaptureReceipt } from "@companion/domain";
+import type { ClosingRecap } from "@companion/domain/recap";
 import { DICTATION_LIMITS } from "../main/dictation-limits";
 import type { DictationErrorCode, Recoverable } from "../main/dictation";
 import type { HoldKeyStatus } from "../main/hold-key";
@@ -37,7 +38,7 @@ const showingOf = (value: unknown): PanelShowing => {
 };
 export type { HoldKeyStatus };
 /** The saved setting (handle "" until the user saves one) and how this run's last nudge text went. */
-export type SelfTextView = { enabled: boolean; handle: string; lastNudge?: SelfTextResult };
+export type SelfTextView = { enabled: boolean; handle: string; lastNudge?: SelfTextResult; lastRecap?: SelfTextResult };
 
 const api = {
   saveCapture: (input: CaptureInput): Promise<CaptureReceipt> => invoke("capture:save", input),
@@ -105,6 +106,8 @@ const api = {
     set: (setting: SelfTextSetting): Promise<SelfTextSetting> => invoke("selfText:set", setting),
     /** Call only from the user's click: sends a fixed sentence to the saved handle. */
     sendTest: (): Promise<SelfTextResult> => invoke("selfText:test"),
+    /** Call only from the user's "Stop for now" or "Send again": the recap, to the saved handle. */
+    sendRecap: (recap: ClosingRecap): Promise<SelfTextResult | "off"> => invoke("selfText:recap", recap),
   },
   // Outcome log: main opens the file dialog; the result names the note only by an opaque id.
   designateLogNote: (sourceId: string): Promise<{ sourceId: string; target: string; name: string } | null> =>
