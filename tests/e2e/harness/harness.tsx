@@ -17,7 +17,7 @@ import { railProject, Shell, Stopped, type Route } from "../../../apps/desktop/s
 import { ProjectsIndex } from "../../../apps/desktop/src/renderer/ProjectsIndex";
 import { Schedule } from "../../../apps/desktop/src/renderer/Schedule";
 import { TarsCalendar } from "../../../apps/desktop/src/renderer/TarsCalendar";
-import { tarsCalendar } from "../../../apps/desktop/src/renderer/model";
+import { briefSchedule, tarsCalendar } from "../../../apps/desktop/src/renderer/model";
 import "../../../apps/desktop/src/renderer/styles.css";
 import "../../../apps/desktop/src/renderer/screens.css";
 
@@ -131,7 +131,42 @@ const morning: Brief = {
   recommendedAction: "Open slides 9–18 and time the demo section against 25 minutes.",
   reason: "You chose this last time; nothing due sooner is backed by your sources.",
   stale: [{ name: "Canvas", lastCheckedAt: inDays(-4, 12) }],
+  read: [
+    { kind: "outlook-calendar", count: 1 },
+    { kind: "outlook-mail", count: 4 },
+    { kind: "canvas", count: 1 },
+    { kind: "commitments", count: 6 },
+  ],
 };
+// Morning brief states (today-<variant>): each a real state of the stored brief, the schedule and the brief service.
+const briefStates: Record<string, Brief | null | undefined> = {
+  loading: undefined,
+  waiting: null,
+  failed: morning,
+  // A brief prepared before "what I read" was stored: no rows, nothing invented.
+  older: Object.fromEntries(Object.entries(morning).filter(([key]) => key !== "read")) as Brief,
+  nothing: { ...morning, hard: [], suggested: [], recommendedAction: undefined, reason: undefined, read: [] } as Brief,
+  long: {
+    ...morning,
+    hard: [
+      ...morning.hard,
+      { commitmentId: "k2", projectId: "course", text: "Group project milestone 2: submit the revised architecture diagram, the risk register and the peer-evaluation form for all four members", dueAt: inDays(1, 23), kind: "deadline", sourceKind: "canvas", current: true },
+    ],
+    recommendedAction: "Group project milestone 2: submit the revised architecture diagram, the risk register and the peer-evaluation form for all four members",
+    reason: "Due tomorrow at 11:00 PM, the earliest of three deadlines backed by your sources.",
+    read: [
+      { kind: "outlook-calendar", count: 3 },
+      { kind: "gmail", count: 27 },
+      { kind: "outlook-mail", count: 1 },
+      { kind: "canvas", count: 2 },
+      { kind: "slack", count: 14 },
+      { kind: "notion", count: 1 },
+      { kind: "obsidian", count: 5 },
+      { kind: "commitments", count: 11 },
+    ],
+  },
+};
+const briefFailure = "Could not reach the brief service. TARS tries again when you come back to this window.";
 const evening: Brief = {
   key: "evening:2026-11-14",
   kind: "evening",
@@ -313,7 +348,9 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           helpers={variant === "helpers" || variant === "play" ? played : []}
           helperActions={helperActions}
           focusProjectId={focus}
-          brief={((b) => ({ ...b, delivered: delivered.includes(b.key) }))(variant === "evening" ? evening : morning)}
+          brief={((b) => b && { ...b, delivered: delivered.includes(b.key) })(variant in briefStates ? briefStates[variant] : variant === "evening" ? evening : morning)}
+          {...(variant === "failed" ? { briefError: briefFailure } : {})}
+          schedule={briefSchedule(Date.parse(inDays(1, 9)), Intl.DateTimeFormat().resolvedOptions().timeZone, NOW.getTime())}
           {...(variant === "reentry" ? { reentry } : {})}
           {...(variant === "" ? { tradeoff } : {})}
           onBriefShown={(key) => (record("markDelivered", key, "panel"), setDelivered((d) => [...d, key]))}
