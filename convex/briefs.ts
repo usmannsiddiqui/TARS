@@ -565,11 +565,12 @@ export const dismissInvitation = mutation({
 export const respondToNudge = mutation({
   args: { nudgeId: v.id("nudges"), choice: v.union(v.literal("finish"), v.literal("not-now")) },
   returns: v.object({ projectId: v.string() }),
-  handler: async (ctx, { nudgeId }) => {
+  handler: async (ctx, { nudgeId, choice }) => {
     const ownerId = await requireOwnerId(ctx);
     const nudge = await ctx.db.get(nudgeId);
     if (nudge === null || nudge.ownerId !== ownerId) throw new ConvexError("Nudge not found");
-    await ctx.db.patch(nudge._id, { offer: undefined, lastNudgedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(nudge._id, { offer: undefined, lastNudgedAt: now, parkedAt: choice === "not-now" ? now : undefined });
     return { projectId: nudge.projectId };
   },
 });
