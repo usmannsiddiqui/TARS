@@ -10,7 +10,7 @@ import { DOCX_TYPE, deliveryMail, docx, requesterFrom, safeFilename } from "../p
 import type { Artifact, ProjectId } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { action, httpAction, internalAction, internalMutation, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
+import { action, httpAction, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type QueryCtx } from "./_generated/server";
 import { reserveAction, runReserved } from "./actions";
 import { requireOwnedArtifact } from "./artifacts";
 import { requireOwnerId } from "./lib/auth";
@@ -85,27 +85,33 @@ export const requester = query({
 export const approveAndSend = action({
   args: { projectId: v.string(), artifactId: v.string(), revision: v.string(), commitmentKey: v.string(), recipient: v.string() },
   returns: v.union(v.object({ actionId: v.string() }), clarification),
-  handler: async (ctx, args): Promise<{ actionId: string } | { status: "needs-clarification"; reason: string }> => {
-    const ownerId = await requireOwnerId(ctx);
-    const recipient = args.recipient.trim();
-    const artifact: Artifact = await ctx.runQuery(internal.artifacts.loadArtifact, { ownerId, artifactId: args.artifactId });
-    const hash = await contentHash(artifact.text);
-    // The same binding check as every send: this project, this revision, one plain address.
-    const check = checkBinding({ ...args, kind: "send-mail", destination: recipient, contentHash: hash }, artifact, hash);
-    if (!check.ok) return clarify(check.reason);
-    // The token comes from the action runtime's real CSPRNG; only its hash and a sealed copy are stored.
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    return ctx.runMutation(internal.delivery.reserveDelivery, {
-      ownerId,
-      ...args,
-      recipient,
-      contentHash: hash,
-      tokenHash: await tokenHash(token),
-      sealedToken: await encryptSecret(token),
-    });
-  },
+  handler: async (ctx, args): Promise<{ actionId: string } | { status: "needs-clarification"; reason: string }> => approveAs(ctx, await requireOwnerId(ctx), args),
 });
+
+/** The reservation for an owner the caller resolved from a verified identity (the app's session or the linked phone). */
+export async function approveAs(
+  ctx: ActionCtx,
+  ownerId: string,
+  args: { projectId: string; artifactId: string; revision: string; commitmentKey: string; recipient: string },
+): Promise<{ actionId: string } | { status: "needs-clarification"; reason: string }> {
+  const recipient = args.recipient.trim();
+  const artifact: Artifact = await ctx.runQuery(internal.artifacts.loadArtifact, { ownerId, artifactId: args.artifactId });
+  const hash = await contentHash(artifact.text);
+  // The same binding check as every send: this project, this revision, one plain address.
+  const check = checkBinding({ ...args, kind: "send-mail", destination: recipient, contentHash: hash }, artifact, hash);
+  if (!check.ok) return clarify(check.reason);
+  // The token comes from the action runtime's real CSPRNG; only its hash and a sealed copy are stored.
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return ctx.runMutation(internal.delivery.reserveDelivery, {
+    ownerId,
+    ...args,
+    recipient,
+    contentHash: hash,
+    tokenHash: await tokenHash(token),
+    sealedToken: await encryptSecret(token),
+  });
+}
 
 /** One action's stages and receipt, for the chat to subscribe to. */
 export const status = query({

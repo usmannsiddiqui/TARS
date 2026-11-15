@@ -44,6 +44,7 @@ import { StoredGrantSchema } from "./evidence";
 import { requireOwnerId } from "./lib/auth";
 import { loadFocus } from "./projects";
 import { writeOpening } from "./thread";
+import { queueNudge, queueRecap } from "./whatsapp";
 import schema, { commitmentFields } from "./schema";
 
 type Ctx = Pick<QueryCtx, "db">;
@@ -355,7 +356,11 @@ export async function trackDueCommitments(ctx: MutationCtx, ownerId: string, pro
     const settings = await loadSettings(ctx, ownerId);
     const state = settings === null ? { quiet: false, meeting: false, working: false } : await contactState(ctx, ownerId, settings, now);
     // A new row has no last nudge, so only the contact rules decide.
-    if (decideNudge({ trigger: "return", nowMs: now, commitment, ...state })) await openOffer(ctx, (await ctx.db.get(id))!, now, started);
+    if (decideNudge({ trigger: "return", nowMs: now, commitment, ...state })) {
+      await openOffer(ctx, (await ctx.db.get(id))!, now, started);
+      const title = (await ctx.db.query("preparedWork").withIndex("by_owner_project", (q) => q.eq("ownerId", ownerId).eq("projectId", projectId)).unique())?.work?.title ?? "Your draft";
+      await queueNudge(ctx, ownerId, key, title, dueAt, started); // and to his linked WhatsApp, once per commitment
+    }
   }
 }
 
@@ -509,7 +514,8 @@ export const recordSessionEvent = mutation({
   returns: v.null(),
   handler: async (ctx, { kind }) => {
     const ownerId = await requireOwnerId(ctx);
-    await ctx.db.insert("sessionEvents", { ownerId, kind, at: Date.now() });
+    const id = await ctx.db.insert("sessionEvents", { ownerId, kind, at: Date.now() });
+    if (kind === "stop") await queueRecap(ctx, ownerId, id); // his "Stop for now": the recap to his linked WhatsApp
     return null;
   },
 });

@@ -1,4 +1,4 @@
-// The closing recap shown on "Stop for now" (and texted to the user's own phone by the desktop).
+// The closing recap shown on "Stop for now" (and sent to his linked WhatsApp on the stop event).
 // Read-only: built from receipts, commitments, nudge answers and drafts the caller owns.
 import { ConvexError, v } from "convex/values";
 import {
@@ -11,7 +11,7 @@ import {
   type RecapInput,
 } from "../packages/domain/src/recap";
 import type { ProjectId } from "../packages/domain/src/types";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 
 const list = v.object({ items: v.array(v.string()), more: v.number() });
@@ -26,6 +26,12 @@ export const getClosingRecap = query({
     } catch {
       throw new ConvexError("Unknown timezone");
     }
+    return buildRecap(ctx, ownerId, timezone);
+  },
+});
+
+/** Today's recap for one owner: item titles only. Also sent to his linked WhatsApp on "Stop for now". */
+export async function buildRecap(ctx: Pick<QueryCtx, "db">, ownerId: string, timezone: string): Promise<ClosingRecap> {
     const input: RecapInput = {
       nowMs: Date.now(),
       timezone,
@@ -115,5 +121,4 @@ export const getClosingRecap = query({
       if (line.kind === "parked") input.parked.push({ text: line.text, at: line.createdAt });
     }
     return closingRecap(input);
-  },
-});
+}
