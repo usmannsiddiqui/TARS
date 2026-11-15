@@ -4,6 +4,7 @@ import { handlePush as gmailPush, oauthCallback as googleCallback } from "./conn
 import { handleEvent as notionEvent } from "./connectors/notion";
 import { handleNotification as outlookNotification, oauthCallback as microsoftCallback } from "./connectors/outlook";
 import { handleEvent as slackEvent } from "./connectors/slack";
+import { SHARE_PREFIX, page as sharedPage } from "./shares";
 import { upload as transcriptionUpload } from "./transcription";
 
 // One route per event-capable provider. Each handler verifies its provider's signature
@@ -20,4 +21,6 @@ http.route({ path: "/composio/callback", method: "GET", handler: composioCallbac
 http.route({ path: "/oauth/google/callback", method: "GET", handler: googleCallback });
 http.route({ path: "/oauth/microsoft/callback", method: "GET", handler: microsoftCallback });
 http.route({ path: "/transcription", method: "POST", handler: transcriptionUpload });
+// Public read-only shared pages: anyone with the link, no sign-in.
+http.route({ pathPrefix: SHARE_PREFIX, method: "GET", handler: sharedPage });
 export default http;

@@ -14,6 +14,13 @@ export type ArtifactView = {
   userEdited: boolean;
   suggestions: { id: string; kind: "revision" | "source"; changeSummary: string; baseRevision: string }[];
 };
+/** The draft's read-only link: state undefined while loading, null while private. */
+export type Sharing = {
+  state: { link: string; revision: string; sharedAt: number } | null | undefined;
+  share(revision: string): Promise<void>;
+  update(revision: string): Promise<void>;
+  stop(): Promise<void>;
+};
 export type RevisionOutcome = { status: "applied" | "conflict"; changeSummary: string; undoRevision?: string; revision: string };
 
 export type EditorActions = {
@@ -41,6 +48,7 @@ export type ProjectViewProps = {
   receipt: Receipt | null | undefined;
   acting: ActingActions;
   logDestination: LogDestinationView | null | undefined;
+  sharing: Sharing;
   /** "I did this myself": recorded as reported by you, never as verified. */
   onReportDone(taskId: string): Promise<void>;
   onMakeFocus(): void;
@@ -193,6 +201,7 @@ export function ProjectView(props: ProjectViewProps) {
             canCreate={work !== undefined}
             editor={props.editor}
             improve={props.mode === "improve"}
+            sharing={props.sharing}
             act={{ tasks: openMine.map((c) => ({ id: c.id, text: c.text })), receipt: receipt ?? null, onActed: () => setActed(true), actions: props.acting, logDestination: props.logDestination }}
           />
         </div>
@@ -336,9 +345,10 @@ type RunThroughProps = {
   editor: EditorActions;
   improve: boolean;
   act: Omit<Parameters<typeof Act>[0], "saved" | "dirty">;
+  sharing: Sharing;
 };
 
-function RunThrough({ artifact, canCreate, editor, improve, act }: RunThroughProps) {
+function RunThrough({ artifact, canCreate, editor, improve, act, sharing }: RunThroughProps) {
   const textId = useId();
   const instructionId = useId();
   const instructionRef = useRef<HTMLTextAreaElement>(null);
@@ -524,9 +534,79 @@ function RunThrough({ artifact, canCreate, editor, improve, act }: RunThroughPro
           </form>
 
           <Act saved={{ artifactId: artifact.id, revision: artifact.revision, text: artifact.text }} dirty={dirty} {...act} />
+          <ShareLink revision={artifact.revision} dirty={dirty} sharing={sharing} />
         </>
       )}
       {error && <StateNote state={{ kind: "needs-retry", detail: error }} />}
+    </section>
+  );
+}
+
+/** Sharing is the user's outside act: one read-only link to one saved revision, moved only when they say so. */
+function ShareLink({ revision, dirty, sharing }: { revision: string; dirty: boolean; sharing: Sharing }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<Honest | null>(null);
+  const { state } = sharing;
+
+  async function run(name: string, action: () => Promise<void>, done?: string) {
+    setBusy(name);
+    setNote(null);
+    try {
+      await action();
+      if (done) setNote({ kind: "done", detail: done });
+    } catch (err) {
+      setNote({ kind: "needs-retry", detail: reason(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="act share" aria-labelledby="share-h">
+      <h3 id="share-h" className="group-title">
+        Share by link
+      </h3>
+      {state === undefined ? (
+        <StateNote state={{ kind: "loading", detail: "Reading whether this draft is shared…" }} />
+      ) : state === null ? (
+        <div className="act-confirm">
+          <StateNote state={{ kind: "private", detail: "Only you can see this draft." }} />
+          <p className="quiet small">
+            {dirty
+              ? "Save your edits first. Only a saved revision is ever shared."
+              : `Anyone with the link could read revision ${revision}, on any device. They cannot edit it or ask TARS anything.`}
+          </p>
+          <button type="button" className="secondary" disabled={dirty || busy !== null} onClick={() => run("share", () => sharing.share(revision))}>
+            {busy === "share" ? "Sharing…" : `Share revision ${revision}`}
+          </button>
+        </div>
+      ) : (
+        <>
+          <StateNote
+            state={{ kind: "shared", detail: `Anyone with the link can read revision ${state.revision}, shared ${formatWhen(new Date(state.sharedAt).toISOString())}.` }}
+          />
+          <code className="copyable">{state.link}</code>
+          <div className="editor-bar">
+            <button type="button" className="secondary" disabled={busy !== null} onClick={() => run("copy", () => navigator.clipboard.writeText(state.link), "Link copied.")}>
+              Copy link
+            </button>
+            {state.revision !== revision && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={dirty || busy !== null}
+                onClick={() => run("update", () => sharing.update(revision), `The shared page now shows revision ${revision}.`)}
+              >
+                {busy === "update" ? "Updating…" : `Update shared page to revision ${revision}`}
+              </button>
+            )}
+            <button type="button" className="text-button" disabled={busy !== null} onClick={() => run("stop", sharing.stop, "Sharing stopped. The old link no longer opens anything.")}>
+              {busy === "stop" ? "Stopping…" : "Stop sharing"}
+            </button>
+          </div>
+        </>
+      )}
+      {note && <StateNote state={note} />}
     </section>
   );
 }

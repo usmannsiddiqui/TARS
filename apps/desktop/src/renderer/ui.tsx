@@ -41,6 +41,8 @@ const HONEST_LABEL: Record<Honest["kind"], string> = {
   empty: "Nothing yet",
   done: "Done",
   scheduled: "Scheduled",
+  private: "Private",
+  shared: "Shared",
 };
 
 /** A 14px glyph per state, so the state reads by shape and words, never by colour alone. */
@@ -96,6 +98,13 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
           <path d="M1.8 5.8h10.4M4.6 1.2v3M9.4 1.2v3" {...line} strokeWidth={1.6} />
         </svg>
       );
+    case "shared":
+      return (
+        <svg {...common}>
+          <path d="M5.8 8.2 8.2 5.8M6.6 3.8l1-1a2.4 2.4 0 0 1 3.4 3.4l-1 1M7.4 10.2l-1 1A2.4 2.4 0 0 1 3 7.8l1-1" {...line} strokeWidth={1.6} />
+        </svg>
+      );
+    case "private":
     case "not-signed-in":
       return (
         <svg {...common}>

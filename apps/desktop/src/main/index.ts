@@ -363,8 +363,10 @@ app.on("web-contents-created", (_event, contents) => {
 async function start(): Promise<void> {
   // No renderer permission is granted implicitly. The single exception: audio-only capture for the app's
   // own frames, in a window where the user pressed Record or held to talk (dictation.begin), never at startup or on the shortcut.
+  // Writing (never reading) the clipboard is allowed for the app's own pages, for Copy link.
   const micWindows = new Set<number>();
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === "clipboard-sanitized-write") return callback(isAppUrl(details.requestingUrl));
     const types = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
     const audioOnly = permission === "media" && types.length > 0 && types.every((t) => t === "audio");
     callback(audioOnly && micWindows.has(wc.id) && isAppUrl(details.requestingUrl));
