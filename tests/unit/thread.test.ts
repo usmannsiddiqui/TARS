@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asksToSend, block, deliverySteps, dueLabel, formatDuration, isMailAddress, viewBlock, workSummary } from "../../packages/domain/src/thread";
+import { asksToSend, block, deliverySteps, dueLabel, formatDuration, isMailAddress, primaryBlockId, viewBlock, workSummary } from "../../packages/domain/src/thread";
 
 describe("deliverySteps (the send, in the product's nouns)", () => {
   const status = (over: Partial<Parameters<typeof deliverySteps>[0]> = {}) => ({
@@ -115,5 +115,58 @@ describe("helpers from stored data", () => {
     expect(asksToSend("Approve it")).toBe(true);
     expect(asksToSend("tighten the intro")).toBe(false);
     expect(asksToSend("when is this due?")).toBe(false);
+  });
+});
+
+describe("Today's blocks: results, start, ask, sorted", () => {
+  it("keeps complete specs whole", () => {
+    expect(viewBlock({ id: "r", type: "results", props: { items: [{ id: "1", verb: "Read", text: "4 new emails", kind: "outlook-mail" }] } }, 0)).toMatchObject({ type: "results", complete: true });
+    expect(
+      viewBlock({ id: "s", type: "start", props: { items: [{ text: "Time the demo", projectId: "p1", kind: "suggested", recommended: true }], reason: "Nothing is due sooner.", projectId: "p1" } }, 0),
+    ).toMatchObject({ type: "start", complete: true });
+    expect(
+      viewBlock({ id: "a", type: "ask", props: { id: "nudge:n1", title: "Slide order", text: "Due Friday.", choices: [{ id: "finish", label: "Finish it" }, { id: "not-now", label: "Not now" }], primaryId: "finish" } }, 0),
+    ).toMatchObject({ type: "ask", complete: true });
+    expect(viewBlock({ id: "d", type: "sorted", props: { view: { kind: "sorting", projects: 3 } } }, 0)).toMatchObject({ type: "sorted", complete: true });
+  });
+
+  it("tolerates bad parts: drops invalid list items and fields, never throws", () => {
+    const results = viewBlock({ type: "results", props: { items: [{ id: "1", text: "4 new emails" }, { text: 7 }] } }, 2);
+    expect(results).toEqual({ id: "b2", type: "results", props: { items: [{ id: "1", text: "4 new emails" }] }, complete: false });
+    const ask = viewBlock({ type: "ask", props: { id: "t1", title: "Competes", choices: [{ id: "keep", label: "Keep both" }, { id: 3 }] } }, 0);
+    expect(ask).toMatchObject({ type: "ask", complete: false, props: { id: "t1", title: "Competes", choices: [{ id: "keep", label: "Keep both" }] } });
+    const sorted = viewBlock({ type: "sorted", props: { view: { kind: "exploded" } } }, 0);
+    expect(sorted).toEqual({ id: "b0", type: "sorted", props: {}, complete: false });
+    const start = viewBlock({ type: "start", props: { items: [{ text: "Time the demo", projectId: "p1", kind: "nap", recommended: true }] } }, 0);
+    expect(start).toMatchObject({ type: "start", props: { items: [] }, complete: false });
+  });
+
+  it("stores only complete blocks", () => {
+    expect(() => block("a", "ask", { id: "x", title: "t", text: "t", choices: [] })).not.toThrow();
+    expect(() => block("a", "ask", { id: "x", title: "t" } as never)).toThrow();
+  });
+});
+
+describe("primaryBlockId (the one navy action on screen)", () => {
+  const msg = (id: string, blocks: unknown[]) => ({ id, views: blocks.map(viewBlock) });
+  const approval = (state: "open" | "approved") => ({ id: "approval", type: "approval", props: { state } });
+
+  it("is the newest open start, ask or approval; older ones are secondary", () => {
+    const thread = [
+      msg("m1", [{ id: "start", type: "start", props: { items: [] } }]),
+      msg("m2", [{ id: "say", type: "say", props: { text: "hi" } }, { id: "ask", type: "ask", props: { id: "n1", title: "t", text: "t", choices: [] } }]),
+      msg("m3", [{ id: "say", type: "say", props: { text: "done" } }]),
+    ];
+    expect(primaryBlockId(thread)).toBe("m2/ask");
+  });
+
+  it("skips an approval already approved, and is null when nothing is open", () => {
+    expect(primaryBlockId([msg("m1", [approval("open")]), msg("m2", [approval("approved")])])).toBe("m1/approval");
+    expect(primaryBlockId([msg("m1", [approval("approved")]), msg("m2", [{ type: "say", props: { text: "x" } }])])).toBeNull();
+    expect(primaryBlockId([])).toBeNull();
+  });
+
+  it("never picks a work, document, receipt or sorted block", () => {
+    expect(primaryBlockId([msg("m1", [{ type: "work", props: { steps: [] } }, { type: "sorted", props: { view: { kind: "sorting", projects: 1 } } }])])).toBeNull();
   });
 });
