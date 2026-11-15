@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.stubEnv("COMPOSIO_AUTH_CONFIG_GMAIL", "ac_gmail");
   vi.stubEnv("COMPOSIO_AUTH_CONFIG_OUTLOOK", "ac_outlook");
   vi.stubEnv("COMPOSIO_AUTH_CONFIG_TEAMS", "ac_teams");
+  vi.stubEnv("COMPOSIO_AUTH_CONFIG_GITHUB", "ac_github");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -75,7 +76,7 @@ function fakeComposio(account: { id: string; userId: () => Promise<string>; tool
 }
 
 /** Cloud-processing consent is off unless a test is about automatic preparation, so no model run is scheduled. */
-async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams", selectors: string[], opts: { cloudProcessing?: boolean } = {}) {
+async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams" | "github", selectors: string[], opts: { cloudProcessing?: boolean } = {}) {
   const t = convexTest(schema, modules);
   const { alice, bob } = makeOwners();
   const asAlice = t.withIdentity({ tokenIdentifier: alice.ownerId, subject: "alice" });
@@ -95,7 +96,7 @@ async function setup(kind: "slack" | "gmail" | "outlook-mail" | "teams", selecto
   await asAlice.mutation(api.evidence.setGrant, grant);
   const evidence = () => t.run((ctx) => ctx.db.query("evidence").collect());
   const connection = () => asAlice.query(api.connections.listConnections, {}).then((rows) => rows[0]);
-  const toolkit = { slack: "slack", gmail: "gmail", "outlook-mail": "outlook", teams: "microsoft_teams" }[kind];
+  const toolkit = { slack: "slack", gmail: "gmail", "outlook-mail": "outlook", teams: "microsoft_teams", github: "github" }[kind];
   const account = { id: `ca_${kind}_alice`, userId: () => composioUserId(alice.ownerId), toolkit };
   return { t, alice, bob, asAlice, projectId, sourceId, grant, evidence, connection, account };
 }
@@ -325,6 +326,104 @@ describe("composio events", () => {
     const rows = await ctx.evidence();
     expect(rows.map((r) => r.externalId)).toEqual(["AAMk-in"]);
     expect(rows[0]!.sourceUrl).toBe("https://outlook.office.com/mail/id/1");
+  });
+});
+
+// Payload shapes from docs.composio.dev/toolkits/github (GITHUB_ISSUE_ADDED_EVENT, GITHUB_PULL_REQUEST_EVENT).
+const REPO = "octo-labs/app";
+const issueAdded = (n = 12, repo = REPO, title = "Illustrative: deck link is broken") => ({
+  action: "opened",
+  createdAt: "2026-11-14T10:20:00Z",
+  createdBy: "bob-illustrative",
+  description: "Illustrative: the link in the README 404s.",
+  issue_id: 9000 + n,
+  number: n,
+  title,
+  url: `https://github.com/${repo}/issues/${n}`,
+});
+const pullRequest = (action = "opened", n = 7) => ({
+  action,
+  createdAt: "2026-11-14T09:00:00Z",
+  createdBy: "alice-illustrative",
+  description: "Illustrative: adds the pitch page.",
+  number: n,
+  title: "Add pitch page",
+  url: `https://github.com/${REPO}/pull/${n}`,
+});
+
+describe("composio github", () => {
+  test("connect stores the connection and creates one trigger set per repository", async () => {
+    const ctx = await setup("github", [REPO, "octo-labs/site"]);
+    const { link, response } = await connect(ctx);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(link.body)).toMatchObject({ auth_config_id: "ac_github" });
+    expect(await ctx.connection()).toMatchObject({ provider: "github", availability: "connected", broker: "composio" });
+    const upserts = calls.filter((c) => c.url.startsWith(`${API}/trigger_instances/`));
+    expect(upserts.map((c) => [c.url.slice(`${API}/trigger_instances/`.length), JSON.parse(c.body).trigger_config])).toEqual([
+      ["GITHUB_ISSUE_ADDED_EVENT/upsert", { owner: "octo-labs", repo: "app" }],
+      ["GITHUB_PULL_REQUEST_EVENT/upsert", { owner: "octo-labs", repo: "app" }],
+      ["GITHUB_ISSUE_ADDED_EVENT/upsert", { owner: "octo-labs", repo: "site" }],
+      ["GITHUB_PULL_REQUEST_EVENT/upsert", { owner: "octo-labs", repo: "site" }],
+    ]);
+    for (const upsert of upserts) expect(JSON.parse(upsert.body)).toMatchObject({ connected_account_id: ctx.account.id });
+  });
+
+  test("a selector that is not owner/name, or no selector at all, is refused before Composio is called", async () => {
+    for (const selectors of [["octo-labs"], []]) {
+      const ctx = await setup("github", selectors);
+      stubFetch(fakeComposio(ctx.account));
+      await expect(ctx.asAlice.action(api.connectors.composio.startConnect, { sourceId: ctx.sourceId, kind: "github" })).rejects.toThrow(/repository|at least one/i);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  test("an issue and a pull request become evidence under the stored owner and grant", async () => {
+    const ctx = await setup("github", [REPO]);
+    await connect(ctx);
+    // A payload field naming another owner is content, never authority.
+    await deliver(ctx, "GITHUB_ISSUE_ADDED_EVENT", { ...issueAdded(), ownerId: ctx.bob.ownerId });
+    await deliver(ctx, "GITHUB_PULL_REQUEST_EVENT", pullRequest());
+    const rows = await ctx.evidence();
+    expect(rows.map((r) => r.externalId)).toEqual([`${REPO}#12`, `${REPO}#7`]);
+    for (const row of rows) expect(row).toMatchObject({ ownerId: ctx.alice.ownerId, sourceId: ctx.sourceId, grantVersion: 1, projectIds: [ctx.projectId] });
+    expect(rows[0]).toMatchObject({ sourceUrl: `https://github.com/${REPO}/issues/12`, occurredAt: "2026-11-14T10:20:00.000Z" });
+    expect(rows[0]!.text).toContain("Illustrative: deck link is broken");
+    expect(rows[0]!.text).toContain("bob-illustrative");
+    expect(rows[0]!.text).toContain("the link in the README 404s");
+    expect(rows[1]).toMatchObject({ sourceUrl: `https://github.com/${REPO}/pull/7` });
+    expect(rows[1]!.text).toContain("Add pitch page");
+  });
+
+  test("an unselected repository stores nothing; a redelivery is dropped; a change is a new version", async () => {
+    const ctx = await setup("github", [REPO]);
+    await connect(ctx);
+    await deliver(ctx, "GITHUB_ISSUE_ADDED_EVENT", issueAdded(3, "octo-labs/other"));
+    await deliver(ctx, "GITHUB_PULL_REQUEST_EVENT", { ...pullRequest(), url: "https://github.com/someone/else/pull/7" });
+    expect(await ctx.evidence()).toHaveLength(0);
+    await deliver(ctx, "GITHUB_PULL_REQUEST_EVENT", pullRequest());
+    await deliver(ctx, "GITHUB_PULL_REQUEST_EVENT", pullRequest());
+    expect(await ctx.evidence()).toHaveLength(1);
+    await deliver(ctx, "GITHUB_PULL_REQUEST_EVENT", pullRequest("closed"));
+    const rows = await ctx.evidence();
+    expect(rows.map((r) => r.externalId)).toEqual([`${REPO}#7`, `${REPO}#7`]);
+    expect(new Set(rows.map((r) => r.version)).size).toBe(2);
+  });
+
+  test("a payload naming another owner's user id is ignored", async () => {
+    const ctx = await setup("github", [REPO]);
+    await connect(ctx);
+    await deliver(ctx, "GITHUB_ISSUE_ADDED_EVENT", issueAdded(), { userId: await composioUserId(ctx.bob.ownerId) });
+    expect(await ctx.evidence()).toHaveLength(0);
+  });
+
+  test("a revoked grant ingests nothing and its Composio account is deleted", async () => {
+    const ctx = await setup("github", [REPO]);
+    await connect(ctx);
+    await ctx.asAlice.mutation(api.evidence.setGrantState, { sourceId: ctx.sourceId, state: "revoked" });
+    await ctx.t.finishAllScheduledFunctions(() => {});
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url)).toEqual([`${API}/connected_accounts/${ctx.account.id}`]);
+    await deliver(ctx, "GITHUB_ISSUE_ADDED_EVENT", issueAdded());
+    expect(await ctx.evidence()).toHaveLength(0);
   });
 });
 

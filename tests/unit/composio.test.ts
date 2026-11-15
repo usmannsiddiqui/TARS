@@ -2,7 +2,7 @@
 // Composio: the read/write split for tool slugs, and the webhook signature check.
 // Fixture-only: the secret and payloads are illustrative.
 import { describe, expect, test } from "vitest";
-import { isWriteTool } from "../../packages/domain/src/composio";
+import { gmailSelectors, isWriteTool, parseRepositories, parseSlackChannels } from "../../packages/domain/src/composio";
 import { verifyWebhook } from "../../convex/connectors/composio";
 
 describe("isWriteTool", () => {
@@ -91,5 +91,29 @@ describe("verifyWebhook", () => {
     expect(await verifyWebhook(SECRET, await headers({}, old), BODY)).toBe(false);
     const future = Math.floor(Date.now() / 1000) + 301;
     expect(await verifyWebhook(SECRET, await headers({}, future), BODY)).toBe(false);
+  });
+});
+
+describe("connect form selectors", () => {
+  test("repositories are owner/name, comma separated, normalised to lower case", () => {
+    expect(parseRepositories(" Octo-Labs/App , octo-labs/site.js,octo_x/a")).toEqual({ error: expect.stringMatching(/owner\/name/) });
+    expect(parseRepositories(" Octo-Labs/App , octo-labs/site.js")).toEqual({ selectors: ["octo-labs/app", "octo-labs/site.js"] });
+    for (const bad of ["", " , ", "octo", "octo/", "/app", "octo/app/extra", "https://github.com/octo/app", "octo/a b"]) {
+      expect(parseRepositories(bad), bad).toEqual({ error: expect.stringMatching(/owner\/name/) });
+    }
+  });
+
+  test("slack channel ids start with C or G and are letters and digits", () => {
+    expect(parseSlackChannels("C0123ABC, G01XYZ9")).toEqual({ selectors: ["C0123ABC", "G01XYZ9"] });
+    for (const bad of ["", "#general", "general", "D0123ABC", "C", "C01 23", "c0123abc"]) {
+      expect(parseSlackChannels(bad), bad).toEqual({ error: expect.stringMatching(/starts with C/) });
+    }
+  });
+
+  test("gmail reads the inbox by default; only-these-labels needs at least one label", () => {
+    expect(gmailSelectors("inbox", "")).toEqual({ selectors: ["INBOX"] });
+    expect(gmailSelectors("inbox", "Label_1")).toEqual({ selectors: ["INBOX"] });
+    expect(gmailSelectors("labels", "Label_1, Label_2")).toEqual({ selectors: ["Label_1", "Label_2"] });
+    expect(gmailSelectors("labels", " , ")).toEqual({ error: expect.stringMatching(/at least one label/) });
   });
 });

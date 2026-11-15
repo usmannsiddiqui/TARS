@@ -750,8 +750,13 @@ test("cloud_connections_start_off_and_need_consent", async () => {
   const gmail = page.getByRole("form", { name: "Connect Gmail" });
   await expect(gmail).toContainText("Only the items you select from Gmail are read.");
   await expect(gmail).toContainText("Composio's sign-in page opens in your browser. Composio holds your Gmail sign-in for TARS");
-  await expect(gmail.getByRole("textbox")).toHaveCount(1);
-  await gmail.getByLabel("Gmail label IDs to read, separated by commas").fill("Label_42");
+  // Gmail reads the inbox unless labels are chosen; choosing labels and naming none cannot continue.
+  await expect(gmail.getByRole("textbox")).toHaveCount(0);
+  await expect(gmail.getByRole("radio", { name: "Inbox" })).toBeChecked();
+  await gmail.getByRole("radio", { name: "Only these labels" }).check();
+  await expect(gmail.getByRole("button", { name: "Continue to Composio sign-in" })).toBeDisabled();
+  await expect(gmail.getByRole("alert")).toContainText("Add at least one label ID");
+  await gmail.getByLabel("Label IDs to read, separated by commas").fill("Label_42");
   await gmail.getByRole("button", { name: "Continue to Composio sign-in" }).click();
   expect((await calls(page)).at(-1)).toEqual(["connect", "gmail", { projectId: "guides", selectors: ["Label_42"], writeTargets: [] }]);
   await expect(source("Gmail")).toContainText("Finish in your browser. Gmail turns on here when Composio confirms it.");

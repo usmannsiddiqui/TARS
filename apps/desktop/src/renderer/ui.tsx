@@ -24,6 +24,7 @@ export const SOURCE_NAME: Record<string, string> = {
   "outlook-mail": "Outlook mail",
   "outlook-calendar": "Outlook calendar",
   teams: "Microsoft Teams",
+  github: "GitHub",
   obsidian: "Notes folder",
   "claude-code": "Claude Code sessions",
   codex: "Codex sessions",

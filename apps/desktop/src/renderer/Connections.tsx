@@ -1,6 +1,7 @@
 // Connections, added progressively. Every source starts off. Turning cloud processing on, and
 // connecting a cloud account, both show the consent wording first. Presentational: rows and actions arrive as props.
 import { useId, useState, type FormEvent } from "react";
+import { gmailSelectors, parseRepositories, parseSlackChannels, type ParsedSelectors } from "../../../../packages/domain/src/composio";
 import { kindOfName, SourceLogo } from "./logos";
 import type { CloudProvider, Honest, SourceRow } from "./model";
 import { reason, StateNote } from "./ui";
@@ -300,6 +301,7 @@ const BY: Record<CloudProvider, string> = {
   "outlook-mail": "by Microsoft, sign-in held by Composio",
   "outlook-calendar": "by Microsoft",
   teams: "by Microsoft, sign-in held by Composio",
+  github: "by GitHub, sign-in held by Composio",
 };
 /** What TARS may do with it, from what the connect flow asks for: only Notion takes write targets, and sending is its own consent. */
 const CAN: Partial<Record<CloudProvider, string>> = { notion: "reads, and updates only pages you allow", gmail: "reads; sends only if you allow it", slack: "reads; posts only if you allow it" };
@@ -493,19 +495,38 @@ function LocalItem({ row, projects, addBlocked, onAdd, onPause, onResume, onRevo
   );
 }
 
-type Fields = { credential?: string; selectors: string; writeTargets?: string; baseUrl?: string; /** OAuth: whose sign-in page opens. */ signIn?: string };
+type Fields = {
+  credential?: string;
+  selectors: string;
+  /** One line under the selector field saying where to find what it asks for. */
+  help?: string;
+  /** The selector rule; without one, any non-empty comma list is accepted. */
+  parse?(text: string): ParsedSelectors;
+  /** Gmail: a choice between the inbox (default) and named labels, the labels field shown only for the second. */
+  inbox?: true;
+  writeTargets?: string;
+  baseUrl?: string;
+  /** OAuth: whose sign-in page opens. */
+  signIn?: string;
+};
 const FIELDS: Record<CloudProvider, Fields> = {
-  slack: { selectors: "Channel IDs to read, separated by commas", signIn: "Composio" },
+  slack: {
+    selectors: "Channel IDs to read, separated by commas",
+    help: "In Slack: right-click the channel → View channel details → the Channel ID is at the bottom, starting with C.",
+    parse: parseSlackChannels,
+    signIn: "Composio",
+  },
   notion: {
     credential: "Internal integration token",
     selectors: "Page IDs to read, separated by commas",
     writeTargets: "Page IDs TARS may write to, separated by commas (optional, for updates and the outcome log)",
   },
   canvas: { baseUrl: "Your Canvas address (https://…)", credential: "Canvas access token", selectors: "Course IDs to read, separated by commas" },
-  gmail: { selectors: "Gmail label IDs to read, separated by commas", signIn: "Composio" },
+  gmail: { selectors: "Label IDs to read, separated by commas", inbox: true, signIn: "Composio" },
   "outlook-mail": { selectors: "Mail folder IDs to read, separated by commas", signIn: "Composio" },
   "outlook-calendar": { selectors: "Calendar IDs to read, separated by commas", signIn: "Microsoft" },
   teams: { selectors: "Teams chat IDs, separated by commas", signIn: "Composio" },
+  github: { selectors: "Repositories to read, as owner/name, separated by commas", parse: parseRepositories, signIn: "Composio" },
 };
 const list = (text: string) => text.split(",").map((s) => s.trim()).filter((s) => s !== "");
 
@@ -619,19 +640,31 @@ function CloudConnectForm(props: {
   onCancel(): void;
   onSubmit(form: ConnectForm): void;
 }) {
-  const ids = { project: useId(), base: useId(), credential: useId(), selectors: useId(), write: useId() };
+  const ids = { project: useId(), base: useId(), credential: useId(), selectors: useId(), write: useId(), help: useId(), error: useId() };
   const [projectId, setProjectId] = useState(props.projects[0]?.id ?? "");
   const [baseUrl, setBaseUrl] = useState("");
   const [credential, setCredential] = useState("");
   const [selectors, setSelectors] = useState("");
+  const [labels, setLabels] = useState(false);
   const [writeTargets, setWriteTargets] = useState("");
-  const ready = projectId !== "" && (!props.fields.credential || credential.trim() !== "") && list(selectors).length > 0 && (!props.fields.baseUrl || baseUrl.trim() !== "");
+  const { fields } = props;
+  const parsed: ParsedSelectors = fields.inbox
+    ? gmailSelectors(labels ? "labels" : "inbox", selectors)
+    : fields.parse
+      ? fields.parse(selectors)
+      : list(selectors).length > 0
+        ? { selectors: list(selectors) }
+        : { error: "" };
+  // Say what is wrong once there is something to correct (or a label choice to finish), not on an untouched field.
+  const error = "error" in parsed && parsed.error !== "" && (selectors.trim() !== "" || labels) ? parsed.error : null;
+  const showSelectors = !fields.inbox || labels;
+  const ready = projectId !== "" && (!props.fields.credential || credential.trim() !== "") && "selectors" in parsed && (!props.fields.baseUrl || baseUrl.trim() !== "");
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!ready) return;
+    if (!("selectors" in parsed) || !ready) return;
     props.onSubmit({
       projectId,
-      selectors: list(selectors),
+      selectors: parsed.selectors,
       writeTargets: list(writeTargets),
       ...(props.fields.credential ? { credential: credential.trim() } : {}),
       ...(props.fields.baseUrl ? { baseUrl: baseUrl.trim() } : {}),
@@ -661,10 +694,41 @@ function CloudConnectForm(props: {
           <input id={ids.credential} type="password" value={credential} autoComplete="off" spellCheck={false} onChange={(e) => setCredential(e.target.value)} />
         </div>
       )}
-      <div className="field">
-        <label htmlFor={ids.selectors}>{props.fields.selectors}</label>
-        <input id={ids.selectors} value={selectors} autoComplete="off" spellCheck={false} onChange={(e) => setSelectors(e.target.value)} />
-      </div>
+      {fields.inbox && (
+        <fieldset className="choice">
+          <legend>What to read</legend>
+          <label>
+            <input type="radio" name={`${ids.selectors}-read`} checked={!labels} onChange={() => setLabels(false)} /> Inbox
+          </label>
+          <label>
+            <input type="radio" name={`${ids.selectors}-read`} checked={labels} onChange={() => setLabels(true)} /> Only these labels
+          </label>
+        </fieldset>
+      )}
+      {showSelectors && (
+        <div className="field">
+          <label htmlFor={ids.selectors}>{fields.selectors}</label>
+          <input
+            id={ids.selectors}
+            value={selectors}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={error !== null}
+            aria-describedby={[fields.help ? ids.help : "", error ? ids.error : ""].join(" ").trim() || undefined}
+            onChange={(e) => setSelectors(e.target.value)}
+          />
+          {fields.help && (
+            <p id={ids.help} className="hint">
+              {fields.help}
+            </p>
+          )}
+          {error && (
+            <p id={ids.error} className="field-error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
       {props.fields.writeTargets && (
         <div className="field">
           <label htmlFor={ids.write}>{props.fields.writeTargets}</label>

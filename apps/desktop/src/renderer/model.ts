@@ -118,7 +118,7 @@ export type CapturedIdea = { text: string };
 export type Fact = { id: string; key: string; value: string; scope: "project" | "global"; evidenceIds: string[] };
 export type Withheld = { id: string; key: string; value: string; evidenceIds: string[] };
 
-export type CloudProvider = "slack" | "notion" | "canvas" | "gmail" | "outlook-mail" | "outlook-calendar" | "teams";
+export type CloudProvider = "slack" | "notion" | "canvas" | "gmail" | "outlook-mail" | "outlook-calendar" | "teams" | "github";
 
 export type SourceRow = {
   id: string;
@@ -215,6 +215,7 @@ const HOST_KIND: [host: string, kind: string][] = [
   ["outlook.office.com", "outlook"],
   ["outlook.office365.com", "outlook"],
   ["outlook.live.com", "outlook"],
+  ["github.com", "github"],
 ];
 
 /**

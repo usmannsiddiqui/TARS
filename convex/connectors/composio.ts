@@ -1,12 +1,12 @@
-// Composio: Slack, Gmail, Outlook mail and Teams through Composio-hosted sign-in. Composio holds the
+// Composio: Slack, Gmail, Outlook mail, Teams and GitHub through Composio-hosted sign-in. Composio holds the
 // OAuth tokens; we keep only the connected account id. Every trigger event arrives at one signed
 // webhook (/composio/events) and goes through the one intake path. Reads use read-only tools on
 // our own; a write (send/post) runs only from actions.executeIntent, through `perform`.
-// Docs: docs.composio.dev (triggers, subscribing-to-events, connected-accounts, tools).
+// Docs: docs.composio.dev (triggers, subscribing-to-events, connected-accounts, tools, toolkits/github).
 import { ConvexError, v } from "convex/values";
 import { z } from "zod";
 import { contentHash, mailSubject, outcomeForFailure, sameContent, type EffectOutcome } from "../../packages/domain/src/actions";
-import { isWriteTool } from "../../packages/domain/src/composio";
+import { isWriteTool, parseRepositories } from "../../packages/domain/src/composio";
 import type { SourceGrant } from "../../packages/domain/src/types";
 import { internal } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
@@ -37,30 +37,41 @@ const MAX_TEXT = 4000;
 // shortcut: "latest" follows Composio's newest tool schema; pin a dated version once proven live.
 const TOOL_VERSION = "latest";
 
-const KINDS = ["slack", "gmail", "outlook-mail", "teams"] as const;
+const KINDS = ["slack", "gmail", "outlook-mail", "teams", "github"] as const;
 type Kind = (typeof KINDS)[number];
 const kindArg = v.union(...KINDS.map((k) => v.literal(k)));
-const NAME: Record<Kind, string> = { slack: "Slack", gmail: "Gmail", "outlook-mail": "Outlook mail", teams: "Microsoft Teams" };
-const TOOLKIT: Record<Kind, string> = { slack: "slack", gmail: "gmail", "outlook-mail": "outlook", teams: "microsoft_teams" };
+const NAME: Record<Kind, string> = { slack: "Slack", gmail: "Gmail", "outlook-mail": "Outlook mail", teams: "Microsoft Teams", github: "GitHub" };
+const TOOLKIT: Record<Kind, string> = { slack: "slack", gmail: "gmail", "outlook-mail": "outlook", teams: "microsoft_teams", github: "github" };
 /** One auth config per toolkit, made in the Composio dashboard (managed or your own OAuth app). */
 const AUTH_CONFIG_ENV: Record<Kind, string> = {
   slack: "COMPOSIO_AUTH_CONFIG_SLACK",
   gmail: "COMPOSIO_AUTH_CONFIG_GMAIL",
   "outlook-mail": "COMPOSIO_AUTH_CONFIG_OUTLOOK",
   teams: "COMPOSIO_AUTH_CONFIG_TEAMS",
+  github: "COMPOSIO_AUTH_CONFIG_GITHUB",
 };
 /**
- * The new-message trigger per kind, one instance per selected item. Slack and Outlook are
- * realtime; Gmail's is polled by Composio on its side (nothing here runs on a timer). Teams has
- * no message trigger, so a Teams connection receives nothing yet.
+ * The triggers per kind, one instance of each per selected item. Slack, Outlook and GitHub are
+ * realtime (webhooks); Gmail's is polled by Composio on its side (nothing here runs on a timer).
+ * Teams has no message trigger, so a Teams connection receives nothing yet.
  */
-const TRIGGERS: Partial<Record<Kind, { slug: string; config(selector: string): Record<string, unknown> }>> = {
-  slack: { slug: "SLACK_CHANNEL_MESSAGE_RECEIVED", config: (channel) => ({ channel_id: channel }) },
-  // shortcut: labelIds' type (string vs list) is not documented; one label per instance as a string.
-  gmail: { slug: "GMAIL_NEW_GMAIL_MESSAGE", config: (label) => ({ labelIds: label }) },
-  "outlook-mail": { slug: "OUTLOOK_MESSAGE_TRIGGER", config: (folder) => ({ folder_id: folder }) },
+type Trigger = { slug: string; config(selector: string): Record<string, unknown> };
+const ownerRepo = (repository: string) => {
+  const [owner, repo] = repository.split("/");
+  return { owner, repo };
 };
-const KIND_OF_TRIGGER = new Map(Object.entries(TRIGGERS).map(([kind, trigger]) => [trigger.slug, kind as Kind]));
+const TRIGGERS: Partial<Record<Kind, Trigger[]>> = {
+  slack: [{ slug: "SLACK_CHANNEL_MESSAGE_RECEIVED", config: (channel) => ({ channel_id: channel }) }],
+  // shortcut: labelIds' type (string vs list) is not documented; one label per instance as a string.
+  gmail: [{ slug: "GMAIL_NEW_GMAIL_MESSAGE", config: (label) => ({ labelIds: label }) }],
+  "outlook-mail": [{ slug: "OUTLOOK_MESSAGE_TRIGGER", config: (folder) => ({ folder_id: folder }) }],
+  // GitHub's comment triggers each watch one issue or PR (and are polled), so a repository is read through these two.
+  github: [
+    { slug: "GITHUB_ISSUE_ADDED_EVENT", config: ownerRepo },
+    { slug: "GITHUB_PULL_REQUEST_EVENT", config: ownerRepo },
+  ],
+};
+const KIND_OF_TRIGGER = new Map(Object.entries(TRIGGERS).flatMap(([kind, triggers]) => triggers.map((t) => [t.slug, kind as Kind] as const)));
 const SENDS = new Set<string>(["gmail", "slack"]);
 
 type RunCtx = Pick<ActionCtx, "runQuery" | "runMutation">;
@@ -118,7 +129,13 @@ export const startConnect = action({
   args: { sourceId: v.string(), kind: kindArg },
   returns: v.string(),
   handler: async (ctx, { sourceId, kind }): Promise<string> => {
-    const { ownerId } = await requireOwnedSource(ctx, sourceId, kind);
+    const { ownerId, grant } = await requireOwnedSource(ctx, sourceId, kind);
+    // A trigger is built from each selector: none would read nothing, a malformed one could read the wrong thing.
+    if (grant.selectors.length === 0) throw new ConvexError(`Choose at least one thing for ${NAME[kind]} to read`);
+    if (kind === "github") {
+      const repos = parseRepositories(grant.selectors.join(","));
+      if ("error" in repos) throw new ConvexError(repos.error);
+    }
     const state = randomToken();
     let link: z.infer<typeof LinkSchema>;
     try {
@@ -213,13 +230,13 @@ export const oauthCallback = httpAction(async (ctx, request) => {
 
 /** One trigger instance per selected channel, label or folder, pinned to this connected account. */
 async function subscribe(grant: SourceGrant, kind: Kind, account: Account): Promise<void> {
-  const trigger = TRIGGERS[kind];
-  if (trigger === undefined) return;
   for (const selector of grant.selectors) {
-    await composio(`/trigger_instances/${trigger.slug}/upsert`, {
-      method: "POST",
-      body: { user_id: account.userId, connected_account_id: account.connectedAccountId, trigger_config: trigger.config(selector) },
-    });
+    for (const trigger of TRIGGERS[kind] ?? []) {
+      await composio(`/trigger_instances/${trigger.slug}/upsert`, {
+        method: "POST",
+        body: { user_id: account.userId, connected_account_id: account.connectedAccountId, trigger_config: trigger.config(selector) },
+      });
+    }
   }
 }
 
@@ -319,6 +336,18 @@ const GmailEvent = z.object({
   message_text: z.string().optional(),
   message_timestamp: z.string().optional(),
 });
+// Issue and pull-request webhooks carry the same fields; neither names its repository, so the url does.
+const GitHubEvent = z.object({
+  action: z.string(),
+  createdAt: z.string(),
+  createdBy: z.string(),
+  description: z.string().nullish(),
+  number: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+});
+// shortcut: the docs call `url` "the GitHub URL"; the web form is assumed and the API form is read too. Recheck on a live event.
+const GITHUB_URL = /^https:\/\/(?:api\.)?github\.com\/(?:repos\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/(issues|pulls?)\/(\d+)$/;
 const OutlookEvent = z.object({ id: z.string().min(1) });
 // shortcut: OUTLOOK_GET_MESSAGE's `data` is assumed to be the Graph message itself (the docs do not show it).
 const OutlookMessage = z.looseObject({ id: z.string(), parentFolderId: z.string().optional() });
@@ -340,11 +369,32 @@ async function itemOf(kind: Kind, grant: SourceGrant, account: Account, envelope
       occurredAt: isoTime(message_timestamp, envelope.timestamp),
     };
   }
+  if (kind === "github") return githubItem(grant, envelope);
   // Outlook's trigger carries only the message id: read it, then keep it only in a selected folder.
   const event = OutlookEvent.safeParse(envelope.data);
   if (!event.success) return null;
   const message = parse(OutlookMessage, await readTool("OUTLOOK_GET_MESSAGE", account, { message_id: event.data.id }));
   return grant.selectors.includes(message.parentFolderId ?? "") ? mailItem(message as GraphMessage) : null;
+}
+
+/** One issue or PR in a selected repository. Each distinct action, title and body is its own version. */
+async function githubItem(grant: SourceGrant, envelope: Envelope): Promise<ProviderItem | null> {
+  const event = GitHubEvent.safeParse(envelope.data);
+  const match = event.success ? GITHUB_URL.exec(event.data.url) : null;
+  if (!event.success || match === null) return null;
+  const [, owner, name, type] = match as unknown as [string, string, string, string];
+  const repo = `${owner}/${name}`.toLowerCase();
+  if (!grant.selectors.some((s) => s.toLowerCase() === repo)) return null;
+  const { action, createdAt, createdBy, description, number, title } = event.data;
+  const pull = envelope.metadata.trigger_slug === "GITHUB_PULL_REQUEST_EVENT";
+  return {
+    externalId: `${repo}#${number}`,
+    version: (await contentHash(`${action}\n${title}\n${description ?? ""}`)).slice(0, 32),
+    text: `${pull ? "Pull request" : "Issue"} ${repo}#${number} ${action} by ${createdBy}\nTitle: ${title}\n\n${(description ?? "").trim()}`.slice(0, MAX_TEXT),
+    // An opening happened when it was created; a later action (closed, synchronize) when it was delivered.
+    occurredAt: action === "opened" ? isoTime(createdAt, envelope.timestamp) : envelope.timestamp,
+    sourceUrl: `https://github.com/${owner}/${name}/${type === "issues" ? "issues" : "pull"}/${number}`,
+  };
 }
 
 // shortcut: message_timestamp's format is not documented; ISO or epoch (s/ms) is read, else the delivery time.
