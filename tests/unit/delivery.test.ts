@@ -1,6 +1,7 @@
 import { crc32 } from "node:zlib";
 import { describe, expect, test } from "vitest";
-import { deliveryMail, docx, parseMailbox, requesterFrom, safeFilename } from "../../packages/domain/src/delivery";
+import { deliveryMail, deliveryStages, docx, parseMailbox, replyMail, requesterFrom, safeFilename } from "../../packages/domain/src/delivery";
+import { deliverySteps } from "../../packages/domain/src/thread";
 
 /** Reads a stored (uncompressed) ZIP: every entry's name and bytes, CRC-32 checked against zlib's. */
 function unzip(bytes: Uint8Array): Map<string, string> {
@@ -146,6 +147,29 @@ describe("who asked", () => {
     expect(deliveryMail({ filename: "B.docx", link, replyTo: "Budget", fallbackSubject: "x" }).subject).toBe("Re: Budget");
     expect(deliveryMail({ filename: "B.docx", link, replyTo: "RE: Budget", fallbackSubject: "x" }).subject).toBe("RE: Budget");
     expect(deliveryMail({ filename: "B.docx", link, replyTo: "a\r\nBcc: x", fallbackSubject: "x" }).subject).toBe("Re: a Bcc: x");
+  });
+
+  test("a reply is the draft text itself as the body, replying to the asker's subject, with no document or link", () => {
+    const text = "Hi Dana,\n\nTravel is 400 and the venue 1200.\n\nAlice";
+    expect(replyMail({ text, replyTo: "Budget", fallbackSubject: "Hi Dana," })).toEqual({ subject: "Re: Budget", body: text });
+    expect(replyMail({ text, fallbackSubject: "Hi Dana," })).toEqual({ subject: "Hi Dana,", body: text });
+    expect(replyMail({ text, replyTo: "RE: Budget", fallbackSubject: "x" }).subject).toBe("RE: Budget");
+    expect(replyMail({ text, replyTo: "a\r\nBcc: x", fallbackSubject: "x" }).subject).toBe("Re: a Bcc: x");
+    expect(replyMail({ text, fallbackSubject: "" }).subject).toBe("Re: your message");
+    expect(replyMail({ text, replyTo: "Budget", fallbackSubject: "x" }).body).not.toMatch(/Word document|https?:\/\//);
+  });
+
+  test("a reply's stages are the send and its check only; a document (or no form) keeps all four", () => {
+    expect(deliveryStages("reply")).toEqual(["send", "verify"]);
+    expect(deliveryStages("document")).toEqual(["document", "link", "send", "verify"]);
+    expect(deliveryStages(undefined)).toEqual(["document", "link", "send", "verify"]);
+    const steps = deliverySteps({
+      state: "succeeded",
+      verified: true,
+      recipient: "dana@illustrative.example",
+      stages: deliveryStages("reply").map((name) => ({ name, state: "done" as const })),
+    });
+    expect(steps.map((s) => s.doneLabel).join(" ")).not.toMatch(/document|link/i);
   });
 
   test("a filename keeps only safe characters", () => {

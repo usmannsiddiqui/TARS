@@ -47,6 +47,7 @@ const toArtifact = (row: Doc<"artifacts"> | Doc<"artifactVersions">, id: Id<"art
   text: row.text,
   userEdited: row.userEdited,
   evidenceIds: row.evidenceIds as EvidenceId[],
+  ...(row.form === undefined ? {} : { form: row.form }),
 });
 
 export async function requireOwnedArtifact(ctx: Pick<QueryCtx, "db">, ownerId: string, artifactId: string) {

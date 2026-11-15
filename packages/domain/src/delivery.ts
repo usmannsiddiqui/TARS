@@ -46,12 +46,29 @@ export function requesterFrom(rows: { from?: Mailbox; subject?: string; occurred
 
 const oneLine = (text: string) => text.replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_SUBJECT);
 
+/** How a draft leaves: a Word document sent as a link (the default when absent), or a plain email reply. */
+export type DeliveryForm = "document" | "reply";
+
+/** A reply to the asker's subject when known, else the draft's own first line, else `empty`. */
+function subjectOf(replyTo: string | undefined, fallbackSubject: string, empty: string) {
+  const reply = replyTo === undefined ? "" : oneLine(replyTo);
+  return reply === "" ? oneLine(fallbackSubject) || empty : /^re:/i.test(reply) ? reply : `Re: ${reply}`;
+}
+
 /** The mail that carries the link: names the document, replies to the asker's subject when known. */
 export function deliveryMail(input: { filename: string; link: string; replyTo?: string; fallbackSubject: string }) {
-  const reply = input.replyTo === undefined ? "" : oneLine(input.replyTo);
-  const subject = reply === "" ? oneLine(input.fallbackSubject) || "Your document" : /^re:/i.test(reply) ? reply : `Re: ${reply}`;
+  const subject = subjectOf(input.replyTo, input.fallbackSubject, "Your document");
   return { subject, body: `Hi,\n\nHere is the Word document ${input.filename}:\n${input.link}\n\nSent with TARS.` };
 }
+
+/** A reply: the draft's text itself is the body, under the same subject rule. No document, no link. */
+export function replyMail(input: { text: string; replyTo?: string; fallbackSubject: string }) {
+  return { subject: subjectOf(input.replyTo, input.fallbackSubject, "Re: your message"), body: input.text };
+}
+
+/** The real stages of one send, in order: a reply has no document to make and no link to serve. */
+export const deliveryStages = (form: DeliveryForm | undefined) =>
+  form === "reply" ? (["send", "verify"] as const) : (["document", "link", "send", "verify"] as const);
 
 /** A Content-Disposition-safe name: ASCII letters, digits, space, dot, dash, underscore. */
 export function safeFilename(name: string): string {

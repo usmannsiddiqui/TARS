@@ -8,6 +8,7 @@ import { ProjectIdSchema, type ProjectId } from "@companion/domain";
 import { FIRST_REVISION } from "../../packages/domain/src/artifacts";
 import { commitmentKey } from "../../packages/domain/src/attention";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { trackDueCommitments } from "../../convex/briefs";
 import { composioUserId } from "../../convex/connectors/composio";
 import schema from "../../convex/schema";
@@ -297,6 +298,23 @@ describe("messages from his phone", () => {
     expect(body).toContain("Word document");
     expect(body).toMatch(/Reply SEND to send it/);
     expect(body).toMatch(/NOT YET/);
+  });
+
+  test("for a reply, approve says a reply by email (no document), and SEND sends the draft text itself", async () => {
+    const s = await setup();
+    await s.t.run((ctx) => ctx.db.patch(s.artifactId as Id<"artifacts">, { form: "reply" }));
+    await s.link();
+    s.calls.length = 0;
+    await s.inbound(PHONE, "looks good, send it");
+    const body = s.texts()[0]!.Body!;
+    expect(body).toContain("a reply by email");
+    expect(body).toContain(DANA);
+    expect(body).toContain("Re: Budget");
+    expect(body).not.toMatch(/document|link/i);
+    s.calls.length = 0;
+    await s.inbound(PHONE, "SEND");
+    expect(s.gmailSends()).toEqual([{ recipient_email: DANA, subject: "Re: Budget", body: DRAFT }]);
+    expect(s.texts().map((m) => m.Body)).toEqual([`Sent to ${DANA} · checked: it arrived.`]);
   });
 
   test("SEND sends once through the chat's send, then one verified message; a second SEND sends nothing", async () => {

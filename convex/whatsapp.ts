@@ -280,7 +280,8 @@ type Approval = Extract<Block, { type: "approval" }>["props"];
 function approvalText(a: Approval): string {
   if (a.recipient === "") return `“${a.document}” is ready, but there is no recipient yet. Open TARS to add one.`;
   const to = a.recipientName ? `${a.recipientName} <${a.recipient}>` : a.recipient;
-  return `Ready to send “${a.document}” as a Word document link by email to ${to}, subject “${a.replySubject}”.\nReply SEND to send it, or NOT YET to hold it.`;
+  const what = a.form === "reply" ? `“${a.document}” as a reply by email` : `“${a.document}” as a Word document link by email`;
+  return `Ready to send ${what} to ${to}, subject “${a.replySubject}”.\nReply SEND to send it, or NOT YET to hold it.`;
 }
 
 /** TARS's reply blocks as short plain text: what it did, what it said or asks, and any approval. */
