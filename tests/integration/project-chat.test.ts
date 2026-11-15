@@ -138,6 +138,8 @@ describe("TARS speaks first", () => {
     expect(say).toContain("Send the budget to Dana");
     expect(say).toContain("Saturday 5:00 PM");
     expect(say).toMatch(/Tell me what to change, or send it\.$/);
+    // The nudge it raised names this project, so clicking it opens this chat.
+    expect(await s.asAlice.query(api.briefs.getAttentionState, {})).toMatchObject({ key: expect.stringMatching(/^nudge:/), projectId: s.budget });
 
     // A second run sees the same commitment: no second message.
     stubModel([s.due]);

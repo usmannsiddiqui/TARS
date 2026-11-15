@@ -192,7 +192,7 @@ async function hasReceipt(ctx: Ctx, ownerId: string, key: string) {
   return row !== null;
 }
 
-type AttentionItem = { input: AttentionInput; key: string; title: string; body: string };
+type AttentionItem = { input: AttentionInput; key: string; title: string; body: string; projectId?: string };
 
 /** The one thing that may reach the user next: morning brief, then task-return invitation, then evening recap. */
 async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"attentionSettings">, nowMs: number): Promise<AttentionItem | null> {
@@ -223,11 +223,12 @@ async function nextAttentionItem(ctx: Ctx, ownerId: string, settings: Doc<"atten
     }
   }
 
-  for (const { offer, text } of await liveOffers(ctx, ownerId, nowMs)) {
+  for (const { nudge, offer, text } of await liveOffers(ctx, ownerId, nowMs)) {
     if (await hasReceipt(ctx, ownerId, offer.key)) continue;
     return {
       input: { ...base, kind: "task-return", alreadyDelivered: false, hasPreparedWork: true },
       key: offer.key,
+      projectId: nudge.projectId, // the notification click opens this project's chat
       ...nudgeCopy({ text, startedForYou: offer.startedForYou }),
     };
   }
@@ -667,7 +668,7 @@ export const listNudgeOffers = query({
 /** What may contact the user next, as the AttentionInput the desktop decides on (with live panel state). */
 export const getAttentionState = query({
   args: {},
-  returns: v.union(v.null(), v.object({ input: attentionInputValidator, key: v.string(), title: v.string(), body: v.string() })),
+  returns: v.union(v.null(), v.object({ input: attentionInputValidator, key: v.string(), title: v.string(), body: v.string(), projectId: v.optional(v.string()) })),
   handler: async (ctx) => {
     const ownerId = await requireOwnerId(ctx);
     const settings = await loadSettings(ctx, ownerId);
