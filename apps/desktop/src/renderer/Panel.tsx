@@ -56,7 +56,7 @@ export function Panel(props: PanelProps) {
       </header>
 
       {props.completion ? (
-        <section className="panel-body completion" aria-labelledby="panel-h">
+        <section className="panel-body panel-card completion" aria-labelledby="panel-h">
           <h1 id="panel-h">Done</h1>
           <p>{props.completion.done}</p>
           <div className="actions equal stack">
@@ -71,7 +71,8 @@ export function Panel(props: PanelProps) {
           </div>
         </section>
       ) : (
-        <section className="panel-body" aria-labelledby="panel-h">
+        <>
+        <section className="panel-body panel-card" aria-labelledby="panel-h">
           <p className="block-title">Now</p>
           <h1 id="panel-h">{props.projectName ?? "No project chosen"}</h1>
           {props.context && <p className="panel-context">{props.context}</p>}
@@ -108,8 +109,10 @@ export function Panel(props: PanelProps) {
               )}
             </section>
           )}
-          <Composer {...(props.projectId ? { projectId: props.projectId } : {})} />
         </section>
+        {/* Capture is its own card beside the context, never glass on glass. */}
+        <Composer {...(props.projectId ? { projectId: props.projectId } : {})} />
+        </>
       )}
     </main>
   );

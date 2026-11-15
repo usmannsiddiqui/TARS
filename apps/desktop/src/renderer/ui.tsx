@@ -1,5 +1,5 @@
 // Small shared presentational pieces: honest state notes, the pet figure and formatting.
-import type { ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import type { Honest, PetState } from "./model";
 
 const time = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
@@ -39,6 +39,7 @@ const HONEST_LABEL: Record<Honest["kind"], string> = {
   loading: "Loading",
   empty: "Nothing yet",
   done: "Done",
+  scheduled: "Scheduled",
 };
 
 /** A 14px glyph per state, so the state reads by shape and words, never by colour alone. */
@@ -85,6 +86,13 @@ function Glyph({ kind }: { kind: Honest["kind"] }) {
         <svg {...common}>
           <circle cx="7" cy="7" r="5.2" {...line} />
           <path d="M7 3.8V7l2.2 1.5" {...line} />
+        </svg>
+      );
+    case "scheduled":
+      return (
+        <svg {...common}>
+          <rect x="1.8" y="2.8" width="10.4" height="9.4" {...line} strokeWidth={1.6} />
+          <path d="M1.8 5.8h10.4M4.6 1.2v3M9.4 1.2v3" {...line} strokeWidth={1.6} />
         </svg>
       );
     case "not-signed-in":
@@ -164,7 +172,6 @@ const POSE: Record<PetState, Partial<Record<Slab, string>>> = {
 const AL = { lit: "#CDD0D0", body: "#B4B8BA", brush: "#ABAFB2", streak: "#C2C5C7", shade: "#989DA0", edge: "#73787B", cap: "#DADCDC", foot: "#6F7477", rivet: "#858A8D" };
 const LETTER_INK = "#18191A";
 const EYE = "#E7E5EF"; // pale lilac-white, flat: eyes, never a light
-export const SIGNAL = "#F25A1D";
 
 function SlabShape({ x }: { x: number }) {
   return (
@@ -195,7 +202,7 @@ const DOTS = [
 
 /**
  * The face on TARS's screen, one mark group per state so it reads by shape: idle, two soft ovals that
- * blink; working, the eyes narrowed in concentration beside the signal-orange active light; done, two
+ * blink; working, the eyes narrowed in concentration beside the accent-coloured active light; done, two
  * closed happy arcs. `small` leaves room under the eyes for the pet's state word.
  */
 function Face({ state, small }: { state: PetState; small: boolean }) {
@@ -215,7 +222,7 @@ function Face({ state, small }: { state: PetState; small: boolean }) {
         <>
           <ellipse cx={-dx} cy={y + ry * 0.35} rx={rx * 1.05} ry={ry * 0.5} fill={EYE} />
           <ellipse cx={dx} cy={y + ry * 0.35} rx={rx * 1.05} ry={ry * 0.5} fill={EYE} />
-          <circle className="pet-tick" cx="11.4" cy="6.4" r={small ? 1 : 1.2} fill={SIGNAL} />
+          <circle className="pet-tick" cx="11.4" cy="6.4" r={small ? 1 : 1.2} />
         </>
       )}
       {state === "done" && (
@@ -251,6 +258,8 @@ export function PetFigure({
 }) {
   const pose = POSE[state];
   const tile = variant === "tile";
+  // Behind the front desk the counter hides the lower body, so the lettering sits higher there.
+  const lift = variant === "hero" ? 13 : 0;
   const slab = (name: Slab) => {
     const x = SLAB_X[name];
     const posed = name === "s1" || name === "s4";
@@ -290,14 +299,47 @@ export function PetFigure({
           )}
         </g>
       </g>
-      <text className="pet-letters" transform="translate(-6.2 57) rotate(-90)" fill={LETTER_INK}>
+      <text className="pet-letters" transform={`translate(-6.2 ${57 - lift}) rotate(-90)`} fill={LETTER_INK}>
         TARS
       </text>
       <g fill={LETTER_INK}>
         {DOTS.map(([c, r]) => (
-          <circle key={`${c}${r}`} cx={3.4 + c * 2.8} cy={36 + r * 3.4} r="0.95" />
+          <circle key={`${c}${r}`} cx={3.4 + c * 2.8} cy={36 - lift + r * 3.4} r="0.95" />
         ))}
       </g>
     </svg>
+  );
+}
+
+/** One project name and Add. "Add a project" on the project index; "Project name" when it is the first. */
+export function NewProject({ onCreate, compact }: { onCreate(name: string): Promise<void>; compact?: boolean }) {
+  const id = useId();
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await onCreate(name);
+      setName("");
+    } catch (err) {
+      setError(reason(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form className={compact ? "new-project compact" : "new-project"} onSubmit={submit}>
+      <label htmlFor={id}>{compact ? "Add a project" : "Project name"}</label>
+      <div className="inline-field">
+        <input id={id} value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+        <button type="submit" className="secondary" disabled={busy || name.trim() === ""}>
+          Add
+        </button>
+      </div>
+      {error && <p role="alert" className="field-error">{error}</p>}
+    </form>
   );
 }

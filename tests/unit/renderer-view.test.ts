@@ -1,7 +1,7 @@
 // Pure view derivations in the renderer: run-through segments, the observation permission status and
 // cloud connection rows. Illustrative values only.
 import { describe, expect, it } from "vitest";
-import { cloudRow, permissionMissing, segmentsOf, setSegment } from "../../apps/desktop/src/renderer/model";
+import { byDay, cloudRow, permissionMissing, segmentsOf, setSegment, tarsCalendar, type ProjectSummary } from "../../apps/desktop/src/renderer/model";
 
 describe("segmentsOf", () => {
   const text = "Intro paragraph without a time.\n1. Welcome and why tools differ (2 min)\n2) Live demo: AI Studio (10 min)\n\nChoosing a tool (8 minutes)\nQuestions";
@@ -82,5 +82,82 @@ describe("cloudRow", () => {
     const { lastCheckedAt: _unchecked, ...neverChecked } = base;
     void _unchecked;
     expect(cloudRow(slack, [{ ...neverChecked, state: "active" }], nameOf).status).toEqual({ kind: "partial", detail: "Connected; not checked yet" });
+  });
+});
+
+// Local times, so day boundaries are the Mac's own whatever zone the test runs in.
+const at = (day: number, hour: number) => new Date(2026, 10, 14 + day, hour).getTime();
+const NOW = at(0, 12);
+
+describe("byDay", () => {
+  it("groups by local calendar day in the given order and names today and tomorrow", () => {
+    const items = [{ t: at(0, 15) }, { t: at(0, 9) }, { t: at(1, 10) }, { t: at(5, 17) }];
+    const days = byDay(items, (i) => i.t, NOW);
+    expect(days.map((d) => d.key)).toEqual(["2026-11-14", "2026-11-15", "2026-11-19"]);
+    expect(days.map((d) => d.items.length)).toEqual([2, 1, 1]);
+    expect(days[0]!.label).toBe("Today");
+    expect(days[1]!.label).toBe("Tomorrow");
+    expect(days[2]!.label).not.toMatch(/Today|Tomorrow|Yesterday/);
+  });
+
+  it("names yesterday and returns nothing for nothing", () => {
+    expect(byDay([{ t: at(-1, 20) }], (i) => i.t, NOW)[0]!.label).toBe("Yesterday");
+    expect(byDay([], (i: { t: number }) => i.t, NOW)).toEqual([]);
+  });
+});
+
+describe("tarsCalendar", () => {
+  const iso = (day: number, hour: number) => new Date(at(day, hour)).toISOString();
+  const projects: ProjectSummary[] = [
+    { id: "p1", name: "AI Guides", commitments: [], prepared: { status: "ready", updatedAt: iso(0, 8), work: { title: "Run-through", body: "", evidenceIds: ["e1", "e2", "e3"], gaps: [], nextAction: "Time the demo.", state: "ready" } } },
+    { id: "p2", name: "Coursework", commitments: [], prepared: { status: "needs-retry", updatedAt: iso(-1, 9), lastError: "model_failed" } },
+    { id: "p3", name: "Personal", commitments: [] },
+  ];
+  const input = {
+    now: NOW,
+    schedule: { morningAt: at(1, 9), eveningAt: at(0, 19) },
+    briefs: [{ kind: "morning" as const, preparedAt: at(0, 9), delivered: false }],
+    projects,
+    sources: [
+      { name: "Notion", availability: "connected", lastCheckedAt: iso(0, 7) },
+      { name: "Canvas", availability: "stale", lastCheckedAt: iso(-4, 12) },
+      { name: "Gmail", availability: "missing-access", lastError: "no scope" },
+    ],
+  };
+
+  it("plans only what is really scheduled, soonest first", () => {
+    const { upcoming } = tarsCalendar(input);
+    expect(upcoming.map((e) => [e.title, e.at])).toEqual([
+      ["Evening recap", at(0, 19)],
+      ["Morning brief", at(1, 9)],
+    ]);
+    expect(upcoming.every((e) => e.state.kind === "scheduled")).toBe(true);
+  });
+
+  it("logs what TARS did from real timestamps, newest first, and invents nothing", () => {
+    const { done } = tarsCalendar(input);
+    expect(done.map((e) => [e.title, e.at])).toEqual([
+      ["Prepared the morning brief", at(0, 9)],
+      ["Prepared AI Guides", at(0, 8)],
+      ["Checked Notion", at(0, 7)],
+    ]);
+    expect(done[0]!.detail).toBe("Not shown to you yet");
+    expect(done[1]!.detail).toBe("Run-through · from 3 source items");
+    // Nothing prepared yet is not an event.
+    expect(done.some((e) => e.title.includes("Personal"))).toBe(false);
+  });
+
+  it("puts failures and out-of-date sources under needs a look", () => {
+    const { attention } = tarsCalendar(input);
+    expect(attention.map((e) => [e.title, e.state.kind])).toEqual([
+      ["Could not prepare Coursework", "needs-retry"],
+      ["Canvas may be out of date", "stale"],
+      ["Gmail needs access", "missing-access"],
+    ]);
+  });
+
+  it("has no plan without a schedule and no past without events", () => {
+    const empty = tarsCalendar({ now: NOW, schedule: null, briefs: [], projects: [], sources: [] });
+    expect(empty).toEqual({ upcoming: [], done: [], attention: [] });
   });
 });

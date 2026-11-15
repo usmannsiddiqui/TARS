@@ -1,12 +1,14 @@
-// The full app window: routes between Today, a project, memory and connections. Focus changes
+// The full app window: routes between Today, the project index, schedule, TARS's calendar, a project,
+// memory and connections. Focus changes
 // only when the user picks a project here (switchProject with userInitiated: true).
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
 import type { CaptureInput } from "@companion/domain";
 import { api } from "../../../../convex/_generated/api";
 import { Home } from "./Home";
-import { Boundary, ConnectionsLive, MemoryLive, ProjectLive, useCloud, useProjectSummaries, useSession, useToday } from "./live";
-import { Shell, Stopped, type Route } from "./Shell";
+import { Boundary, CalendarLive, ConnectionsLive, MemoryLive, ProjectLive, ScheduleLive, useCloud, useProjectSummaries, useSession, useToday } from "./live";
+import { ProjectsIndex } from "./ProjectsIndex";
+import { railProject, Shell, Stopped, type Route } from "./Shell";
 
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
 
@@ -53,6 +55,8 @@ export function App() {
     if (projectId !== focusId) void switchProject({ targetProjectId: projectId, userInitiated: true });
   };
   const nameOf = (id?: string) => projects?.find((p) => p.id === id)?.name;
+  const create = async (name: string) => void (await createProject({ name }));
+  const open = (projectId: string) => setRoute({ view: "project", projectId });
 
   if (stopped) return <Stopped {...(nameOf(focusId) ? { projectName: nameOf(focusId)! } : {})} {...(session.error ? { note: session.error } : {})} onResume={() => setStopped(false)} />;
 
@@ -75,6 +79,12 @@ export function App() {
     screen = <MemoryLive projects={projects ?? []} {...(projectId ? { projectId } : {})} onSelectProject={(id) => setRoute({ view: "memory", projectId: id })} />;
   } else if (route.view === "connections") {
     screen = <ConnectionsLive projects={projects ?? null} />;
+  } else if (route.view === "projects") {
+    screen = <ProjectsIndex projects={summaries} {...(cloud.honest ? { cloud: cloud.honest } : {})} {...(focusId ? { focusProjectId: focusId } : {})} onOpenProject={open} onCreateProject={create} />;
+  } else if (route.view === "schedule") {
+    screen = <ScheduleLive projects={projects ?? null} />;
+  } else if (route.view === "calendar") {
+    screen = <CalendarLive projects={summaries} />;
   } else {
     screen = (
       <Home
@@ -96,8 +106,8 @@ export function App() {
           if (session.state === "idle") session.onEvent("start"); // and their explicit start
           setRoute({ view: "project", projectId, mode });
         }}
-        onOpenProject={(projectId) => setRoute({ view: "project", projectId })}
-        onCreateProject={async (name) => void (await createProject({ name }))}
+        onOpenProject={open}
+        onCreateProject={create}
       />
     );
   }
@@ -105,7 +115,7 @@ export function App() {
   return (
     <Shell
       route={route}
-      projects={summaries && summaries.map((p) => ({ id: p.id, name: p.name, ...(p.prepared?.status === "needs-retry" ? { note: "Needs retry" } : {}) }))}
+      projects={summaries && summaries.map(railProject)}
       {...(focusId ? { focusProjectId: focusId } : {})}
       account={{ signedIn: cloud.signedIn, busy: cloud.signingIn, onSignIn: () => void cloud.signIn().then(loadIdeas) }}
       pet={{

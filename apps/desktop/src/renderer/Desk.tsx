@@ -1,9 +1,10 @@
 // TARS at the front desk: the illustrated scene on Today (and behind "Stopped for now"). Decoration only
 // (aria-hidden): every fact it draws is also on the screen as text. A value it does not know is not drawn.
-// Flat shapes in the grey family; black is the loud tone and signal orange marks only the active light.
+// Flat shapes in the grey family; black is the loud tone and the palette's --accent marks only the active light.
+// "mini" is the same drawing framed tight on TARS behind the counter: the brand mark at the top of the rail.
 import { useEffect, useRef } from "react";
 import type { PetState } from "./model";
-import { PetFigure, SIGNAL } from "./ui";
+import { PetFigure } from "./ui";
 
 export type DeskProps = {
   state: PetState;
@@ -13,6 +14,8 @@ export type DeskProps = {
   outTray?: number | undefined;
   /** A work session is running: the desk's signal light is on. */
   signal: boolean;
+  /** "mini": the rail's brand mark, static and cropped to TARS behind the counter. */
+  variant?: "scene" | "mini";
 };
 
 const TONE = { top: "#EDECE8", front: "#C6C5C0", groove: "#B8B7B2", plinth: "#8F8E89", ink: "#161616", back: "#3A3A3A", paper: "#FAF9F6", chrome: "#DAD9D5", chromeHi: "#F1F0ED", off: "#A9A8A3" };
@@ -23,12 +26,12 @@ function Tray({ x, label, count }: { x: number; label: string; count: number | u
   const sheets = Math.min(count ?? 0, SHEETS_DRAWN);
   return (
     <g>
-      <rect x={x + 3} y="151" width="52" height="10" rx="1.5" fill={TONE.back} />
+      <rect x={x + 3} y="146" width="64" height="12" rx="1.5" fill={TONE.back} />
       {Array.from({ length: sheets }, (_, i) => (
-        <rect key={i} x={x + 4 + (i % 2 === 0 ? 0 : 1.6)} y={155 - i * 3.6} width="50" height="3" rx="0.5" fill={TONE.paper} />
+        <rect key={i} x={x + 4 + (i % 2 === 0 ? 0 : 1.8)} y={150 - i * 4} width="62" height="3.4" rx="0.5" fill={TONE.paper} />
       ))}
-      <rect x={x} y="158" width="58" height="15" rx="3" fill={TONE.ink} />
-      <text className="desk-label" x={x + 7} y="168.6">
+      <rect x={x} y="153" width="70" height="19" rx="3.5" fill={TONE.ink} />
+      <text className="desk-label" x={x + 8} y="166.6">
         {label}
       </text>
     </g>
@@ -37,7 +40,7 @@ function Tray({ x, label, count }: { x: number; label: string; count: number | u
 
 const clamp = (v: number) => Math.max(-1, Math.min(1, v));
 
-export function Desk({ state, inTray, outTray, signal }: DeskProps) {
+export function Desk({ state, inTray, outTray, signal, variant = "scene" }: DeskProps) {
   const ref = useRef<SVGSVGElement>(null);
 
   // The head turns toward the pointer and the eyes follow a little: pointer events set a target, and
@@ -48,7 +51,7 @@ export function Desk({ state, inTray, outTray, signal }: DeskProps) {
     const face = svg?.querySelector(".head-face");
     const side = svg?.querySelector(".head-side");
     const eyes = svg?.querySelector(".head-eyes");
-    if (!head || !face || !side || !eyes || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (variant === "mini" || !head || !face || !side || !eyes || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const target = { x: 0, y: 0 };
     const now = { x: 0, y: 0 };
     let raf = 0;
@@ -81,10 +84,17 @@ export function Desk({ state, inTray, outTray, signal }: DeskProps) {
       window.removeEventListener("pointermove", move);
       cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [variant]);
 
   return (
-    <svg ref={ref} className="desk" viewBox="0 0 460 330" aria-hidden="true" data-state={state} data-signal={signal ? "on" : "off"}>
+    <svg
+      ref={ref}
+      className={variant === "mini" ? "desk desk-mini" : "desk"}
+      viewBox={variant === "mini" ? "129 2 202 230" : "0 0 460 330"}
+      aria-hidden="true"
+      data-state={state}
+      data-signal={signal ? "on" : "off"}
+    >
       <ellipse cx="230" cy="307" rx="216" ry="5" fill="#000" fillOpacity="0.08" />
       <PetFigure state={state} variant="hero" box={{ x: 125, y: 6, width: 210, height: 210 }} />
 
@@ -100,8 +110,8 @@ export function Desk({ state, inTray, outTray, signal }: DeskProps) {
         </g>
       </g>
 
-      <Tray x={60} label="In" count={inTray} />
-      <Tray x={342} label="Out" count={outTray} />
+      <Tray x={59} label="In" count={inTray} />
+      <Tray x={332} label="Out" count={outTray} />
 
       {/* The reception bell. */}
       <g>
@@ -123,7 +133,7 @@ export function Desk({ state, inTray, outTray, signal }: DeskProps) {
         Front desk
       </text>
       <circle cx="320" cy="250.5" r="8.5" fill={TONE.ink} />
-      <circle className="desk-signal" cx="320" cy="250.5" r="5.2" fill={signal ? SIGNAL : TONE.off} />
+      <circle className="desk-signal" cx="320" cy="250.5" r="5.2" fill={TONE.off} />
     </svg>
   );
 }

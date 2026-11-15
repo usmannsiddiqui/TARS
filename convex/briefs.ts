@@ -482,6 +482,17 @@ export const getAttentionState = query({
   },
 });
 
+/** When the next morning brief and evening recap are scheduled (TARS's calendar). Null until the timezone is set. */
+export const getSchedule = query({
+  args: {},
+  returns: v.union(v.null(), v.object({ timezone: v.string(), morningAt: v.number(), eveningAt: v.number() })),
+  handler: async (ctx) => {
+    const ownerId = await requireOwnerId(ctx);
+    const settings = await loadSettings(ctx, ownerId);
+    return settings === null ? null : { timezone: settings.timezone, morningAt: settings.morningAt, eveningAt: settings.eveningAt };
+  },
+});
+
 /** Restart after time away: what changed, what is urgent, one next action, the whole backlog and drafts. */
 export const getReentry = query({
   args: {},

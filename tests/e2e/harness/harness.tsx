@@ -12,7 +12,11 @@ import type { Brief, Commitment, Evidence, Fact, PetState, ProjectSummary, Recei
 import { Panel } from "../../../apps/desktop/src/renderer/Panel";
 import { Pet } from "../../../apps/desktop/src/renderer/Pet";
 import { ProjectView, type ArtifactView, type EditorActions } from "../../../apps/desktop/src/renderer/ProjectView";
-import { Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
+import { railProject, Shell, Stopped, type Route } from "../../../apps/desktop/src/renderer/Shell";
+import { ProjectsIndex } from "../../../apps/desktop/src/renderer/ProjectsIndex";
+import { Schedule } from "../../../apps/desktop/src/renderer/Schedule";
+import { TarsCalendar } from "../../../apps/desktop/src/renderer/TarsCalendar";
+import { tarsCalendar } from "../../../apps/desktop/src/renderer/model";
 import "../../../apps/desktop/src/renderer/styles.css";
 import "../../../apps/desktop/src/renderer/screens.css";
 
@@ -237,7 +241,7 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
   return (
     <Shell
       route={route}
-      projects={projects.map((p) => ({ id: p.id, name: p.name, ...(p.prepared?.status === "needs-retry" ? { note: "Needs retry" } : {}) }))}
+      projects={projects.map(railProject)}
       focusProjectId={focus}
       account={{ signedIn: true, busy: false, onSignIn: () => record("signIn") }}
       pet={{ visible: pet, onToggle: () => (record("setPetVisible", !pet), setPet(!pet)) }}
@@ -281,6 +285,31 @@ function AppScene({ initial, variant }: { initial: Route; variant: string }) {
           onMakeFocus={() => pick(project.id)}
           onPrepare={async () => record("prepare", project.id)}
           onStop={stop}
+        />
+      )}
+      {route.view === "projects" && (
+        <ProjectsIndex projects={variant === "empty" ? [] : projects} focusProjectId={focus} onOpenProject={(id) => setRoute({ view: "project", projectId: id })} onCreateProject={async (name) => record("createProject", name)} />
+      )}
+      {route.view === "schedule" && (
+        <Schedule brief={variant === "empty" ? null : morning} nextBriefAt={Date.parse(inDays(1, 9))} now={NOW.getTime()} nameOf={(id) => projects.find((p) => p.id === id)?.name} />
+      )}
+      {route.view === "calendar" && (
+        <TarsCalendar
+          now={NOW.getTime()}
+          calendar={tarsCalendar(
+            variant === "empty"
+              ? { now: NOW.getTime(), schedule: null, briefs: [], projects: [], sources: [] }
+              : {
+                  now: NOW.getTime(),
+                  schedule: { morningAt: Date.parse(inDays(1, 9)), eveningAt: Date.parse(inDays(0, 19)) + (NOW.getHours() >= 19 ? 864e5 : 0) },
+                  briefs: [{ kind: "morning", preparedAt: Math.min(morning.preparedAt, NOW.getTime()), delivered: true }],
+                  projects,
+                  sources: [
+                    { name: "Notion", availability: "connected", lastCheckedAt: inDays(0, Math.min(8, NOW.getHours())) },
+                    { name: "Canvas", availability: "stale", lastCheckedAt: inDays(-4, 12) },
+                  ],
+                },
+          )}
         />
       )}
       {route.view === "memory" && (
@@ -331,6 +360,9 @@ const routes: Record<string, Route> = {
   // project-<id>: another illustrative project (avt: partial; personal: nothing prepared; course: needs retry).
   memory: { view: "memory" },
   connections: { view: "connections" },
+  projects: { view: "projects" },
+  schedule: { view: "schedule" },
+  calendar: { view: "calendar" },
 };
 const [routeName = "today", variant = ""] = scene.split("-");
 const projectVariant = routeName === "project" && projects.some((p) => p.id === variant) ? variant : undefined;

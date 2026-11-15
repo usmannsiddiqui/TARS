@@ -14,7 +14,9 @@ export type Honest =
   | { kind: "stale"; at?: string; detail?: string }
   | { kind: "loading"; detail?: string }
   | { kind: "empty"; detail: string }
-  | { kind: "done"; detail?: string };
+  | { kind: "done"; detail?: string }
+  /** Something TARS will really do at a set time (a scheduled brief deadline). */
+  | { kind: "scheduled"; detail?: string };
 
 export type PreparedStatus = "ready" | "needs-retry" | "invalidated" | "empty";
 
@@ -194,5 +196,101 @@ export function cloudRow(def: { provider: CloudProvider; name: string; coverage:
     state: c.state === "paused" ? "paused" : "on",
     status,
     selection: { selectors: c.selectors, projects: c.projectIds.map((id) => nameOf(id) ?? "a project no longer listed") },
+  };
+}
+
+/** A project's preparation as one honest state, for the rail, Today and the project index. */
+export function preparedNote(p: ProjectSummary): Honest {
+  if (p.prepared === undefined) return { kind: "empty", detail: "Nothing prepared yet" };
+  if (p.prepared.status === "needs-retry") return { kind: "needs-retry", detail: "Last preparation failed" };
+  if (p.prepared.status === "invalidated") return { kind: "partial", detail: "Something it used was forgotten" };
+  if (p.prepared.status === "empty" || !p.prepared.work) return { kind: "empty", detail: "No source items yet" };
+  return p.prepared.work.state === "partial" ? { kind: "partial", detail: p.prepared.work.title } : { kind: "done", detail: p.prepared.work.title };
+}
+
+const dayKey = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const formatTime = (ms: number) => new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(ms);
+const dayName = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
+
+/** Groups items by the Mac's local calendar day, keeping the order given; today, tomorrow and yesterday by name. */
+export function byDay<T>(items: readonly T[], at: (item: T) => number, now: number): { key: string; label: string; items: T[] }[] {
+  const near: Record<string, string> = { [dayKey(now)]: "Today", [dayKey(now + 864e5)]: "Tomorrow", [dayKey(now - 864e5)]: "Yesterday" };
+  const days: { key: string; label: string; items: T[] }[] = [];
+  for (const item of items) {
+    const key = dayKey(at(item));
+    let day = days.find((d) => d.key === key);
+    if (!day) days.push((day = { key, label: near[key] ?? dayName.format(at(item)), items: [] }));
+    day.items.push(item);
+  }
+  return days;
+}
+
+export type CalendarEntry = { at: number; title: string; detail?: string; state: Honest };
+export type CalendarInput = {
+  now: number;
+  /** briefs.getSchedule: the next scheduled deadlines, null until the timezone is set. */
+  schedule: { morningAt: number; eveningAt: number } | null;
+  /** The pending morning brief and evening recap, as prepared. */
+  briefs: { kind: "morning" | "evening"; preparedAt: number; delivered: boolean }[];
+  projects: ProjectSummary[];
+  /** Cloud connections by display name, with their health. */
+  sources: { name: string; availability: string; lastCheckedAt?: string; lastError?: string }[];
+};
+
+/**
+ * TARS's own calendar: what it will do (only real scheduled deadlines), what it did (from stored
+ * timestamps) and what needs a look. Nothing is estimated; a value that is not stored is not shown.
+ */
+export function tarsCalendar({ now, schedule, briefs, projects, sources }: CalendarInput): { upcoming: CalendarEntry[]; done: CalendarEntry[]; attention: CalendarEntry[] } {
+  const upcoming: CalendarEntry[] = schedule
+    ? [
+        { at: schedule.morningAt, title: "Morning brief", detail: "Meetings, real deadlines and one recommended start", state: { kind: "scheduled" } },
+        { at: schedule.eveningAt, title: "Evening recap", detail: "What was finished or parked today", state: { kind: "scheduled" } },
+      ]
+    : [];
+  const done: CalendarEntry[] = briefs.map((b) => ({
+    at: b.preparedAt,
+    title: b.kind === "morning" ? "Prepared the morning brief" : "Prepared the evening recap",
+    detail: b.delivered ? "Shown to you" : "Not shown to you yet",
+    state: { kind: "done" },
+  }));
+  const attention: CalendarEntry[] = [];
+  for (const p of projects) {
+    const at = p.prepared ? Date.parse(p.prepared.updatedAt) : NaN;
+    if (!p.prepared || Number.isNaN(at)) continue;
+    const { status, work, lastError } = p.prepared;
+    if (status === "needs-retry") attention.push({ at, title: `Could not prepare ${p.name}`, state: { kind: "needs-retry", detail: `${formatTime(at)}${lastError ? ` (${lastError})` : ""}. Earlier work is kept.` } });
+    else if (status === "empty") done.push({ at, title: `Looked for work in ${p.name}`, detail: "No source items yet", state: { kind: "empty", detail: "" } });
+    else if (work) {
+      const from = `from ${work.evidenceIds.length} source item${work.evidenceIds.length === 1 ? "" : "s"}`;
+      done.push({ at, title: `Prepared ${p.name}`, detail: `${work.title} · ${from}`, state: { kind: status === "invalidated" || work.state === "partial" ? "partial" : "done" } });
+    }
+  }
+  for (const s of sources) {
+    const at = s.lastCheckedAt ? Date.parse(s.lastCheckedAt) : NaN;
+    if (s.availability === "connected") {
+      if (!Number.isNaN(at)) done.push({ at, title: `Checked ${s.name}`, state: { kind: "done" } });
+    } else {
+      // The state carries its own detail, so the screen shows it as one glyph-and-word note.
+      const detail = s.lastError ? { detail: s.lastError } : {};
+      const state: Honest =
+        s.availability === "stale"
+          ? Number.isNaN(at)
+            ? { kind: "stale", detail: "Never checked" }
+            : { kind: "stale", at: new Date(at).toISOString() }
+          : s.availability === "missing-access"
+            ? { kind: "missing-access", ...detail }
+            : { kind: "needs-retry", ...detail };
+      const title = s.availability === "stale" ? `${s.name} may be out of date` : s.availability === "missing-access" ? `${s.name} needs access` : `${s.name} needs a retry`;
+      attention.push({ at: Number.isNaN(at) ? now : at, title, state });
+    }
+  }
+  return {
+    upcoming: upcoming.filter((e) => e.at > now).sort((a, b) => a.at - b.at),
+    done: done.filter((e) => e.at <= now).sort((a, b) => b.at - a.at),
+    attention,
   };
 }

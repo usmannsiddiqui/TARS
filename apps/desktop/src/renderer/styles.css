@@ -1,17 +1,14 @@
-/* TARS, "front desk": one light colour world, a seamless studio grey (a photographer's backdrop) in a few
-   surface steps, all reading text near-black, set in Helvetica Neue. Black is the loud tone: TARS speaks
-   under a black label, problems sit on a black plate. One flat signal orange (a Braun power light, not a
-   neon) marks only the screen's one primary action, the typewriter cursor and TARS's active light. No
-   gradients, no glow, no coloured shadows. The rail is a sheet of grey glass floating over the canvas.
-   Status always reads by glyph and word, never colour. */
+/* TARS, "front desk": one light colour world, a seamless studio grey (a photographer's backdrop), all
+   reading text near-black, set in Helvetica Neue. Black is the loud tone: TARS speaks under a black
+   label, problems sit on a black plate. Surfaces are glass in the Apple way: the rail and floating pieces
+   are the clearest glass, content cards a frostier one, and dense reading sits on a near-opaque inner
+   surface. No glow, no coloured shadows, no neon. Status always reads by glyph and word, never colour. */
 
 :root {
   /* The studio: wall, floor, and the surfaces that sit in it. */
   --canvas: #d6d5d2;
-  --floor: #cbcac6;
+  --floor: rgb(0 0 0 / 0.05);
   --well: #c9c8c4;
-  --card: #e4e3e0;
-  --raised: #edece9;
   --paper: #ffffff;
   --hover: rgb(0 0 0 / 0.05);
   --hairline: rgb(0 0 0 / 0.1);
@@ -21,13 +18,29 @@
   --ink-3: #52514e;
   --black: #111111;
   --on-black: #ffffff;
-  --signal: #f25a1d;
-  --signal-press: #e2531a;
-  --on-signal: #0b0b0b;
   --focus: #0b0b0b;
-  /* The rail's glass: a grey tint solid enough that its text keeps 4.5:1 over anything behind it. */
-  --glass: rgb(229 228 225 / 0.64);
-  --glass-solid: #e2e1de;
+
+  /* The palette: these three are the only colours beyond the grey/black base; swap them to re-colour TARS.
+     --accent: the one primary action, the typing cursor, TARS's working light. --on-accent: text on it
+     (light or dark; hover and press never change the text colour, so its contrast holds either way).
+     --backdrop-tint: the soft shapes behind the glass (may be a grey). */
+  --accent: #1f3460;
+  --on-accent: #ffffff;
+  --backdrop-tint: #c7cedd;
+
+  /* Glass. Clear (rail, floating pieces) and frosted (content cards) tints are white at an alpha high
+     enough that the second ink keeps 4.5:1 over the darkest backdrop; inner surfaces are near-opaque. */
+  --glass-clear: rgb(255 255 255 / 0.5);
+  --glass-frost: rgb(255 255 255 / 0.62);
+  --glass-inner: rgb(255 255 255 / 0.84);
+  --glass-solid: #ecebe8;
+  --glass-blur: blur(12px) saturate(160%);
+  --glass-edge:
+    inset 0 1px 1px rgb(255 255 255 / 0.9),
+    inset 1px 0 0 rgb(255 255 255 / 0.55),
+    inset 0 -1px 1px rgb(0 0 0 / 0.06);
+  --glass-border: 1px solid rgb(255 255 255 / 0.65);
+  --glass-shadow: 0 8px 24px rgb(0 0 0 / 0.08);
 
   --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace; /* real codes only: webhook URLs and tokens */
@@ -37,7 +50,7 @@
   --r-control: 8px;
   --r-tag: 4px;
   --r-pill: 999px;
-  --rail-w: 220px;
+  --rail-w: 252px;
   --rail-inset: 10px;
   --gutter: 40px;
 
@@ -64,6 +77,67 @@ body,
 body {
   background: var(--canvas);
   overflow: hidden;
+}
+
+/* ---------- Glass ---------- */
+
+/* One material in two weights. Glass needs something behind it: the studio backdrop on .shell. */
+.rail,
+.block,
+.capture,
+.completion,
+.panel-card {
+  border: var(--glass-border);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.rail {
+  background: var(--glass-clear);
+}
+
+.block,
+.capture,
+.completion,
+.panel-card {
+  background: var(--glass-frost);
+}
+
+/* Never glass on glass: surfaces inside a card, and dense reading, sit on a near-opaque inner surface. */
+.inner,
+.confirm,
+.suggestion,
+.change,
+.receipt,
+.question,
+.tradeoff {
+  background: var(--glass-inner);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .rail,
+  .block,
+  .capture,
+  .completion,
+  .panel-card {
+    background: var(--glass-solid);
+  }
+}
+
+/* The studio behind the glass: the wall, and three very large, soft, still tonal shapes in the backdrop
+   tint. Fixed behind everything; never animated. */
+.shell::before,
+html[data-view="panel"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side, var(--backdrop-tint) 72%, transparent) 78% 4% / 820px 620px no-repeat,
+    radial-gradient(closest-side, var(--backdrop-tint) 70%, transparent) -6% 100% / 900px 700px no-repeat,
+    radial-gradient(closest-side, color-mix(in srgb, var(--backdrop-tint) 55%, transparent) 70%, transparent) 62% 112% / 760px 520px no-repeat;
 }
 
 :focus-visible {
@@ -161,8 +235,9 @@ button:disabled {
 }
 
 .primary {
-  background: var(--signal);
-  color: var(--on-signal);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 
 .secondary {
@@ -184,8 +259,9 @@ button:disabled {
 }
 
 @media (hover: hover) and (pointer: fine) {
+  /* An inner ring in the text colour: hover never shifts --on-accent's contrast, light or dark. */
   .primary:hover:not(:disabled) {
-    background: var(--signal-press);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--on-accent) 45%, transparent);
   }
   .secondary:hover:not(:disabled) {
     background: var(--black);
@@ -195,8 +271,10 @@ button:disabled {
   .text-button:hover:not(:disabled) {
     opacity: 0.6;
   }
-  .rail-item:hover:not([aria-current]) {
-    background: rgb(0 0 0 / 0.045);
+  .rail-item:hover:not([aria-current]),
+  .rail-disclosure:hover,
+  .rail-all:hover {
+    background: rgb(0 0 0 / 0.05);
   }
 }
 
@@ -232,7 +310,7 @@ button:disabled {
 .actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -370,7 +448,6 @@ textarea {
 /* ---------- Labels and headings ---------- */
 
 /* One small-label treatment everywhere: 13px Helvetica, sentence case, the second ink. */
-.rail-heading,
 .readout-key,
 .free-title {
   font-size: 13px;
@@ -382,7 +459,7 @@ textarea {
 .block-title,
 .backlog > summary {
   font-size: 17px;
-  font-weight: 500;
+  font-weight: 700;
   line-height: 1.3;
   letter-spacing: -0.01em;
   color: var(--ink);
@@ -400,7 +477,7 @@ textarea {
 
 .group-title {
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 /* ---------- Shell: a glass rail floating over the canvas ---------- */
@@ -420,98 +497,108 @@ textarea {
   flex-direction: column;
   width: var(--rail-w);
   overflow-y: auto;
-  border-radius: 16px;
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
-  backdrop-filter: blur(24px) saturate(150%);
-  /* A bright inner edge where light catches the sheet, a hairline outside, a soft neutral ambient shadow. */
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.7),
-    inset 0 0 0 1px rgb(255 255 255 / 0.35),
-    0 0 0 1px rgb(0 0 0 / 0.07),
-    0 10px 30px rgb(0 0 0 / 0.07);
+  padding: 0 8px;
+  border-radius: 18px;
 }
 
-@supports not (backdrop-filter: blur(1px)) {
-  .rail {
-    background: var(--glass-solid);
-  }
-}
-
+/* The brand: TARS at its front desk, small, beside the name in the lettering on its own body. */
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 18px 18px 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 10px 12px;
+}
+
+.desk.desk-mini {
+  flex: none;
+  width: 40px;
+  height: auto;
 }
 
 .wordmark {
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: -0.03em;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   line-height: 1;
-}
-
-.brand-star {
-  font-size: 15px;
-  line-height: 1;
+  text-transform: uppercase;
 }
 
 .rail-list {
   list-style: none;
-  padding: 0 8px;
+  padding: 0;
 }
 
-.rail-item {
+/* One row style for every place and project: a line icon, one size of type, a generous height. */
+.rail-item,
+.rail-disclosure {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  min-height: 34px;
+  min-height: 36px;
   padding: 7px 10px;
   background: none;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   text-align: left;
-  font-size: 14px;
-  line-height: 1.35;
+  font-size: 15px;
+  line-height: 1.3;
   color: var(--ink);
   transition:
     transform 160ms var(--ease-out),
     background-color 200ms ease;
 }
 
-.rail-item:active {
+.rail-item .icon,
+.rail-account .icon {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.rail-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-item:active,
+.rail-disclosure:active {
   transform: scale(0.98);
 }
 
+/* The current place: a soft filled rounded rectangle, as in a desktop sidebar. */
 .rail-item[aria-current] {
-  background: rgb(0 0 0 / 0.085);
-  font-weight: 500;
+  background: rgb(255 255 255 / 0.72);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06);
+}
+
+.rail-item[aria-current] .icon {
+  color: var(--ink);
 }
 
 .rail-note {
   display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 5px;
   font-size: 12px;
-  font-weight: 400;
   color: var(--ink-2);
 }
 
 /* Focus and needs-retry read by shape: a filled diamond, an open retry ring. */
 .rail-note::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   background: currentColor;
   transform: rotate(45deg);
 }
 
 .rail-note[data-kind="retry"]::before {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   background: none;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
@@ -519,32 +606,93 @@ textarea {
   transform: none;
 }
 
+.rail-section {
+  margin-top: 14px;
+}
+
 .rail-heading {
-  padding: 20px 18px 6px;
+  font: inherit;
+}
+
+.rail-disclosure {
+  gap: 4px;
+  min-height: 30px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.rail-disclosure .icon {
+  width: 16px;
+  height: 16px;
+  transition: transform 200ms var(--ease-out);
+}
+
+.rail-disclosure[aria-expanded="false"] .icon {
+  transform: rotate(-90deg);
+}
+
+/* The focus project's own items, indented under a thin guide line. */
+.rail-children {
+  list-style: none;
+  margin: 2px 0 6px 19px;
+  padding: 0 0 0 12px;
+  border-left: 1px solid rgb(0 0 0 / 0.16);
+}
+
+.rail-child {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.rail-all {
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--ink-2);
 }
 
 .rail-empty {
   font-size: 13px;
   color: var(--ink-2);
-  padding: 6px 18px;
+  padding: 4px 10px;
 }
 
-.rail-after {
-  margin-top: 16px;
-}
-
+/* The account, as one compact row at the foot. */
 .rail-foot {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: auto -8px 0;
+  padding: 12px 18px 14px;
+  border-top: 1px solid rgb(0 0 0 / 0.07);
+  font-size: 14px;
+}
+
+.rail-account {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
-  margin-top: auto;
-  padding: 14px 18px 18px;
+  flex: 1;
+}
+
+.rail-pet {
+  font-size: 14px;
 }
 
 /* The canvas spans the whole window, under the glass, so the room the desk stands in runs beneath it. */
 .canvas {
   position: absolute;
+  z-index: 1;
   inset: 0;
   overflow: hidden auto;
   padding: 0 var(--gutter) 72px calc(var(--rail-w) + 2 * var(--rail-inset) + var(--gutter));
@@ -613,7 +761,7 @@ textarea {
 .screen-head h1 {
   font-size: 56px;
   line-height: 1;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.04em;
   overflow-wrap: anywhere;
 }
@@ -674,7 +822,6 @@ textarea {
 
 .block,
 .capture {
-  background: var(--card);
   border-radius: var(--r-card);
   padding: 18px 22px 22px;
 }
@@ -682,11 +829,6 @@ textarea {
 .block > * + *,
 .capture > * + * {
   margin-top: 12px;
-}
-
-/* A decision waiting on the user sits one step forward. */
-.tradeoff {
-  background: var(--raised);
 }
 
 /* ---------- Today ---------- */
@@ -720,6 +862,7 @@ textarea {
   bottom: 0;
   height: calc(var(--scene-w) * 80 / 460);
   background: var(--floor);
+  /* The floor is a translucent darkening, so the backdrop's tonal shapes carry on under it. */
 }
 
 .start-body {
@@ -772,9 +915,9 @@ textarea {
 .start-step {
   font-size: 40px;
   line-height: 1.08;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.03em;
-  max-width: 20ch;
+  max-width: 22ch;
   text-wrap: balance;
 }
 
@@ -784,7 +927,7 @@ textarea {
 
 ::highlight(type-cursor) {
   color: transparent;
-  background-color: var(--signal);
+  background-color: var(--accent);
 }
 
 .start-reason {
@@ -848,8 +991,24 @@ textarea {
 
 .desk-label,
 .desk-plate {
-  font: 500 9px var(--sans);
+  font: 700 11px var(--sans);
   fill: #ffffff;
+}
+
+.desk[data-signal="on"] .desk-signal,
+.pet-tick {
+  fill: var(--accent);
+}
+
+/* The light sits on a black housing, so a fine white ring keeps a dark accent (such as navy) visible. */
+.desk[data-signal="on"] .desk-signal {
+  stroke: var(--on-black);
+  stroke-width: 1.2px;
+}
+
+.pet-tick {
+  stroke: var(--on-black);
+  stroke-width: 0.35px;
 }
 
 .desk-plate {
@@ -991,7 +1150,6 @@ textarea {
 }
 
 .completion {
-  background: var(--raised);
   border-radius: var(--r-card);
   padding: 22px;
   margin-top: 28px;
@@ -1004,7 +1162,7 @@ textarea {
 .completion h2,
 .completion h1 {
   font-size: 28px;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.025em;
 }
 
@@ -1013,7 +1171,6 @@ textarea {
 .change,
 .receipt,
 .question {
-  background: var(--raised);
   border-radius: 10px;
   padding: 14px 16px;
 }
@@ -1080,13 +1237,20 @@ textarea {
   font-weight: 500;
 }
 
+/* Dense reading: the prepared write-up sits on a near-opaque inner surface. */
+.prepared {
+  padding: 16px 18px;
+  border-radius: 10px;
+  background: var(--glass-inner);
+}
+
 .prepared > * + * {
   margin-top: 12px;
 }
 
 .prepared-title {
   font-size: 22px;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.02em;
 }
 
@@ -1214,7 +1378,7 @@ li[data-done] {
 .stopped h1 {
   font-size: 56px;
   line-height: 1;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.04em;
 }
 
@@ -1229,28 +1393,32 @@ html[data-view="panel"] body {
   background: var(--canvas);
 }
 
+/* The panel window: the same studio backdrop, the context on one glass card, capture on its own. */
 .panel {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
+  gap: 10px;
   height: 100%;
   overflow-y: auto;
+  padding: 8px 10px 12px;
 }
 
 .panel-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--hairline);
+  padding: 2px 6px;
 }
 
 .panel-head .pet-figure {
-  height: 24px;
+  height: 42px;
   width: auto;
 }
 
 .panel-head .wordmark {
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .panel-head .text-button {
@@ -1262,19 +1430,18 @@ html[data-view="panel"] body {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
+  border-radius: var(--r-card);
 }
 
 .panel-body h1 {
   font-size: 24px;
   line-height: 1.15;
-  font-weight: 500;
+  font-weight: 700;
   letter-spacing: -0.025em;
 }
 
 .panel-body.completion {
   margin: 0;
-  border-radius: 0;
-  background: none;
 }
 
 .panel .capture {
@@ -1384,10 +1551,33 @@ html[data-view="pet"] body {
 /* ---------- Reduced transparency and contrast: the glass turns solid ---------- */
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .rail {
+  .rail,
+  .block,
+  .capture,
+  .completion,
+  .panel-card {
     background: var(--glass-solid);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .rail,
+  .block,
+  .capture,
+  .completion,
+  .panel-card {
+    border-color: var(--ink);
+    box-shadow: none;
+  }
+  .inner,
+  .confirm,
+  .suggestion,
+  .change,
+  .receipt,
+  .question {
+    background: var(--paper);
   }
 }
 
@@ -1404,6 +1594,7 @@ html[data-view="pet"] body {
   .secondary:active:not(:disabled),
   .text-button:active:not(:disabled),
   .rail-item:active,
+  .rail-disclosure:active,
   .pet:active {
     transform: none;
   }

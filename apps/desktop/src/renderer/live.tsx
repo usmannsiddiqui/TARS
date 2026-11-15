@@ -7,12 +7,14 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import type { LocalSourceView } from "../main/source-watch";
 import { Connections, type CloudActions, type LocalKind, type ShortcutStatus } from "./Connections";
 import { MemoryView } from "./MemoryView";
-import { cloudRow, permissionMissing, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
+import { cloudRow, permissionMissing, tarsCalendar, type Brief, type CloudProvider, type Commitment, type Evidence, type Honest, type PetState, type Prepared, type ProjectSummary, type Reentry, type SessionEvent, type SessionState, type SourceRow, type Tradeoff } from "./model";
 import { Panel } from "./Panel";
 import { Pet } from "./Pet";
 import { contentHash } from "../../../../packages/domain/src/actions";
 import type { ActingActions } from "./Act";
 import { ProjectView, type EditorActions, type RevisionOutcome } from "./ProjectView";
+import { Schedule } from "./Schedule";
+import { TarsCalendar } from "./TarsCalendar";
 import { reason, SOURCE_NAME, StateNote } from "./ui";
 
 // ---- Cloud session: one per window.
@@ -244,6 +246,56 @@ export function useSession() {
     record({ kind: event }).catch((err: unknown) => setError(`Not recorded: ${reason(err)}`));
   };
   return { state, error, onEvent };
+}
+
+// ---- Schedule and TARS's calendar.
+
+/** The user's meetings and real due dates, from the pending morning brief. */
+export function ScheduleLive({ projects }: { projects: { id: string; name: string }[] | null }) {
+  const cloud = useCloud();
+  const morning = useQuery(api.briefs.getPendingBrief, cloud.ready ? { kind: "morning" } : "skip");
+  const schedule = useQuery(api.briefs.getSchedule, cloud.ready ? {} : "skip");
+  return (
+    <Schedule
+      brief={morning === undefined ? undefined : morning && { hard: morning.brief.hard, preparedAt: morning.preparedAt }}
+      {...(schedule ? { nextBriefAt: schedule.morningAt } : {})}
+      {...(cloud.honest ? { cloud: cloud.honest } : {})}
+      now={Date.now()}
+      nameOf={(id) => projects?.find((p) => p.id === id)?.name}
+    />
+  );
+}
+
+/** What TARS does on its own, from the brief schedule, the pending briefs, prepared work and source health. */
+export function CalendarLive({ projects }: { projects: ProjectSummary[] | null }) {
+  const cloud = useCloud();
+  const args = cloud.ready ? {} : "skip";
+  const schedule = useQuery(api.briefs.getSchedule, args);
+  const morning = useQuery(api.briefs.getPendingBrief, cloud.ready ? { kind: "morning" } : "skip");
+  const evening = useQuery(api.briefs.getPendingBrief, cloud.ready ? { kind: "evening" } : "skip");
+  const connections = useQuery(api.connections.listConnections, args);
+  const now = Date.now();
+  const loaded = schedule !== undefined && morning !== undefined && evening !== undefined && connections !== undefined && projects !== null;
+  return (
+    <TarsCalendar
+      calendar={
+        loaded
+          ? tarsCalendar({
+              now,
+              schedule,
+              briefs: [morning, evening].flatMap((b) => (b ? [{ kind: b.kind, preparedAt: b.preparedAt, delivered: b.delivered }] : [])),
+              projects,
+              // Only live grants: a paused or revoked source is not TARS's to check.
+              sources: connections
+                .filter((c) => c.state === "active")
+                .map((c) => ({ name: SOURCE_NAME[c.provider] ?? c.provider, availability: c.availability, ...(c.lastCheckedAt ? { lastCheckedAt: c.lastCheckedAt } : {}), ...(c.lastError ? { lastError: c.lastError } : {}) })),
+            })
+          : undefined
+      }
+      {...(cloud.honest ? { cloud: cloud.honest } : {})}
+      now={now}
+    />
+  );
 }
 
 // ---- Project.

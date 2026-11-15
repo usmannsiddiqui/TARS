@@ -44,9 +44,21 @@ test("one_companion_across_projects", async () => {
   // One identity: a single companion name, no roster of agents.
   await expect(page.getByRole("navigation", { name: "TARS" })).toBeVisible();
   await expect(page.locator(".wordmark")).toHaveCount(1);
-  // Four project contexts side by side.
+  // Four project contexts side by side; the focus project lists its own items and "View all".
   const rail = page.getByRole("list", { name: "Projects" });
-  await expect(rail.getByRole("button")).toHaveText(["AI GuidesFocus", "AVT", "Personal projects", "CourseworkNeeds retry"]);
+  await expect(rail.getByRole("button")).toHaveText(["AI GuidesFocus", "View all", "AVT", "Personal projects", "CourseworkNeeds retry"]);
+  await expect(page.getByRole("list", { name: "In AI Guides" }).getByRole("listitem")).toHaveText([
+    "Presenter run-through for the co-presentation",
+    "Open slides 9–18 and time the demo section against 25 minutes.",
+    "4 open commitments",
+    "View all",
+  ]);
+  // The section folds like a disclosure, and opens again.
+  const section = page.getByRole("button", { name: "Projects", expanded: true });
+  await section.click();
+  await expect(rail).toBeHidden();
+  await page.getByRole("button", { name: "Projects", expanded: false }).click();
+  await expect(rail).toBeVisible();
   // Exactly one recommended start, with its reason, and exactly one amber action on the screen.
   const start = page.getByRole("region", { name: "Recommended start" });
   await expect(start).toContainText("AI Guides");
@@ -71,6 +83,38 @@ test("one_companion_across_projects", async () => {
   expect(await calls(page)).toEqual([shown, ["switchProject", { targetProjectId: "avt", userInitiated: true }]]);
   await expect(page.getByText("Your focus")).toBeVisible();
   await page.close();
+});
+
+test("rail_reaches_projects_schedule_and_tars_calendar", async () => {
+  const page = await scene("today");
+  const nav = page.getByRole("navigation", { name: "TARS" });
+  // Adding a project lives on the project index now, with the same names.
+  await expect(page.getByLabel("Add a project")).toHaveCount(0);
+  await nav.getByRole("button", { name: "Projects", exact: true }).first().click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Projects");
+  await expect(page.getByRole("row", { name: /Coursework/ })).toContainText("Needs retry");
+  await page.getByLabel("Add a project").fill("Band website");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  expect((await calls(page)).at(-1)).toEqual(["createProject", "Band website"]);
+  // The user's schedule: meetings and real due dates by day, each with its source; never suggestions.
+  await nav.getByRole("button", { name: "Schedule" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Schedule");
+  await expect(page.getByRole("region", { name: "Today" })).toContainText("Venue walk-through with the AV lead");
+  await expect(page.getByRole("region", { name: "Today" })).toContainText("from Outlook calendar");
+  await expect(page.getByText("Suggestions are not deadlines and never appear here.")).toBeVisible();
+  await expect(page.getByText("Send the final slide order to the co-presenter")).toHaveCount(0);
+  // TARS's own calendar: what is scheduled, what it did, what needs a look.
+  await nav.getByRole("button", { name: "TARS's calendar" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("TARS's calendar");
+  await expect(page.getByRole("region", { name: "Coming up" })).toContainText("Morning brief");
+  await expect(page.getByRole("region", { name: "Done on its own" })).toContainText("Prepared AI Guides");
+  await expect(page.getByRole("region", { name: "Needs a look" })).toContainText("Could not prepare Coursework");
+  await page.close();
+  // With nothing scheduled, it says what is true instead of inventing times.
+  const empty = await scene("calendar-empty");
+  await expect(empty.getByRole("region", { name: "Coming up" })).toContainText("No brief is scheduled yet.");
+  await expect(empty.getByRole("region", { name: "Done on its own" })).toContainText(/Nothing yet\s*Briefs, source checks and preparations appear here/);
+  await empty.close();
 });
 
 test("first_value_before_all_connections", async () => {

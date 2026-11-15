@@ -122,6 +122,21 @@ describe("deadlines", () => {
     expect(await pending()).toHaveLength(2);
   });
 
+  test("schedule_reports_the_next_scheduled_brief_times", async () => {
+    const { t, asAlice, configure } = setup();
+    // No settings yet: nothing is scheduled, and the query says so instead of inventing a time.
+    expect(await asAlice.query(api.briefs.getSchedule, {})).toBeNull();
+    await configure();
+    expect(await asAlice.query(api.briefs.getSchedule, {})).toEqual({
+      timezone: NY,
+      morningAt: Date.parse("2026-11-14T14:00:00.000Z"),
+      eveningAt: Date.parse("2026-11-15T00:30:00.000Z"),
+    });
+    // Another owner sees nothing of Alice's schedule.
+    const asBob = t.withIdentity({ tokenIdentifier: makeOwners().bob.ownerId, subject: "bob" });
+    expect(await asBob.query(api.briefs.getSchedule, {})).toBeNull();
+  });
+
   test("no_notifications_pile_after_sleep", async () => {
     const { t, alice, asAlice, project, commitment, pending, pendingBriefs, runDeadline, configure } = setup();
     const avt = await project("AVT");

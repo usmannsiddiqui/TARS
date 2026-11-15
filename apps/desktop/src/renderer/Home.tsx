@@ -1,12 +1,12 @@
 // Today across every project, from the brief service: the morning brief (meetings and real deadlines
 // apart from suggested work, one recommended start with its reason), the evening recap when it is the
 // newer brief, or the way back in after days away. Alternatives, quick capture and the full backlog
-// stay one click away. Presentational: data and actions arrive as props.
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import type { Brief, CapturedIdea, HardItem, Honest, PetState, ProjectSummary, Reentry, Tradeoff, TradeoffChoice } from "./model";
+// stay one click away; adding a project lives on the project index. Presentational: data and actions arrive as props.
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { preparedNote, type Brief, type CapturedIdea, type HardItem, type Honest, type PetState, type ProjectSummary, type Reentry, type Tradeoff, type TradeoffChoice } from "./model";
 import { Composer } from "./Composer";
 import { Desk } from "./Desk";
-import { formatWhen, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
+import { formatWhen, NewProject, reason, SOURCE_NAME, StateNote, StateTag } from "./ui";
 
 export type HomeProps = {
   dateLabel: string;
@@ -33,14 +33,6 @@ export type HomeProps = {
   /** The brief was actually shown here, so it is never offered as news again. */
   onBriefShown(key: string): void;
   onResolveTradeoff(commitmentId: string, choice: TradeoffChoice): Promise<void>;
-};
-
-const preparedNote = (p: ProjectSummary): Honest => {
-  if (p.prepared === undefined) return { kind: "empty", detail: "Nothing prepared yet" };
-  if (p.prepared.status === "needs-retry") return { kind: "needs-retry", detail: "Last preparation failed" };
-  if (p.prepared.status === "invalidated") return { kind: "partial", detail: "Something it used was forgotten" };
-  if (p.prepared.status === "empty" || !p.prepared.work) return { kind: "empty", detail: "No source items yet" };
-  return p.prepared.work.state === "partial" ? { kind: "partial", detail: p.prepared.work.title } : { kind: "done", detail: p.prepared.work.title };
 };
 
 export function Home(props: HomeProps) {
@@ -285,9 +277,6 @@ export function Home(props: HomeProps) {
                   ))
                 )}
               </details>
-              <div className="block">
-                <NewProject onCreate={props.onCreateProject} compact />
-              </div>
             </>
           )}
         </div>
@@ -361,7 +350,7 @@ function Hero({
 const typedOnce = new Set<string>();
 
 /**
- * TARS's sentence typed out (38 ms a character after 600 ms) behind a signal-orange block cursor. The
+ * TARS's sentence typed out (38 ms a character after 600 ms) behind an accent-coloured block cursor. The
  * whole sentence is one text node from the first frame, so it is read whole; CSS highlights only paint
  * the untyped rest transparent. Reduced motion, or a sentence already typed, shows it at once.
  */
@@ -486,37 +475,5 @@ function TradeoffFlag({ tradeoff, onResolve }: { tradeoff: Tradeoff; onResolve(c
       <p className="quiet small">Your choice is recorded once. Nothing is moved, rescheduled or sent.</p>
       {state.error && <StateNote state={{ kind: "needs-retry", detail: state.error }} />}
     </section>
-  );
-}
-
-function NewProject({ onCreate, compact }: { onCreate(name: string): Promise<void>; compact?: boolean }) {
-  const id = useId();
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await onCreate(name);
-      setName("");
-    } catch (err) {
-      setError(reason(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <form className={compact ? "new-project compact" : "new-project"} onSubmit={submit}>
-      <label htmlFor={id}>{compact ? "Add a project" : "Project name"}</label>
-      <div className="inline-field">
-        <input id={id} value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
-        <button type="submit" className="secondary" disabled={busy || name.trim() === ""}>
-          Add
-        </button>
-      </div>
-      {error && <p role="alert" className="field-error">{error}</p>}
-    </form>
   );
 }
