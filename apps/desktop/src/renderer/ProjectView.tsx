@@ -5,8 +5,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { DeliveryStatus } from "@companion/domain/thread";
 import { Composer } from "./Composer";
-import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared } from "./model";
-import { Thread, type ApproveArgs, type ThreadMessage } from "./Thread";
+import { segmentsOf, setSegment, type Commitment, type Honest, type Prepared, type ThreadMessage } from "./model";
+import { Thread, type ApproveArgs } from "./Thread";
 import { formatWhen, reason, StateNote } from "./ui";
 
 export type ArtifactView = {
