@@ -8,7 +8,7 @@ import { SortOutputSchema, validateSort, type SortedItem } from "../packages/dom
 import { CaptureInputSchema } from "../packages/domain/src/types";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireOwnerId } from "./lib/auth";
 import { ModelError, generateStructured } from "./lib/model";
 import { requireOwnedProject } from "./memory";
@@ -67,32 +67,34 @@ export const loadSortContext = internalQuery({
 export const sortCapture = action({
   args: { captureId: v.string(), text: v.string() },
   returns: sortResult,
-  handler: async (ctx, { captureId, text }): Promise<Infer<typeof sortResult>> => {
-    const ownerId = await requireOwnerId(ctx);
-    if (captureId.trim() === "" || captureId.length > 200) throw new ConvexError("Unknown capture");
-    const words = CaptureInputSchema.shape.text.safeParse(text);
-    if (!words.success) throw new ConvexError("A capture is 1 to 10,000 characters");
-    const context: Infer<typeof sortContext> = await ctx.runQuery(internal.captures.loadSortContext, { ownerId, captureId });
-    if (context.sorted > 0) return { status: "sorted", count: context.sorted }; // never ask twice for one capture
-    const nowMs = Date.now();
-    let output;
-    try {
-      output = await generateStructured({
-        name: "brain_dump",
-        schema: SortOutputSchema,
-        instructions: INSTRUCTIONS,
-        // JSON keeps the user's words inside one string value.
-        input: JSON.stringify({ projects: context.projects, now: preparationClock(nowMs, context.timezone), text: words.data }),
-      });
-    } catch (error) {
-      if (error instanceof ModelError) return { status: "failed", code: error.code };
-      throw error;
-    }
-    const items = validateSort(output, new Set(context.projects.map((p) => p.id)), nowMs, context.timezone !== null);
-    const count: number = await ctx.runMutation(internal.captures.storeSorted, { ownerId, captureId, items: items.map(toArgs) });
-    return { status: "sorted", count };
-  },
+  handler: async (ctx, { captureId, text }): Promise<Infer<typeof sortResult>> => sortAs(ctx, await requireOwnerId(ctx), captureId, text),
 });
+
+/** The sort for an owner the caller resolved from a verified identity (the app's session or the linked phone). */
+export async function sortAs(ctx: ActionCtx, ownerId: string, captureId: string, text: string): Promise<Infer<typeof sortResult>> {
+  if (captureId.trim() === "" || captureId.length > 200) throw new ConvexError("Unknown capture");
+  const words = CaptureInputSchema.shape.text.safeParse(text);
+  if (!words.success) throw new ConvexError("A capture is 1 to 10,000 characters");
+  const context: Infer<typeof sortContext> = await ctx.runQuery(internal.captures.loadSortContext, { ownerId, captureId });
+  if (context.sorted > 0) return { status: "sorted", count: context.sorted }; // never ask twice for one capture
+  const nowMs = Date.now();
+  let output;
+  try {
+    output = await generateStructured({
+      name: "brain_dump",
+      schema: SortOutputSchema,
+      instructions: INSTRUCTIONS,
+      // JSON keeps the user's words inside one string value.
+      input: JSON.stringify({ projects: context.projects, now: preparationClock(nowMs, context.timezone), text: words.data }),
+    });
+  } catch (error) {
+    if (error instanceof ModelError) return { status: "failed", code: error.code };
+    throw error;
+  }
+  const items = validateSort(output, new Set(context.projects.map((p) => p.id)), nowMs, context.timezone !== null);
+  const count: number = await ctx.runMutation(internal.captures.storeSorted, { ownerId, captureId, items: items.map(toArgs) });
+  return { status: "sorted", count };
+}
 
 const sortedArg = v.object({ text: v.string(), projectId: v.optional(v.string()), kind: captureKind, dueAt: v.optional(v.string()) });
 const toArgs = ({ projectId, ...rest }: SortedItem) => ({ ...rest, ...(projectId === null ? {} : { projectId }) });
