@@ -89,6 +89,16 @@ describe("assemblePreparation", () => {
     expect(partial.ok && partial.work.gaps.join(" ")).toMatch(/3 older sources were not read/);
   });
 
+  test("a deliverable's [Needs from you: ...] lines stay in the body and are listed as gaps", () => {
+    const body = ["AI Guides report", "", "## Summary", "- The demo runs 25 minutes.", "", "## Numbers", "[Needs from you: Q3 numbers]"].join("\n");
+    const result = assemblePreparation(output({ body, evidenceIds: [evidence.id], gaps: ["Q3 numbers"] }), guides, [evidence], 0);
+    expect(result.ok && result.work.body).toBe(body);
+    expect(result.ok && result.work.gaps).toEqual(["Q3 numbers"]);
+    const unlisted = assemblePreparation(output({ body, evidenceIds: [evidence.id] }), guides, [evidence], 0);
+    expect(unlisted.ok && unlisted.work.gaps).toEqual(["Q3 numbers"]);
+    expect(unlisted.ok && unlisted.work.state).toBe("partial");
+  });
+
   test("ownership: only clear, quoted responsibility becomes the user's task", () => {
     const result = assemblePreparation(
       output({
